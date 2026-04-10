@@ -1,0 +1,120 @@
+# ------------------------------
+# OS / Editor
+# ------------------------------
+.DS_Store
+Thumbs.db
+
+.idea/
+.vscode/
+.cursor/
+.claude/
+
+# Vim / swap
+*.swp
+*.swo
+*~
+
+# ------------------------------
+# Secrets / local env
+# ------------------------------
+.env
+.env.*
+!.env.example
+!.env.sample
+
+*.pem
+*.key
+
+# ------------------------------
+# Logs / temp
+# ------------------------------
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# ------------------------------
+# Go (chaya-engine / chaya-cli)
+# ------------------------------
+bin/
+dist/
+
+*.test
+*.out
+coverage.out
+*.coverprofile
+
+# Go workspace files (optional local)
+go.work
+go.work.sum
+
+# ------------------------------
+# Frontend (chaya-front)
+# ------------------------------
+chaya-front/node_modules/
+chaya-front/dist/
+chaya-front/build/
+chaya-front/.cache/
+chaya-front/.vite/
+chaya-front/.turbo/
+chaya-front/.parcel-cache/
+chaya-front/.eslintcache
+
+# Frontend test artifacts
+chaya-front/coverage/
+chaya-front/playwright-report/
+chaya-front/test-results/
+chaya-front/release/
+
+# Frontend / Electron caches
+chaya-front/.electron-vite/
+chaya-front/out/
+chaya-front/electron-dist/
+
+# ------------------------------
+# Python (chaya-ml)
+# ------------------------------
+chaya-ml/__pycache__/
+chaya-ml/**/*.py[cod]
+chaya-ml/*.egg-info/
+chaya-ml/.pytest_cache/
+chaya-ml/.mypy_cache/
+chaya-ml/.ruff_cache/
+chaya-ml/.ipynb_checkpoints/
+
+# Python virtualenv / tool caches
+chaya-ml/.venv/
+chaya-ml/venv/
+chaya-ml/.python-version
+chaya-ml/.coverage
+chaya-ml/htmlcov/
+
+# ------------------------------
+# Project-specific generated files
+# ------------------------------
+chaya-engine/.next/
+chaya-engine/main
+chaya-engine/server
+chaya-cli/chaya
+
+# ------------------------------
+# Docker / runtime data
+# ------------------------------
+.docker/
+docker-data/
+
+# ------------------------------
+# Archives / binaries
+# ------------------------------
+*.zip
+*.tar
+*.tar.gz
+*.gz
+*.rar
+*.7z
+
+*.exe
+*.dll
+*.so
+*.dylib
