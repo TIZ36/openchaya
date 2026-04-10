@@ -1216,7 +1216,7 @@ const App: React.FC = () => {
         {/* ─── 主区域 ─── */}
         <div className={`app-main relative ${isMobile ? 'app-main--mobile-dock' : ''}`}>
           <ChillGlobalPlayer />
-          <header className={`app-chat-header ${isElectron ? 'electron-titlebar-drag' : ''}`} style={isMobile ? { paddingTop: 'var(--safe-area-inset-top)' } : undefined}>
+          <header className={`app-chat-header ${isElectron ? 'electron-titlebar-drag' : ''}`}>
             <div className="app-chat-header__left">
               {isMobile ? (
                 <button
@@ -1270,10 +1270,7 @@ const App: React.FC = () => {
             </div>
           </header>
           {mainModule !== 'chat' && !showDesktopOverlay && (
-            <header
-              className={`app-bubble-bar ${isElectron ? 'electron-titlebar-drag' : ''}`}
-              style={isMobile ? { paddingTop: 'var(--safe-area-inset-top)' } : undefined}
-            >
+            <header className={`app-bubble-bar ${isElectron ? 'electron-titlebar-drag' : ''}`}>
               <nav className="app-bubble-tabs">
                 {renderModuleTabs()}
               </nav>

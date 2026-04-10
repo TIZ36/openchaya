@@ -372,18 +372,6 @@ const Workflow: React.FC<WorkflowProps> = ({
     [sessions, currentSessionId, currentSessionMeta],
   );
 
-  const mobileSessionTitle = useMemo(() => {
-    if (activeSessionForUi?.name) return activeSessionForUi.name;
-    if (activeSessionForUi?.session_type === 'agent') return 'AI 工作流助手';
-    return 'AI 工作流助手';
-  }, [activeSessionForUi]);
-
-  const mobileSessionSubtitle = useMemo(() => {
-    if (currentSessionType === 'topic_general') return '话题协作';
-    if (currentSessionType === 'agent') return '当前 Agent';
-    return '临时会话';
-  }, [currentSessionType]);
-
   const personaPreviewSession = useMemo(() => {
     if (!currentSessionId || currentSessionType === 'topic_general') return null;
     return (
@@ -6343,38 +6331,6 @@ const Workflow: React.FC<WorkflowProps> = ({
           </Dialog>
 
           <div className={`workflow-composer-layout ${isInputFocused ? 'workflow-composer-layout--expanded' : 'workflow-composer-layout--collapsed'}`}>
-          <div className="workflow-mobile-island md:hidden mb-2 px-1">
-            <button
-              type="button"
-              onClick={() => {
-                if (currentSessionType === 'topic_general') {
-                  setShowTopicConfigDialog(true);
-                  return;
-                }
-                if (currentSessionType === 'agent' && activeSessionForUi) {
-                  setAgentPersonaDialogAgent(activeSessionForUi);
-                  setShowAgentPersonaDialog(true);
-                  return;
-                }
-                setShowHeaderConfigDialog(true);
-              }}
-              className="workflow-mobile-island__capsule"
-              title="打开当前会话设置"
-            >
-              <span className="workflow-mobile-island__avatar">
-                {currentSessionAvatar ? (
-                  <img src={currentSessionAvatar} alt="Avatar" className="h-full w-full object-cover" />
-                ) : (
-                  <Bot className="h-4 w-4 text-[var(--color-accent)]" />
-                )}
-              </span>
-              <span className="min-w-0 flex-1 text-left">
-                <span className="block truncate text-[13px] font-semibold text-[var(--text-primary)]">{mobileSessionTitle}</span>
-                <span className="block truncate text-[11px] text-[var(--text-muted)]">{mobileSessionSubtitle}</span>
-              </span>
-              <span className="workflow-mobile-island__badge">{currentSessionType === 'agent' ? 'Agent' : currentSessionType === 'topic_general' ? 'Topic' : 'Chat'}</span>
-            </button>
-          </div>
           {/* 工具栏：左侧附件 / 人设 / Skill；右侧模型 */}
           <div className={`workflow-composer-toolbar flex items-center justify-between px-2 py-1.5 ${isInputFocused ? 'workflow-composer-toolbar--visible' : 'workflow-composer-toolbar--hidden'}`}>
             <div className="flex items-center gap-0.5 flex-nowrap flex-1 min-w-0 overflow-hidden">
