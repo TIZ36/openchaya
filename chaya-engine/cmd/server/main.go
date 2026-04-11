@@ -21,7 +21,6 @@ import (
 	"github.com/chaya-ai/chaya-engine/internal/harness/capability/skill"
 	"github.com/chaya-ai/chaya-engine/internal/harness/runtime"
 	"github.com/chaya-ai/chaya-engine/internal/provider"
-	_ "github.com/chaya-ai/chaya-engine/internal/provider/openai" // register factory
 	pgstore "github.com/chaya-ai/chaya-engine/internal/storage/postgres"
 	redisstore "github.com/chaya-ai/chaya-engine/internal/storage/redis"
 	"github.com/chaya-ai/chaya-engine/pkg/envelope"

@@ -79,42 +79,12 @@ func (r *Registry) Invalidate(configID string) {
 }
 
 func (r *Registry) createProvider(row LLMConfigRow) (LLMProvider, error) {
-	// Lazy import to avoid circular dependency — factory pattern
 	switch row.Provider {
+	case "gemini", "google":
+		return newGeminiLLM(row.APIKey, row.APIURL, row.Model)
 	case "openai", "deepseek":
-		return createOpenAICompatible(row.APIKey, row.APIURL, row.Model)
+		return newOpenAILLM(row.APIKey, row.APIURL, row.Model)
 	default:
-		return createOpenAICompatible(row.APIKey, row.APIURL, row.Model) // fallback to OpenAI-compatible
+		return newOpenAILLM(row.APIKey, row.APIURL, row.Model)
 	}
-}
-
-// createOpenAICompatible creates an OpenAI-compatible provider.
-// Imported here to break circular import with provider/openai package.
-func createOpenAICompatible(apiKey, apiURL, model string) (LLMProvider, error) {
-	// We use the openai package directly since it's OpenAI-compatible
-	// This avoids importing the openai sub-package in the interface package
-	cfg := struct {
-		APIKey string
-		APIURL string
-		Model  string
-	}{apiKey, apiURL, model}
-	_ = cfg
-
-	// For now, return nil — will be wired when we resolve the import
-	// The actual creation happens through a factory function set at init time
-	if factoryFn != nil {
-		return factoryFn(apiKey, apiURL, model)
-	}
-	return nil, fmt.Errorf("no provider factory registered for openai-compatible")
-}
-
-// FactoryFunc creates an LLMProvider from credentials.
-type FactoryFunc func(apiKey, apiURL, model string) (LLMProvider, error)
-
-var factoryFn FactoryFunc
-
-// RegisterFactory sets the factory function for creating providers.
-// Called from provider/openai package init or main.
-func RegisterFactory(fn FactoryFunc) {
-	factoryFn = fn
 }
