@@ -5,7 +5,7 @@
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Send, Loader, Loader2, Bot, Wrench, AlertCircle, CheckCircle, Brain, Plug, XCircle, ChevronDown, ChevronUp, FileText, Sparkles, Workflow as WorkflowIcon, Play, ArrowRight, Trash2, X, Edit2, RotateCw, Database, Paperclip, Music, HelpCircle, Package, CheckSquare, Square, Quote, Lightbulb, Eye, Volume2, Paintbrush, Image, Plus, CornerDownRight, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { Send, Loader, Loader2, Bot, Wrench, AlertCircle, CheckCircle, Brain, Plug, XCircle, ChevronDown, ChevronUp, Sparkles, Workflow as WorkflowIcon, Play, ArrowRight, Trash2, X, Edit2, RotateCw, Database, Paperclip, Music, HelpCircle, Package, CheckSquare, Square, Quote, Lightbulb, Eye, Volume2, Paintbrush, Image, Plus, CornerDownRight, ThumbsUp, ThumbsDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Virtuoso } from 'react-virtuoso';
@@ -43,7 +43,6 @@ import { HistoryLoadTop } from './ui/HistoryLoadTop';
 import { PluginExecutionPanel } from './PluginExecutionPanel';
 import { MCPDetailOverlay } from './MCPDetailOverlay';
 import { emitSessionsChanged, SESSIONS_CHANGED_EVENT } from '../utils/sessionEvents';
-import { getDimensionOptions } from '../services/roleDimensionApi';
 import { SplitViewMessage } from './SplitViewMessage';
 import { MediaGallery, MediaItem } from './ui/MediaGallery';
 import { SessionMediaPanel, type SessionMediaItem } from './ui/SessionMediaPanel';
@@ -54,9 +53,6 @@ import { useConversation } from '../conversation/useConversation';
 import { createSessionConversationAdapter } from '../conversation/adapters/sessionConversation';
 import { MessageAvatar, MessageBubbleContainer, MessageStatusIndicator, type MessageRole as UIMessageRole } from './ui/MessageBubble';
 import {
-  applyProfessionToNameOrPrompt,
-  detectProfessionType,
-  extractProfession,
 } from './workflow/profession';
 import { useFloatingComposerPadding } from './workflow/useFloatingComposerPadding';
 import { parseMCPContentBlocks } from './workflow/mcpRender';
@@ -77,10 +73,6 @@ import {
   PersonaPanel,
   PersonaSwitchDialog,
   RoleGeneratorDialog,
-  HeaderConfigDialog,
-  AddProfessionDialog,
-  DEFAULT_CAREER_PROFESSIONS,
-  DEFAULT_GAME_PROFESSIONS,
   SystemPromptEditDialog,
 } from './workflow/dialogs';
 import { TopicConfigDialog, TopicDisplayType } from './workflow/dialogs/TopicConfigDialog';
@@ -385,21 +377,6 @@ const Workflow: React.FC<WorkflowProps> = ({
   const [avatarConfigDraft, setAvatarConfigDraft] = useState<string | null>(null); // 头像配置草稿
   
 
-  // 头部配置对话框状态（用于从聊天头部点击头像时打开）
-  const [showHeaderConfigDialog, setShowHeaderConfigDialog] = useState(false);
-  const [headerConfigEditName, setHeaderConfigEditName] = useState('');
-  const [headerConfigEditAvatar, setHeaderConfigEditAvatar] = useState<string | null>(null);
-  const [headerConfigEditSystemPrompt, setHeaderConfigEditSystemPrompt] = useState('');
-  const [headerConfigEditMediaOutputPath, setHeaderConfigEditMediaOutputPath] = useState('');
-  const [headerConfigEditLlmConfigId, setHeaderConfigEditLlmConfigId] = useState<string | null>(null);
-  const [headerConfigEditProfession, setHeaderConfigEditProfession] = useState<string | null>(null); // 职业选择
-  const [headerConfigEditProfessionType, setHeaderConfigEditProfessionType] = useState<'career' | 'game'>('career'); // 职业类型
-  const [headerConfigCareerProfessions, setHeaderConfigCareerProfessions] = useState<string[]>(DEFAULT_CAREER_PROFESSIONS); // 功能职业列表
-  const [headerConfigGameProfessions, setHeaderConfigGameProfessions] = useState<string[]>(DEFAULT_GAME_PROFESSIONS); // 游戏职业列表
-  const [isLoadingHeaderProfessions, setIsLoadingHeaderProfessions] = useState(false); // 加载职业列表状态
-  const [showHeaderAddProfessionDialog, setShowHeaderAddProfessionDialog] = useState(false); // 添加职业对话框
-  const [headerNewProfessionValue, setHeaderNewProfessionValue] = useState(''); // 新职业名称
-  const [headerConfigActiveTab, setHeaderConfigActiveTab] = useState<'basic' | 'skillpacks'>('basic');
 
   const personaPreviewInfo = useMemo(() => {
     const sessionForPersona = personaPreviewSession;
@@ -420,8 +397,6 @@ const Workflow: React.FC<WorkflowProps> = ({
       hasPrompt: !!prompt,
     };
   }, [personaPreviewSession, currentSystemPrompt, personaPresetsGlobal]);
-  const [isSavingHeaderAsRole, setIsSavingHeaderAsRole] = useState(false);
-  
   // Topic 配置对话框状态（用于话题会话）
   const [showTopicConfigDialog, setShowTopicConfigDialog] = useState(false);
   const [topicConfigEditName, setTopicConfigEditName] = useState('');
@@ -539,6 +514,7 @@ const Workflow: React.FC<WorkflowProps> = ({
   const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [selectedLLMConfigId, setSelectedLLMConfigId] = useState<string | null>(null);
   const [selectedLLMConfig, setSelectedLLMConfig] = useState<LLMConfigFromDB | null>(null);
+  const [llmConfigsLoaded, setLlmConfigsLoaded] = useState(false);
 
   // 将 llm_config_id（可能是 UUID）转成可读名称：name (provider/model)
   const formatLLMConfigLabel = useCallback((configId: string): string => {
@@ -953,50 +929,7 @@ const Workflow: React.FC<WorkflowProps> = ({
   useEffect(() => {
     const configSessionId = searchParams.get('config');
     if (configSessionId && configSessionId === currentSessionId && currentSessionId) {
-      // 延迟打开对话框，确保会话数据已加载
       const timer = window.setTimeout(() => {
-        const currentSession =
-          sessions.find(s => s.session_id === currentSessionId) ||
-          (currentSessionMeta?.session_id === currentSessionId ? currentSessionMeta : null);
-        if (currentSession) {
-          setHeaderConfigEditName(currentSession.name || '');
-          setHeaderConfigEditAvatar(currentSession.avatar || null);
-          setHeaderConfigEditSystemPrompt(currentSession.system_prompt || '');
-          setHeaderConfigEditMediaOutputPath(currentSession.media_output_path || '');
-          setHeaderConfigEditLlmConfigId(currentSession.llm_config_id || null);
-          // 判断职业类型并提取当前职业
-          const professionType = detectProfessionType(currentSession.name, currentSession.system_prompt);
-          setHeaderConfigEditProfessionType(professionType);
-          // 加载职业列表
-          (async () => {
-            try {
-              setIsLoadingHeaderProfessions(true);
-              const [careerOptions, gameOptions] = await Promise.all([
-                getDimensionOptions('profession', 'career'),
-                getDimensionOptions('profession', 'game'),
-              ]);
-              setHeaderConfigCareerProfessions([...DEFAULT_CAREER_PROFESSIONS, ...careerOptions]);
-              setHeaderConfigGameProfessions([...DEFAULT_GAME_PROFESSIONS, ...gameOptions]);
-              // 提取当前职业
-              const allProfessions = professionType === 'career' 
-                ? [...DEFAULT_CAREER_PROFESSIONS, ...careerOptions]
-                : [...DEFAULT_GAME_PROFESSIONS, ...gameOptions];
-              const currentProfession = extractProfession(currentSession.name, currentSession.system_prompt, allProfessions);
-              setHeaderConfigEditProfession(currentProfession);
-            } catch (error) {
-              console.error('[Workflow] Failed to load professions:', error);
-              // 使用默认职业列表
-              const allProfessions = professionType === 'career' ? DEFAULT_CAREER_PROFESSIONS : DEFAULT_GAME_PROFESSIONS;
-              const currentProfession = extractProfession(currentSession.name, currentSession.system_prompt, allProfessions);
-              setHeaderConfigEditProfession(currentProfession);
-            } finally {
-              setIsLoadingHeaderProfessions(false);
-            }
-          })();
-          setHeaderConfigActiveTab('basic');
-          setShowHeaderConfigDialog(true);
-        }
-        // 清除URL参数（使用 react-router，避免 URL 已变更但 searchParams hook 不同步）
         setSearchParams((prev) => {
           const next = new URLSearchParams(prev);
           next.delete('config');
@@ -1024,27 +957,6 @@ const Workflow: React.FC<WorkflowProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
-  // 当头部配置对话框打开时，加载职业列表
-  useEffect(() => {
-    if (showHeaderConfigDialog) {
-      (async () => {
-        try {
-          setIsLoadingHeaderProfessions(true);
-          const [careerOptions, gameOptions] = await Promise.all([
-            getDimensionOptions('profession', 'career'),
-            getDimensionOptions('profession', 'game'),
-          ]);
-          setHeaderConfigCareerProfessions([...DEFAULT_CAREER_PROFESSIONS, ...careerOptions]);
-          setHeaderConfigGameProfessions([...DEFAULT_GAME_PROFESSIONS, ...gameOptions]);
-        } catch (error) {
-          console.error('[Workflow] Failed to load professions:', error);
-        } finally {
-          setIsLoadingHeaderProfessions(false);
-        }
-      })();
-    }
-  }, [showHeaderConfigDialog]);
-  
   // 话题/Agent 实时消息（WebSocket）
   // - usersession：JWT 连上 Gateway 后，服务端下发 usersession_ready（连接级热态，非 convid）
   // - convid：subscribe topic / 发消息 payload.conv_id 使用当前对话 ID（与 Session.session_id 一致）
@@ -1490,13 +1402,14 @@ const Workflow: React.FC<WorkflowProps> = ({
               }
 
               // 若 execution_log 先到了，会先创建临时占位消息；此处升级为正式 message_id
-              const placeholderIndex = prev.findIndex(
-                m =>
-                  m.id === `exec-pending-${data.agent_id || 'agent'}` ||
-                  (m.role === 'assistant' &&
-                    m.sender_id === data.agent_id &&
-                    ((m.ext as any)?.__exec_placeholder === true)),
-              );
+              // 冷启动占位可能 sender_id 为 'agent'（尚无 agid），需与真实 agent_id 合并。
+              const aid = (data.agent_id || 'agent') as string;
+              const placeholderIndex = prev.findIndex(m => {
+                if (m.id === `exec-pending-${aid}` || m.id === `exec-pending-agent`) return true;
+                if (m.role !== 'assistant' || !(m.ext as any)?.__exec_placeholder) return false;
+                const sid = (m.sender_id || 'agent') as string;
+                return sid === aid || sid === 'agent' || sid === '';
+              });
               if (placeholderIndex >= 0) {
                 const updated = [...prev];
                 const placeholder = updated[placeholderIndex];
@@ -2170,9 +2083,8 @@ const Workflow: React.FC<WorkflowProps> = ({
       return;
     }
 
-    // 切换会话时，关闭升级对话框和配置对话框
+    // 切换会话时，关闭升级对话框
     setShowUpgradeToAgentDialog(false);
-    setShowHeaderConfigDialog(false);
     
     // 清除URL中的config参数，避免切换会话时自动弹出配置对话框
     const currentSearchParams = new URLSearchParams(window.location.search);
@@ -2447,6 +2359,8 @@ const Workflow: React.FC<WorkflowProps> = ({
         content: `❌ 加载LLM配置失败: ${error instanceof Error ? error.message : String(error)}`,
       };
       setMessages(prev => [...prev, errorMsg]);
+    } finally {
+      setLlmConfigsLoaded(true);
     }
   };
 
@@ -2829,7 +2743,8 @@ const Workflow: React.FC<WorkflowProps> = ({
         }
 
         // 如果在 AgentActor 模式（topic_general 或 agent）中，且选择了工具，将工具 ID 放入 ext 中以便 AgentActor 识别
-        const sessionForActor = sessions.find(s => s.session_id === currentSessionId) || currentSessionMeta;
+        const sessionForActor =
+          sessions.find(s => s.session_id === (sessionId || currentSessionId)) || currentSessionMeta;
         const isActorSession = sessionForActor?.session_type === 'topic_general' || sessionForActor?.session_type === 'agent';
         if (isActorSession) {
           const mcp_servers = Array.from(selectedMcpServerIds);
@@ -2883,6 +2798,69 @@ const Workflow: React.FC<WorkflowProps> = ({
             messageData.ext.user_llm_config_id = selectedLLMConfigId;
           }
           // 聊天页暂不支持联网搜索，避免传递搜索相关覆盖
+        }
+
+        // Agent 模式：WS 未就绪时（常见为首会话刚创建、channel 仍在连接）先给出执行日志占位，避免长时间空白。
+        if (isActorSession) {
+          const wsPre = topicWsRef.current;
+          if (!wsPre || wsPre.readyState !== WebSocket.OPEN) {
+            const ag = typeof sessionForActor?.id === 'string' ? sessionForActor.id.trim() : '';
+            const senderId = ag || 'agent';
+            const logEntry: ExecutionLogEntry = {
+              id: `client-hint-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+              timestamp: Date.now(),
+              type: 'step',
+              message: '实时通道尚未就绪，消息将先保存；连接建立后即可看到智能体进度。',
+              agent_id: ag || undefined,
+            };
+            setExecutionLogs(prev => [...prev.slice(-99), logEntry]);
+            setIsExecuting(true);
+            setMessages(prev => {
+              const placeholderId = `exec-pending-${senderId}`;
+              const idx = prev.findIndex(m => m.id === placeholderId);
+              if (idx >= 0) {
+                const next = [...prev];
+                const cur = next[idx];
+                const currentLogs = ((cur.ext as any)?.agent_log || (cur.ext as any)?.log || cur.executionLogs || []) as ExecutionLogEntry[];
+                const mergedLogs = [...currentLogs, logEntry].slice(-200);
+                next[idx] = {
+                  ...cur,
+                  isThinking: true,
+                  executionLogs: mergedLogs,
+                  ext: {
+                    ...(cur.ext || {}),
+                    __exec_placeholder: true,
+                    agent_log: mergedLogs,
+                    log: mergedLogs,
+                    executionLogs: mergedLogs,
+                  },
+                };
+                return next;
+              }
+              const hasLiveAssistant = prev.some(
+                m => m.role === 'assistant' && m.sender_id === senderId && (m.isStreaming || m.isThinking),
+              );
+              if (hasLiveAssistant) return prev;
+              const placeholderMsg: Message = {
+                id: placeholderId,
+                role: 'assistant',
+                content: '',
+                sender_id: senderId,
+                sender_type: 'agent',
+                isThinking: true,
+                isStreaming: false,
+                executionLogs: [logEntry],
+                ext: {
+                  __exec_placeholder: true,
+                  agent_log: [logEntry],
+                  log: [logEntry],
+                  executionLogs: [logEntry],
+                },
+              };
+              wasAtBottomRef.current = true;
+              return [...prev, placeholderMsg];
+            });
+          }
         }
         
         // 所有消息都走 WS → Actor；payload.conv_id 为 convid（非 usersession）
@@ -5640,6 +5618,70 @@ const Workflow: React.FC<WorkflowProps> = ({
     selectedComponentIndex,
     setSelectedComponentIndex,
   });
+  const showLLMSetupGuide = llmConfigsLoaded && llmConfigs.length === 0;
+  const nonSystemMessageCount = useMemo(
+    () => messages.filter((m) => m.role !== 'system').length,
+    [messages],
+  );
+  const showWelcomePanel = nonSystemMessageCount === 0;
+  const showModelNeededGuide = llmConfigsLoaded && llmConfigs.length > 0 && !selectedLLMConfigId;
+
+  useEffect(() => {
+    const active = llmConfigs.find((c) => c.config_id === selectedLLMConfigId) || null;
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('chaya:selected-model-change', {
+        detail: { label: active?.shortname || active?.name || active?.model || '选择模型' },
+      }));
+    }
+  }, [selectedLLMConfigId, llmConfigs]);
+
+  useEffect(() => {
+    const handleOpenModelSelect = () => setShowModelSelectDialog(true);
+    const handleOpenAgentSettings = async () => {
+      if (!currentSessionId) return;
+      const currentSession =
+        sessions.find(s => s.session_id === currentSessionId) ||
+        (currentSessionMeta?.session_id === currentSessionId ? currentSessionMeta : null);
+      if (!currentSession) return;
+      if (currentSession.session_type === 'agent') {
+        setAgentPersonaDialogAgent(currentSession);
+        setShowAgentPersonaDialog(true);
+        return;
+      }
+      if (currentSession.session_type === 'topic_general') {
+        setTopicConfigEditName(currentSession.name || currentSession.title || '');
+        setTopicConfigEditAvatar(currentSession.avatar || null);
+        const ext = currentSession.ext || {};
+        const displayType = ext.displayType === 'research' ? 'chat' : ext.displayType;
+        setTopicConfigEditDisplayType((displayType as TopicDisplayType) || 'chat');
+        try {
+          const participants = await getParticipants(currentSessionId);
+          setTopicParticipants(participants);
+        } catch {
+          setTopicParticipants([]);
+        }
+        setShowTopicConfigDialog(true);
+        return;
+      }
+      return;
+    };
+    window.addEventListener('chaya:open-model-select', handleOpenModelSelect as EventListener);
+    window.addEventListener('chaya:open-agent-settings', handleOpenAgentSettings as EventListener);
+    return () => {
+      window.removeEventListener('chaya:open-model-select', handleOpenModelSelect as EventListener);
+      window.removeEventListener('chaya:open-agent-settings', handleOpenAgentSettings as EventListener);
+    };
+  }, [
+    currentSessionId,
+    sessions,
+    currentSessionMeta?.session_id,
+    currentSessionMeta?.name,
+    currentSessionMeta?.title,
+    currentSessionMeta?.avatar,
+    currentSessionMeta?.system_prompt,
+    currentSessionMeta?.media_output_path,
+    currentSessionMeta?.llm_config_id,
+  ]);
 
   return (
     <>
@@ -5691,15 +5733,6 @@ const Workflow: React.FC<WorkflowProps> = ({
                         // Agent 会话 - 显示 AgentPersonaDialog（支持完整配置）
                         setAgentPersonaDialogAgent(currentSession);
                         setShowAgentPersonaDialog(true);
-                      } else {
-                        // 普通会话 - 显示 HeaderConfigDialog
-                        setHeaderConfigEditName(currentSession.name || '');
-                        setHeaderConfigEditAvatar(currentSession.avatar || null);
-                        setHeaderConfigEditSystemPrompt(currentSession.system_prompt || '');
-                        setHeaderConfigEditMediaOutputPath(currentSession.media_output_path || '');
-                        setHeaderConfigEditLlmConfigId(currentSession.llm_config_id || null);
-                        setHeaderConfigActiveTab('basic');
-                        setShowHeaderConfigDialog(true);
                       }
                     }
                   }
@@ -5910,6 +5943,76 @@ const Workflow: React.FC<WorkflowProps> = ({
               }
             }}
           >
+          {showWelcomePanel && !showLLMSetupGuide && (
+            <div className="workflow-llm-empty">
+              <div className="workflow-llm-empty-card">
+                <div className="workflow-llm-empty-icon" aria-hidden>
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div className="workflow-llm-empty-title">
+                  {currentSessionMeta?.name || '开始新的对话'}
+                </div>
+                <div className="workflow-llm-empty-desc">
+                  {showModelNeededGuide
+                    ? '已录入模型，请先选择要使用的模型再开始对话。'
+                    : '选择一个话题，直接描述需求，或从示例中开始。'}
+                </div>
+                {showModelNeededGuide ? (
+                  <div className="workflow-llm-empty-actions">
+                    <Button
+                      variant="primary"
+                      size="lg"
+                      onClick={() => setShowModelSelectDialog(true)}
+                    >
+                      选择模型
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="workflow-llm-empty-steps">
+                    <button type="button" onClick={() => setInput('帮我梳理今天的工作要点')}>
+                      今日工作梳理
+                    </button>
+                    <button type="button" onClick={() => setInput('写一份产品迭代计划，含里程碑与风险')}>
+                      产品迭代计划
+                    </button>
+                    <button type="button" onClick={() => setInput('请帮我总结这段材料的关键信息')}>
+                      材料总结
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          {showLLMSetupGuide && (
+            <div className="workflow-llm-empty">
+              <div className="workflow-llm-empty-card">
+                <div className="workflow-llm-empty-icon" aria-hidden>
+                  <Brain className="w-5 h-5" />
+                </div>
+                <div className="workflow-llm-empty-title">还没有录入模型</div>
+                <div className="workflow-llm-empty-desc">
+                  先在「设置 → 模型录入」添加一个模型与 Token，才能开始对话。
+                </div>
+                <div className="workflow-llm-empty-steps">
+                  <span>1. 选择供应商</span>
+                  <span>2. 填写 API Key</span>
+                  <span>3. 启用一个模型</span>
+                </div>
+                <div className="workflow-llm-empty-hint">
+                  本地 Ollama 可不填 Key，保存后即可直接选择模型。
+                </div>
+                <div className="workflow-llm-empty-actions">
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    onClick={() => navigate('/llm-config')}
+                  >
+                    前往模型录入
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
           {/* 加载更多历史消息提示（固定在顶部，带迷雾效果）- 只有接近顶部且有更多消息时才显示 */}
           <HistoryLoadTop
             visible={isNearTop}
@@ -6331,8 +6434,8 @@ const Workflow: React.FC<WorkflowProps> = ({
           </Dialog>
 
           <div className={`workflow-composer-layout ${isInputFocused ? 'workflow-composer-layout--expanded' : 'workflow-composer-layout--collapsed'}`}>
-          {/* 工具栏：左侧附件 / 人设 / Skill；右侧模型 */}
-          <div className={`workflow-composer-toolbar flex items-center justify-between px-2 py-1.5 ${isInputFocused ? 'workflow-composer-toolbar--visible' : 'workflow-composer-toolbar--hidden'}`}>
+          {/* 工具栏：左侧附件 / Skill；右侧模型 */}
+          <div className={`workflow-composer-toolbar flex items-center justify-between px-2 py-1.5 ${isInputFocused ? 'workflow-composer-toolbar--visible' : ''}`}>
             <div className="flex items-center gap-0.5 flex-nowrap flex-1 min-w-0 overflow-hidden">
               {/* 附件入口：移动端置最左并放大 */}
               <AttachmentMenu
@@ -6343,27 +6446,6 @@ const Workflow: React.FC<WorkflowProps> = ({
                 iconOnly
                 className="workflow-composer-attach-btn mr-1"
               />
-
-              {/* 人设 Tag：附件后第二位，点击先预览 */}
-              {currentSessionType !== 'topic_general' && currentSessionId && (() => {
-                return (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowPersonaPreviewDialog(true);
-                    }}
-                    className={`niho-persona-btn ring-0 flex items-center space-x-1 px-1.5 py-0.5 rounded text-[11px] transition-all whitespace-nowrap flex-shrink-0 mr-0.5 ${
-                      personaPreviewInfo.hasPrompt
-                        ? 'niho-persona-btn--active font-medium'
-                        : 'niho-persona-btn--inactive'
-                    }`}
-                    title={personaPreviewInfo.title}
-                  >
-                    <FileText className="w-3 h-3 flex-shrink-0" />
-                    <span>{personaPreviewInfo.label}</span>
-                  </button>
-                );
-              })()}
 
               {/* 工具栏内 Skill tags */}
               {Array.from(selectedSkillPackIds).length > 0 && (
@@ -6395,52 +6477,6 @@ const Workflow: React.FC<WorkflowProps> = ({
             </div>
 
             <div className="ml-2 flex items-center gap-1 flex-shrink-0">
-              {/* 模型选择：底部插件栏右侧，位于发送按钮左侧 */}
-              {currentSessionType !== 'topic_general' && (
-                <button
-                  onClick={() => setShowModelSelectDialog(true)}
-                  className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] transition-all ${
-                    selectedLLMConfig
-                      ? 'font-medium ring-1'
-                      : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
-                  }`}
-                  style={selectedLLMConfig ? { background: 'var(--color-accent-bg)', color: 'var(--color-accent)', boxShadow: 'inset 0 0 0 1px var(--color-selected-border)' } : undefined}
-                  title={selectedLLMConfig ? `${selectedLLMConfig.name}${selectedLLMConfig.model ? ` (${selectedLLMConfig.model})` : ''}` : '选择模型'}
-                >
-                  {selectedLLMConfig ? (
-                    <>
-                      {(() => {
-                        const providerInfo = getProviderIcon(selectedLLMConfig, providers);
-                        const providerType = (selectedLLMConfig.supplier || selectedLLMConfig.provider || 'openai').toLowerCase();
-                        if (['openai', 'anthropic', 'google', 'gemini', 'deepseek', 'ollama'].includes(providerType)) {
-                          return <ProviderIcon provider={providerType} size={14} className="flex-shrink-0" />;
-                        }
-                        return <span className="text-xs">{providerInfo.icon}</span>;
-                      })()}
-                      <span className="font-medium truncate max-w-[80px]">
-                        {selectedLLMConfig.shortname || selectedLLMConfig.name}
-                      </span>
-                      {(() => {
-                        const enableThinking = selectedLLMConfig.metadata?.enableThinking ?? false;
-                        const supportedInputs: string[] = selectedLLMConfig.metadata?.supportedInputs ?? [];
-                        const supportedOutputs: string[] = selectedLLMConfig.metadata?.supportedOutputs ?? [];
-                        const caps = [];
-                        if (enableThinking) caps.push(<Brain key="t" className="w-2.5 h-2.5 text-[var(--color-highlight)]" />);
-                        if (supportedInputs.includes('image')) caps.push(<Eye key="v" className="w-2.5 h-2.5 text-[var(--color-accent)]" />);
-                        if (supportedInputs.includes('audio')) caps.push(<Volume2 key="a" className="w-2.5 h-2.5 text-[var(--color-success)]" />);
-                        if (supportedOutputs.includes('image')) caps.push(<Paintbrush key="i" className="w-2.5 h-2.5 text-[var(--color-secondary)]" />);
-                        return caps.length > 0 ? <div className="flex items-center gap-0.5">{caps}</div> : null;
-                      })()}
-                    </>
-                  ) : (
-                    <>
-                      <Brain className="w-3 h-3" />
-                      <span>选择模型</span>
-                    </>
-                  )}
-                </button>
-              )}
-
               {/* 发送/中断按钮：底部插件栏最右侧 */}
               {isLoading ? (
                 <Button
@@ -7221,166 +7257,6 @@ const Workflow: React.FC<WorkflowProps> = ({
         </div>
       </div>
     </div>
-
-    {/* HeaderConfigDialog - 会话配置对话框 */}
-    <HeaderConfigDialog
-      open={showHeaderConfigDialog}
-      onClose={() => setShowHeaderConfigDialog(false)}
-      activeTab={headerConfigActiveTab}
-      setActiveTab={setHeaderConfigActiveTab}
-      editName={headerConfigEditName}
-      setEditName={setHeaderConfigEditName}
-      editAvatar={headerConfigEditAvatar}
-      setEditAvatar={setHeaderConfigEditAvatar}
-      editSystemPrompt={headerConfigEditSystemPrompt}
-      setEditSystemPrompt={setHeaderConfigEditSystemPrompt}
-      editMediaOutputPath={headerConfigEditMediaOutputPath}
-      setEditMediaOutputPath={setHeaderConfigEditMediaOutputPath}
-      editLlmConfigId={headerConfigEditLlmConfigId}
-      setEditLlmConfigId={setHeaderConfigEditLlmConfigId}
-      editProfession={headerConfigEditProfession}
-      setEditProfession={setHeaderConfigEditProfession}
-      editProfessionType={headerConfigEditProfessionType}
-      setEditProfessionType={setHeaderConfigEditProfessionType}
-      careerProfessions={headerConfigCareerProfessions}
-      gameProfessions={headerConfigGameProfessions}
-      isLoadingProfessions={isLoadingHeaderProfessions}
-      sessions={sessions}
-      currentSessionId={currentSessionId}
-      llmConfigs={llmConfigs}
-      isSavingAsRole={isSavingHeaderAsRole}
-      onShowAddProfessionDialog={() => setShowHeaderAddProfessionDialog(true)}
-      onSaveAsRole={async () => {
-        const currentSession = sessions.find(s => s.session_id === currentSessionId);
-        if (!currentSession || !currentSessionId) return;
-        
-        const name = headerConfigEditName.trim() || currentSession.name || currentSession.title || `角色 ${currentSession.session_id.slice(0, 8)}`;
-        const avatar = (headerConfigEditAvatar || '').trim();
-        const systemPrompt = headerConfigEditSystemPrompt.trim();
-        const llmConfigId = headerConfigEditLlmConfigId;
-        const mediaOutputPath = headerConfigEditMediaOutputPath.trim();
-
-        if (!avatar || !systemPrompt || !llmConfigId) {
-          toast({
-            title: '还差一步',
-            description: '保存为角色需要：头像、人设、默认LLM。',
-            variant: 'destructive',
-          });
-          setHeaderConfigActiveTab('basic');
-          return;
-        }
-
-        try {
-          setIsSavingHeaderAsRole(true);
-          const role = await createRole({
-            name,
-            avatar,
-            system_prompt: systemPrompt,
-            llm_config_id: llmConfigId,
-            media_output_path: mediaOutputPath || undefined,
-          });
-          emitSessionsChanged();
-          toast({
-            title: '已保存为角色',
-            description: `角色「${role.name || role.title || role.session_id}」已加入角色库`,
-            variant: 'success',
-          });
-        } catch (error) {
-          console.error('Failed to save as role (header config):', error);
-          toast({
-            title: '保存为角色失败',
-            description: error instanceof Error ? error.message : String(error),
-            variant: 'destructive',
-          });
-        } finally {
-          setIsSavingHeaderAsRole(false);
-        }
-      }}
-      onSave={async () => {
-        try {
-          const promises: Promise<void>[] = [];
-          const currentSession = sessions.find(s => s.session_id === currentSessionId);
-          if (!currentSession || !currentSessionId) return;
-          
-          // 如果职业发生变化，应用职业到名称和人设
-          let finalName = headerConfigEditName.trim();
-          let finalSystemPrompt = headerConfigEditSystemPrompt.trim();
-          
-          const currentProfessionList = headerConfigEditProfessionType === 'career' 
-            ? headerConfigCareerProfessions 
-            : headerConfigGameProfessions;
-          const currentProfession = extractProfession(currentSession.name, currentSession.system_prompt, currentProfessionList);
-          if (headerConfigEditProfession !== currentProfession) {
-            // 职业发生变化，应用职业更新
-            const applied = applyProfessionToNameOrPrompt(
-              headerConfigEditProfession,
-              finalName,
-              finalSystemPrompt,
-              currentProfessionList
-            );
-            finalName = applied.name;
-            finalSystemPrompt = applied.systemPrompt;
-          }
-          
-          // 更新名称
-          if (finalName !== (currentSession.name || '')) {
-            promises.push(updateSessionName(currentSessionId, finalName));
-          }
-          
-          // 更新头像
-          if (headerConfigEditAvatar !== currentSession.avatar) {
-            promises.push(updateSessionAvatar(currentSessionId, headerConfigEditAvatar || ''));
-            setCurrentSessionAvatar(headerConfigEditAvatar);
-          }
-          
-          // 更新人设
-          if (finalSystemPrompt !== (currentSession.system_prompt || '')) {
-            promises.push(updateSessionSystemPrompt(currentSessionId, finalSystemPrompt || null));
-            setCurrentSystemPrompt(finalSystemPrompt || null);
-          }
-          
-          // 更新多媒体保存路径
-          if (headerConfigEditMediaOutputPath !== (currentSession.media_output_path || '')) {
-            promises.push(updateSessionMediaOutputPath(currentSessionId, headerConfigEditMediaOutputPath.trim() || null));
-          }
-          
-          // 更新默认模型
-          if (headerConfigEditLlmConfigId !== (currentSession.llm_config_id || null)) {
-            promises.push(updateSessionLLMConfig(currentSessionId, headerConfigEditLlmConfigId));
-            // 如果设置了默认模型，自动切换当前模型
-            if (headerConfigEditLlmConfigId) {
-              setSelectedLLMConfigId(headerConfigEditLlmConfigId);
-            }
-          }
-          
-          await Promise.all(promises);
-          
-          // 刷新会话列表与 Agent（人设预设）
-          const [allSessions, allAgents] = await Promise.all([getSessions(), getAgents()]);
-          setSessions(filterVisibleSessions(allSessions));
-          setAgentsList(allAgents || []);
-          emitSessionsChanged();
-          
-          setShowHeaderConfigDialog(false);
-        } catch (error) {
-          console.error('Failed to save config:', error);
-          alert('保存失败，请重试');
-        }
-      }}
-    />
-
-    {/* AddProfessionDialog - 添加自定义职业对话框 */}
-    <AddProfessionDialog
-      open={showHeaderAddProfessionDialog}
-      onClose={() => setShowHeaderAddProfessionDialog(false)}
-      professionType={headerConfigEditProfessionType}
-      setProfessionType={setHeaderConfigEditProfessionType}
-      newProfessionValue={headerNewProfessionValue}
-      setNewProfessionValue={setHeaderNewProfessionValue}
-      setCareerProfessions={setHeaderConfigCareerProfessions}
-      setGameProfessions={setHeaderConfigGameProfessions}
-      setEditProfession={setHeaderConfigEditProfession}
-    />
 
     {/* TopicConfigDialog - 话题配置对话框 */}
     <TopicConfigDialog

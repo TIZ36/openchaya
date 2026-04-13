@@ -11,23 +11,18 @@ import {
   Sun,
   Moon,
   MessageSquare,
+  Brain,
   Package,
   Plug,
   Palette,
   Sparkles,
-  Mic,
-  Cpu,
   Zap,
   Target,
-  Radio,
-  Headphones,
   PanelLeftClose,
   PanelLeftOpen,
   LogOut,
   BookOpen,
   Rocket,
-  Gem,
-  X,
   Trash2,
 } from 'lucide-react';
 import { Button } from './components/ui/Button';
@@ -45,11 +40,9 @@ import {
 import SettingsPanel from './components/SettingsPanel';
 import LLMConfigPanel from './components/LLMConfig';
 import McpWorkspacePanel from './components/McpWorkspacePanel';
-import McpSupportPage from './components/McpSupportPage';
 import Workflow from './components/Workflow';
 import AgentsPage from './components/AgentsPage';
 import MediaCreatorPage from './components/MediaCreatorPage';
-import CommunicationPage from './components/CommunicationPage';
 import SkillPackEntryPage from './components/SkillPackEntryPage';
 import KnowledgeBasePage from './components/KnowledgeBasePage';
 import AgentNameplateDialog from './components/AgentNameplateDialog';
@@ -59,11 +52,7 @@ import { ConfirmDialog } from './components/ui/ConfirmDialog';
 import { CapsuleToggle } from './components/ui/CapsuleToggle';
 import { SESSIONS_CHANGED_EVENT, emitSessionsChanged } from './utils/sessionEvents';
 import { readPreciseMode, writePreciseMode } from './utils/preciseMode';
-import { ChillPage } from './components/ChillPage';
-import { ChillGlobalPlayer } from './components/ChillGlobalPlayer';
-import type { ChillPanelTab } from './components/ChillPanel';
 import { getMe } from './services/adminApi';
-import { useChillPlayerOptional } from './contexts/ChillPlayerContext';
 import {
   buildStoredUser,
   getAllowedSkins,
@@ -87,29 +76,22 @@ interface Settings {
   enableToolCalling: boolean;
 }
 
-type MainModule = 'chat' | 'media' | 'chill' | 'settings' | 'harness' | 'persona';
-type ChatSubTab = 'chaya' | 'persona' | 'kb' | 'communication';
+type MainModule = 'chat' | 'media' | 'settings' | 'harness';
+type ChatSubTab = 'chaya' | 'persona';
 /** 聊天内嵌「人格」区：全局人设库或当前 Agent 基本设置 */
-type ChatAgentsPageSection = 'persona-presets' | 'chaya-config';
-type HarnessSubTab = 'mcp' | 'skill';
-/** 左侧 Persona：全局预设 / 音色库；「本 Agent 用哪个人设」在聊天顶栏「基本设置」 */
-type PersonaSubTab = 'presets' | 'voice';
+type ChatAgentsPageSection = 'persona-presets' | 'chaya-config' | 'voice-presets';
+type HarnessSubTab = 'mcp' | 'skill' | 'kb';
 type MediaSubTab = 'image' | 'video';
 type SettingsSubTab = 'general' | 'llm' | 'agent-status' | 'membership';
 
 const LS_MAIN = 'chatee_main_module';
 const LS_CHAT_SUB = 'chatee_chat_sub_tab';
 const LS_HARNESS_SUB = 'chatee_harness_sub_tab';
-const LS_PERSONA_SUB = 'chatee_persona_sub_tab';
 const LS_MEDIA_SUB = 'chatee_media_sub_tab';
 const LS_SETTINGS_SUB = 'chatee_settings_sub_tab';
-const LS_CHILL_SUB = 'chatee_chill_sub_tab';
 const LS_OPEN_AGENT_TABS = 'chatee_open_agent_tabs';
 const LS_SIDEBAR_COLLAPSED = 'chatee_sidebar_collapsed';
 const THEME_MODE_STORAGE_KEY = 'chatee_theme_mode';
-
-/** 通信子页后端未就绪时置灰 Tab、不可进入；接入完成后改为 false */
-const COMMUNICATION_TAB_DISABLED = true;
 
 function readLs<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
   try {
@@ -123,27 +105,11 @@ function readLs<T extends string>(key: string, allowed: readonly T[], fallback: 
 function readMainModule(): MainModule {
   try {
     const raw = localStorage.getItem(LS_MAIN);
-    if (raw === 'persona_presets' || raw === 'voice_presets') return 'persona';
     const st = localStorage.getItem(LS_SETTINGS_SUB);
-    if (st === 'persona_presets' || st === 'voice_presets') return 'persona';
-    if (raw && ['chat', 'media', 'chill', 'settings', 'harness', 'persona'].includes(raw)) return raw as MainModule;
+    if (st === 'persona_presets' || st === 'voice_presets') return 'chat';
+    if (raw && ['chat', 'media', 'settings', 'harness'].includes(raw)) return raw as MainModule;
   } catch { /* */ }
   return 'chat';
-}
-
-function readPersonaSubTabInitial(): PersonaSubTab {
-  try {
-    const rawMain = localStorage.getItem(LS_MAIN);
-    if (rawMain === 'persona_presets') return 'presets';
-    if (rawMain === 'voice_presets') return 'voice';
-    const st = localStorage.getItem(LS_SETTINGS_SUB);
-    if (st === 'persona_presets') return 'presets';
-    if (st === 'voice_presets') return 'voice';
-    const raw = localStorage.getItem(LS_PERSONA_SUB);
-    if (raw === 'basic') return 'presets';
-    if (raw && ['presets', 'voice'].includes(raw)) return raw as PersonaSubTab;
-  } catch { /* */ }
-  return 'presets';
 }
 
 function readSettingsSubTabInitial(): SettingsSubTab {
@@ -167,7 +133,6 @@ const App: React.FC = () => {
   const [authed, setAuthed] = useState(api.isLoggedIn());
   const [showUserProfile, setShowUserProfile] = useState(false);
   const [user, setUser] = useState<CurrentUser | null>(() => api.getUser());
-  const chillPlayer = useChillPlayerOptional();
 
   const isElectron =
     import.meta.env.VITE_ELECTRON === 'true' ||
@@ -196,26 +161,19 @@ const App: React.FC = () => {
   const [chatSubTab, setChatSubTab] = useState<ChatSubTab>(() => {
     try {
       const legacy = localStorage.getItem(LS_CHAT_SUB);
-      if (legacy === 'mcp' || legacy === 'skill') return 'chaya';
+      if (legacy === 'mcp' || legacy === 'skill' || legacy === 'kb') return 'chaya';
     } catch { /* */ }
-    const v = readLs(LS_CHAT_SUB, ['chaya', 'persona', 'kb', 'communication'] as const, 'chaya');
-    return COMMUNICATION_TAB_DISABLED && v === 'communication' ? 'chaya' : v;
+    return readLs(LS_CHAT_SUB, ['chaya', 'persona'] as const, 'chaya');
   });
   const [harnessSubTab, setHarnessSubTab] = useState<HarnessSubTab>(() =>
-    readLs(LS_HARNESS_SUB, ['mcp', 'skill'] as const, 'mcp'),
+    readLs(LS_HARNESS_SUB, ['mcp', 'skill', 'kb'] as const, 'mcp'),
   );
-  const [personaSubTab, setPersonaSubTab] = useState<PersonaSubTab>(() => readPersonaSubTabInitial());
-  const [chatAgentsPageSection, setChatAgentsPageSection] = useState<ChatAgentsPageSection>('chaya-config');
+  const [chatAgentsPageSection, setChatAgentsPageSection] = useState<ChatAgentsPageSection>('persona-presets');
   const [mediaSubTab, setMediaSubTab] = useState<MediaSubTab>(() =>
     readLs(LS_MEDIA_SUB, ['image', 'video'] as const, 'image'),
   );
   const [settingsSubTab, setSettingsSubTab] = useState<SettingsSubTab>(() => readSettingsSubTabInitial());
-  const [chillSubTab, setChillSubTab] = useState<ChillPanelTab>(() =>
-    readLs(LS_CHILL_SUB, ['live', 'search'] as const, 'live'),
-  );
   const [showMobileSettingsDialog, setShowMobileSettingsDialog] = useState(false);
-  const [showMobilePersonaDialog, setShowMobilePersonaDialog] = useState(false);
-  const [showMobileHarnessDialog, setShowMobileHarnessDialog] = useState(false);
   const [showMobileModeDialog, setShowMobileModeDialog] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
     try {
@@ -230,14 +188,11 @@ const App: React.FC = () => {
       localStorage.setItem(LS_MAIN, mainModule);
       localStorage.setItem(LS_CHAT_SUB, chatSubTab);
       localStorage.setItem(LS_HARNESS_SUB, harnessSubTab);
-      localStorage.setItem(LS_PERSONA_SUB, personaSubTab);
       localStorage.setItem(LS_MEDIA_SUB, mediaSubTab);
       localStorage.setItem(LS_SETTINGS_SUB, settingsSubTab);
-      localStorage.setItem(LS_CHILL_SUB, chillSubTab);
     } catch { /* */ }
-  }, [mainModule, chatSubTab, harnessSubTab, personaSubTab, mediaSubTab, settingsSubTab, chillSubTab]);
+  }, [mainModule, chatSubTab, harnessSubTab, mediaSubTab, settingsSubTab]);
 
-  const isMcpSupportRoute = location.pathname === '/mcp-support';
   const [preciseMode, setPreciseMode] = useState(() => readPreciseMode());
 
   const onPreciseModeChange = useCallback((next: boolean) => {
@@ -246,10 +201,10 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (location.pathname === '/mcp-support' && mainModule !== 'chat') {
+    if (location.pathname === '/mcp-support') {
       navigate('/', { replace: true });
     }
-  }, [mainModule, location.pathname, navigate]);
+  }, [location.pathname, navigate]);
 
   // ── 会话 ──
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => {
@@ -373,6 +328,16 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    const onModelChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ label?: string }>).detail;
+      const nextLabel = (detail?.label || '').trim();
+      setSelectedModelLabel(nextLabel || '选择模型');
+    };
+    window.addEventListener('chaya:selected-model-change', onModelChange as EventListener);
+    return () => window.removeEventListener('chaya:selected-model-change', onModelChange as EventListener);
+  }, []);
+
+  useEffect(() => {
     const mq = window.matchMedia('(max-width: 767px)');
     const sync = () => document.documentElement.setAttribute('data-mobile', mq.matches ? 'true' : 'false');
     sync(); mq.addEventListener('change', sync); return () => mq.removeEventListener('change', sync);
@@ -415,13 +380,13 @@ const App: React.FC = () => {
       navigate('/', { replace: true });
       return;
     }
-    if (p === '/communication') {
+    if (p === '/voice-presets') {
       setMainModule('chat');
-      setChatSubTab(COMMUNICATION_TAB_DISABLED ? 'chaya' : 'communication');
+      setChatSubTab('persona');
+      setChatAgentsPageSection('voice-presets');
       navigate('/', { replace: true });
       return;
     }
-    if (p === '/chill')            { setMainModule('chill');   navigate('/', { replace: true }); return; }
     if (p === '/media-creator' || p === '/media-creator-image') { setMainModule('media'); setMediaSubTab('image'); navigate('/', { replace: true }); return; }
     if (p === '/media-creator-video') { setMainModule('media'); setMediaSubTab('video'); navigate('/', { replace: true }); }
   }, [location.pathname, navigate]);
@@ -554,13 +519,8 @@ const App: React.FC = () => {
     const fn = () => setIsMobile(mq.matches);
     mq.addEventListener('change', fn); return () => mq.removeEventListener('change', fn);
   }, []);
-  const showDesktopOverlay = !isMobile && mainModule !== 'chat';
 
   // ── 气泡 Tab ──
-  const chatTabs: { id: ChatSubTab; label: string; icon: React.ReactNode }[] = [
-    { id: 'kb', label: 'Harness', icon: <Cpu className="w-3.5 h-3.5" /> },
-    { id: 'communication', label: '通信', icon: <Radio className="w-3.5 h-3.5" /> },
-  ];
   const mediaTabs: { id: MediaSubTab; label: string }[] = [
     { id: 'image', label: '生图' },
     { id: 'video', label: '生视频' },
@@ -574,36 +534,11 @@ const App: React.FC = () => {
     if (user?.is_founder) tabs.push({ id: 'membership', label: '会员管理' });
     return tabs;
   }, [user?.is_founder]);
-  const chillTabs: { id: ChillPanelTab; label: string }[] = [
-    { id: 'live', label: '直播' },
-    { id: 'search', label: '搜索' },
+  const harnessTabs: { id: HarnessSubTab; label: string }[] = [
+    { id: 'mcp', label: 'MCP' },
+    { id: 'skill', label: 'Skill' },
+    { id: 'kb', label: '知识库' },
   ];
-
-  const harnessTabs: { id: HarnessSubTab; label: string; icon: React.ReactNode }[] = [
-    { id: 'mcp', label: 'MCP', icon: <Plug className="w-3.5 h-3.5" /> },
-    { id: 'skill', label: 'Skill', icon: <Package className="w-3.5 h-3.5" /> },
-  ];
-
-  const personaTabs: { id: PersonaSubTab; label: string; icon: React.ReactNode }[] = [
-    { id: 'presets', label: '人设管理', icon: <Sparkles className="w-3.5 h-3.5" /> },
-    { id: 'voice', label: '音色管理', icon: <Mic className="w-3.5 h-3.5" /> },
-  ];
-
-  /** 极速模式下隐藏的子 Tab（仅 Harness 模式显示） */
-  const PRECISE_ONLY_SUBTABS: ChatSubTab[] = ['kb'];
-  const visibleChatTabs = chatTabs.filter((t) => preciseMode || !PRECISE_ONLY_SUBTABS.includes(t.id));
-
-  useEffect(() => {
-    if (!preciseMode && PRECISE_ONLY_SUBTABS.includes(chatSubTab)) {
-      setChatSubTab('chaya');
-    }
-  }, [preciseMode, chatSubTab]);
-
-  useEffect(() => {
-    if (COMMUNICATION_TAB_DISABLED && chatSubTab === 'communication') {
-      setChatSubTab('chaya');
-    }
-  }, [chatSubTab]);
 
   useEffect(() => {
     if (settingsSubTab === 'membership' && !user?.is_founder) {
@@ -625,19 +560,16 @@ const App: React.FC = () => {
     const avatar = row.avatar?.trim() ? row.avatar : null;
     return { name, avatar };
   }, [switcherAgents, activeAgentSessionId]);
+  const activeSessionTitle = useMemo(() => {
+    const row = switcherAgents.find((a) => a.session_id === activeAgentSessionId);
+    if (!row) return activeAgentMeta?.name || 'Chaya';
+    return row.name || row.title || activeAgentMeta?.name || 'Chaya';
+  }, [switcherAgents, activeAgentSessionId, activeAgentMeta?.name]);
   const activeAgentSessionRow = useMemo(
     () => switcherAgents.find((a) => a.session_id === activeAgentSessionId) || null,
     [switcherAgents, activeAgentSessionId],
   );
-  const chillNavPlaying = !!(chillPlayer?.videoId && chillPlayer?.playing);
-  const headerChatTabs = useMemo(
-    () => visibleChatTabs.filter((tab) => tab.id !== 'communication' || !COMMUNICATION_TAB_DISABLED),
-    [visibleChatTabs],
-  );
-  const displayedHeaderChatTabs = useMemo(
-    () => headerChatTabs.filter((tab) => !(isMobile && preciseMode && tab.id === 'kb')),
-    [headerChatTabs, isMobile, preciseMode],
-  );
+  const [selectedModelLabel, setSelectedModelLabel] = useState('选择模型');
   const mobilePrecisePortalTabs = useMemo(
     () => [
       {
@@ -664,15 +596,8 @@ const App: React.FC = () => {
 
   // ── 内容渲染 ──
   const renderPanel = () => {
-    if (mainModule === 'chat' && isMcpSupportRoute) {
-      return (
-        <div className="h-full min-h-0 overflow-hidden">
-          <McpSupportPage />
-        </div>
-      );
-    }
     if (mainModule === 'chat') {
-      if (isMobile && preciseMode && chatSubTab === 'kb') {
+      if (isMobile && preciseMode) {
         return (
           <div className="mobile-harness-info flex-1 min-h-0 overflow-y-auto">
             <section className="mobile-harness-card mobile-harness-card--poster">
@@ -694,13 +619,8 @@ const App: React.FC = () => {
                   type="button"
                   className={`mobile-capability-poster ${item.id === 'kb' ? 'mobile-capability-poster--active' : ''}`}
                   onClick={() => {
-                    if (item.id === 'kb') {
-                      setMainModule('chat');
-                      setChatSubTab('kb');
-                    } else {
-                      setMainModule('harness');
-                      setHarnessSubTab(item.id);
-                    }
+                    setMainModule('harness');
+                    setHarnessSubTab(item.id);
                   }}
                 >
                   <span className="mobile-capability-poster__glow" aria-hidden />
@@ -733,6 +653,17 @@ const App: React.FC = () => {
               </button>
               <button
                 type="button"
+                onClick={() => setChatAgentsPageSection('voice-presets')}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  chatAgentsPageSection === 'voice-presets'
+                    ? 'bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-sm'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--color-hover-bg)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                音色管理
+              </button>
+              <button
+                type="button"
                 onClick={() => setChatAgentsPageSection('chaya-config')}
                 className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                   chatAgentsPageSection === 'chaya-config'
@@ -749,106 +680,26 @@ const App: React.FC = () => {
           </div>
         );
       }
-      if (chatSubTab === 'kb') {
-        if (isMobile) {
-          return (
-            <div className="mobile-harness-info flex-1 min-h-0 overflow-y-auto">
-              <section className="mobile-harness-card">
-                <div className="mobile-harness-card__icon">
-                  <BookOpen className="w-5 h-5" />
-                </div>
-                <div className="mobile-harness-card__body">
-                  <h2 className="mobile-harness-card__title">知识库门户</h2>
-                  <p className="mobile-harness-card__desc">
-                    手机端只保留知识库说明与使用入口，不支持新增、删除、上传或重新配置知识库内容。
-                  </p>
-                </div>
-              </section>
-
-              <section className="mobile-harness-grid">
-                <article className="mobile-harness-panel">
-                  <div className="mobile-harness-panel__label">移动端定位</div>
-                  <div className="mobile-harness-panel__value">只读门户</div>
-                  <p className="mobile-harness-panel__text">
-                    在手机上快速了解当前 Agent 是否接入知识库，并把聊天作为主要入口，减少复杂维护操作。
-                  </p>
-                </article>
-                <article className="mobile-harness-panel">
-                  <div className="mobile-harness-panel__label">增强配置</div>
-                  <div className="mobile-harness-panel__value">Web 端完成</div>
-                  <p className="mobile-harness-panel__text">
-                    文档上传、删除、搜索调优和知识库结构维护都建议在 Web 端完成，移动端更偏门户和使用场景。
-                  </p>
-                </article>
-              </section>
-
-              <section className="mobile-harness-list">
-                <div className="mobile-harness-list__title">移动端建议</div>
-                <div className="mobile-harness-list__item">
-                  <span className="mobile-harness-list__item-icon"><MessageSquare className="w-4 h-4" /></span>
-                  <div>
-                    <div className="mobile-harness-list__item-label">优先通过聊天使用</div>
-                    <div className="mobile-harness-list__item-text">直接向当前 Agent 提问，让知识库在对话中发挥作用。</div>
-                  </div>
-                </div>
-                <div className="mobile-harness-list__item">
-                  <span className="mobile-harness-list__item-icon"><Rocket className="w-4 h-4" /></span>
-                  <div>
-                    <div className="mobile-harness-list__item-label">Web 端增强</div>
-                    <div className="mobile-harness-list__item-text">需要编辑、上传和维护时切到 Web 端进行完整配置。</div>
-                  </div>
-                </div>
-              </section>
-            </div>
-          );
-        }
-        return <div className="h-full min-h-0 overflow-hidden"><KnowledgeBasePage sessionId={activeAgentSessionId} /></div>;
-      }
-      if (chatSubTab === 'communication') {
-        if (COMMUNICATION_TAB_DISABLED) {
-          return (
-            <div className="h-full min-h-0 flex items-center justify-center text-sm text-[var(--text-secondary)]">
-              通信功能接入中…
-            </div>
-          );
-        }
-        return (
-          <div className="h-full min-h-0 overflow-hidden">
-            <CommunicationPage sessionId={activeAgentSessionId} />
-          </div>
-        );
-      }
       return <div key={`c-${activeAgentSessionId}`} className="h-full min-h-0"><Workflow sessionId={activeAgentSessionId} onSelectSession={handleSelectSession} enableToolCalling={settings.enableToolCalling} onToggleToolCalling={(v) => updateSettings({ enableToolCalling: v })} preciseMode={preciseMode} /></div>;
-    }
-    if (mainModule === 'persona') {
-      if (personaSubTab === 'voice') {
-        return (
-          <div className="h-full min-h-0 overflow-hidden">
-            <AgentsPage sessionId={activeAgentSessionId} section="voice-presets" />
-          </div>
-        );
-      }
-      return (
-        <div className="h-full min-h-0 overflow-hidden">
-          <AgentsPage sessionId={activeAgentSessionId} section="persona-presets" />
-        </div>
-      );
     }
     if (mainModule === 'harness') {
       if (isMobile) {
         const isMcpTab = harnessSubTab === 'mcp';
+        const isKbTab = harnessSubTab === 'kb';
         return (
           <div className="mobile-harness-info flex-1 min-h-0 overflow-y-auto">
             <section className="mobile-harness-card">
               <div className="mobile-harness-card__icon">
-                {isMcpTab ? <Plug className="w-5 h-5" /> : <Package className="w-5 h-5" />}
+                {isMcpTab ? <Plug className="w-5 h-5" /> : isKbTab ? <BookOpen className="w-5 h-5" /> : <Package className="w-5 h-5" />}
               </div>
               <div className="mobile-harness-card__body">
-                <h2 className="mobile-harness-card__title">{isMcpTab ? 'MCP 工作区' : 'Skill 技能包'}</h2>
+                <h2 className="mobile-harness-card__title">{isMcpTab ? 'MCP 工作区' : isKbTab ? '知识库' : 'Skill 技能包'}</h2>
                 <p className="mobile-harness-card__desc">
                   {isMcpTab
                     ? '手机端只保留能力说明与接入状态，MCP 的新增、授权和详细配置请在桌面端完成。'
-                    : '手机端只展示当前技能能力概览，技能包的创建、编辑和绑定管理请在桌面端完成。'}
+                    : isKbTab
+                      ? '手机端可查看知识库内容，复杂的文档维护与批量管理建议在桌面端完成。'
+                      : '手机端只展示当前技能能力概览，技能包的创建、编辑和绑定管理请在桌面端完成。'}
                 </p>
               </div>
             </section>
@@ -868,7 +719,7 @@ const App: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  className={`mobile-capability-poster ${!isMcpTab ? 'mobile-capability-poster--active' : ''}`}
+                  className={`mobile-capability-poster ${!isMcpTab && !isKbTab ? 'mobile-capability-poster--active' : ''}`}
                   onClick={() => setHarnessSubTab('skill')}
                 >
                   <span className="mobile-capability-poster__glow" aria-hidden />
@@ -879,11 +730,8 @@ const App: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  className="mobile-capability-poster"
-                  onClick={() => {
-                    setMainModule('chat');
-                    setChatSubTab('kb');
-                  }}
+                  className={`mobile-capability-poster ${isKbTab ? 'mobile-capability-poster--active' : ''}`}
+                  onClick={() => setHarnessSubTab('kb')}
                 >
                   <span className="mobile-capability-poster__glow" aria-hidden />
                   <span className="mobile-capability-poster__icon"><BookOpen className="w-5 h-5" /></span>
@@ -897,11 +745,13 @@ const App: React.FC = () => {
             <section className="mobile-harness-grid">
               <article className="mobile-harness-panel">
                 <div className="mobile-harness-panel__label">当前页面</div>
-                <div className="mobile-harness-panel__value">{isMcpTab ? '只读概览' : '只读概览'}</div>
+                <div className="mobile-harness-panel__value">{isKbTab ? '可查看内容' : '只读概览'}</div>
                 <p className="mobile-harness-panel__text">
                   {isMcpTab
                     ? '查看 MCP 工作区定位、用途和桌面端入口说明。'
-                    : '查看 Skill 的用途、调用方式和桌面端维护入口说明。'}
+                    : isKbTab
+                      ? '查看知识库文档与检索入口，维护结构建议在桌面端完成。'
+                      : '查看 Skill 的用途、调用方式和桌面端维护入口说明。'}
                 </p>
               </article>
               <article className="mobile-harness-panel">
@@ -934,23 +784,24 @@ const App: React.FC = () => {
         );
       }
 
-      if (harnessSubTab === 'mcp') {
-        return (
-          <div className="h-full min-h-0 overflow-hidden">
-            <McpWorkspacePanel sessionId={activeAgentSessionId} />
-          </div>
-        );
-      }
-      return <SkillPackEntryPage sessionId={activeAgentSessionId} />;
-    }
-    if (mainModule === 'media') return <div className="h-full min-h-0"><MediaCreatorPage embedded mode={mediaSubTab === 'video' ? 'video' : 'image'} /></div>;
-    if (mainModule === 'chill') {
       return (
         <div className="h-full min-h-0 overflow-hidden">
-          <ChillPage isMobile={isMobile} tab={chillSubTab} onTabChange={setChillSubTab} />
+          {harnessSubTab === 'mcp' && (
+            <div className="h-full min-h-0 overflow-hidden">
+              <McpWorkspacePanel sessionId={activeAgentSessionId} />
+            </div>
+          )}
+          {harnessSubTab === 'skill' && <SkillPackEntryPage sessionId={activeAgentSessionId} />}
+          {harnessSubTab === 'kb' && (
+            <div className="h-full min-h-0 overflow-hidden">
+              <KnowledgeBasePage sessionId={activeAgentSessionId} />
+            </div>
+          )}
         </div>
       );
+
     }
+    if (mainModule === 'media') return <div className="h-full min-h-0"><MediaCreatorPage embedded mode={mediaSubTab === 'video' ? 'video' : 'image'} /></div>;
     if (mainModule === 'settings') {
       if (settingsSubTab === 'general') return <SettingsPanel settings={settings as any} onUpdateSettings={updateSettings as any} section="general" />;
       if (settingsSubTab === 'llm') {
@@ -974,18 +825,6 @@ const App: React.FC = () => {
     );
   };
 
-  const renderChatBasePanel = () => (
-    <div key={`c-base-${activeAgentSessionId}`} className="h-full min-h-0">
-      <Workflow
-        sessionId={activeAgentSessionId}
-        onSelectSession={handleSelectSession}
-        enableToolCalling={settings.enableToolCalling}
-        onToggleToolCalling={(v) => updateSettings({ enableToolCalling: v })}
-        preciseMode={preciseMode}
-      />
-    </div>
-  );
-
   const renderModuleTabs = () => (
     <>
       {mainModule === 'media' && mediaTabs.map((t) => (
@@ -1008,35 +847,13 @@ const App: React.FC = () => {
           <span className="app-bubble-tab-label">{t.label}</span>
         </button>
       ))}
-      {mainModule === 'chill' && chillTabs.map((t) => (
-        <button
-          key={t.id}
-          type="button"
-          onClick={() => setChillSubTab(t.id)}
-          className={`app-bubble-tab app-no-drag ${chillSubTab === t.id ? 'app-bubble-tab--active' : ''}`}
-        >
-          <span className="app-bubble-tab-label">{t.label}</span>
-        </button>
-      ))}
       {mainModule === 'harness' && harnessTabs.map((t) => (
         <button
           key={t.id}
           type="button"
           onClick={() => setHarnessSubTab(t.id)}
-          className={`app-bubble-tab app-no-drag flex items-center gap-1.5 ${harnessSubTab === t.id ? 'app-bubble-tab--active' : ''}`}
+          className={`app-bubble-tab app-no-drag ${harnessSubTab === t.id ? 'app-bubble-tab--active' : ''}`}
         >
-          <span className="app-bubble-tab-icon">{t.icon}</span>
-          <span className="app-bubble-tab-label">{t.label}</span>
-        </button>
-      ))}
-      {mainModule === 'persona' && personaTabs.map((t) => (
-        <button
-          key={t.id}
-          type="button"
-          onClick={() => setPersonaSubTab(t.id)}
-          className={`app-bubble-tab app-no-drag flex items-center gap-1.5 ${personaSubTab === t.id ? 'app-bubble-tab--active' : ''}`}
-        >
-          <span className="app-bubble-tab-icon">{t.icon}</span>
           <span className="app-bubble-tab-label">{t.label}</span>
         </button>
       ))}
@@ -1059,19 +876,47 @@ const App: React.FC = () => {
         {!isMobile && (
           <aside className={`app-sidebar app-no-drag ${isSidebarCollapsed ? 'app-sidebar--collapsed' : ''}`}>
             <div className="app-sidebar__header">
-              {!isSidebarCollapsed && <span className="app-sidebar__brand">Chaya</span>}
-              <button
-                type="button"
-                className="app-sidebar__icon-btn"
-                onClick={() => setIsSidebarCollapsed((prev) => !prev)}
-                title={isSidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
-              >
-                {isSidebarCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
-              </button>
+              <div className="app-sidebar__header-top">
+                {!isSidebarCollapsed && <span className="app-sidebar__brand">Chaya</span>}
+                <button
+                  type="button"
+                  className="app-sidebar__icon-btn"
+                  onClick={() => setIsSidebarCollapsed((prev) => !prev)}
+                  title={isSidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+                >
+                  {isSidebarCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+                </button>
+              </div>
+              <div className="app-sidebar__mode-switch">
+                <button
+                  type="button"
+                  className={`app-sidebar__mode-btn ${mainModule !== 'media' && mainModule !== 'settings' ? 'is-active' : ''}`}
+                  onClick={() => {
+                    setMainModule('chat');
+                    setChatSubTab('chaya');
+                  }}
+                  title="对话"
+                >
+                  <Bot className="w-[17px] h-[17px]" strokeWidth={2} />
+                  {!isSidebarCollapsed && <span>对话</span>}
+                </button>
+                <button
+                  type="button"
+                  className={`app-sidebar__mode-btn ${mainModule === 'media' ? 'is-active' : ''}`}
+                  onClick={() => {
+                    setMainModule('media');
+                    if (!mediaSubTab) setMediaSubTab('image');
+                  }}
+                  title="创作"
+                >
+                  <Film className="w-[17px] h-[17px]" strokeWidth={2} />
+                  {!isSidebarCollapsed && <span>创作</span>}
+                </button>
+              </div>
             </div>
 
             <div className="app-sidebar__section">
-              {!isSidebarCollapsed && (
+              {!isSidebarCollapsed && mainModule !== 'media' && (
                 <>
                   <button type="button" className="app-sidebar__action" onClick={handleCreateAgentTab} disabled={isCreatingAgentTab}>
                     <Plus className="w-3.5 h-3.5" />
@@ -1083,92 +928,156 @@ const App: React.FC = () => {
 
             {!isSidebarCollapsed && (
               <div className="app-sidebar__section app-sidebar__section--scroll">
-                <div className="app-sidebar__label">Conversations</div>
-                <div className="app-sidebar__list">
-                  {switcherAgents.map((agent) => {
-                    const sid = agent.session_id;
-                    const isActive = sid === selectedSessionId;
-                    const label = agent.name || agent.title || `Agent ${sid.slice(0, 6)}`;
-                    const allowDelete = !agent.is_primary;
-                    return (
-                      <button
-                        key={`agent-${sid}`}
-                        type="button"
-                        className={`app-sidebar__item ${isActive ? 'is-active' : ''}`}
-                        onClick={() => {
-                          setMainModule('chat');
-                          setChatSubTab('chaya');
-                          handleSelectAgentSession(sid);
-                        }}
-                        title={label}
-                      >
-                        <Bot className="w-3.5 h-3.5" />
-                        <span className="truncate">{label}</span>
-                        {allowDelete ? (
+                {mainModule === 'media' ? (
+                  <>
+                    <div className="app-sidebar__label">Media Tools</div>
+                    <div className="app-sidebar__list">
+                      {mediaTabs.map((tab) => (
+                        <button
+                          key={`media-${tab.id}`}
+                          type="button"
+                          className={`app-sidebar__item ${mediaSubTab === tab.id ? 'is-active' : ''}`}
+                          onClick={() => {
+                            setMainModule('media');
+                            setMediaSubTab(tab.id);
+                          }}
+                          title={tab.label}
+                        >
+                          <Film className="w-3.5 h-3.5" />
+                          <span className="truncate">{tab.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="app-sidebar__label">Conversations</div>
+                    <div className="app-sidebar__list">
+                      {switcherAgents.map((agent) => {
+                        const sid = agent.session_id;
+                        const isActive = sid === selectedSessionId;
+                        const label = agent.name || agent.title || `Agent ${sid.slice(0, 6)}`;
+                        const allowDelete = !agent.is_primary;
+                        return (
                           <button
+                            key={`agent-${sid}`}
                             type="button"
-                            className="app-sidebar__item-delete"
-                            title={`删除 ${label}`}
-                            onClick={(e) => handleDeleteSessionConfirm(agent, e)}
+                            className={`app-sidebar__item ${isActive ? 'is-active' : ''}`}
+                            onClick={() => {
+                              setMainModule('chat');
+                              setChatSubTab('chaya');
+                              handleSelectAgentSession(sid);
+                            }}
+                            title={label}
                           >
-                            <Trash2 className="w-3 h-3" />
+                            <Bot className="w-3.5 h-3.5" />
+                            <span className="truncate">{label}</span>
+                            {allowDelete ? (
+                              <button
+                                type="button"
+                                className="app-sidebar__item-delete"
+                                title={`删除 ${label}`}
+                                onClick={(e) => handleDeleteSessionConfirm(agent, e)}
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            ) : null}
                           </button>
-                        ) : null}
-                      </button>
-                    );
-                  })}
-                  {switcherTopics.map((topic) => {
-                    const sid = topic.session_id;
-                    const isActive = sid === selectedSessionId;
-                    const label = topic.name || topic.title || topic.preview_text || `会话 ${sid.slice(0, 6)}`;
-                    return (
-                      <button
-                        key={`topic-${sid}`}
-                        type="button"
-                        className={`app-sidebar__item ${isActive ? 'is-active' : ''}`}
-                        onClick={() => {
-                          setMainModule('chat');
-                          setChatSubTab('chaya');
-                          handleSelectSession(sid);
-                        }}
-                        title={label}
-                      >
-                        <MessageSquare className="w-3.5 h-3.5" />
-                        <span className="truncate">{label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+                        );
+                      })}
+                      {switcherTopics.map((topic) => {
+                        const sid = topic.session_id;
+                        const isActive = sid === selectedSessionId;
+                        const label = topic.name || topic.title || topic.preview_text || `会话 ${sid.slice(0, 6)}`;
+                        return (
+                          <button
+                            key={`topic-${sid}`}
+                            type="button"
+                            className={`app-sidebar__item ${isActive ? 'is-active' : ''}`}
+                            onClick={() => {
+                              setMainModule('chat');
+                              setChatSubTab('chaya');
+                              handleSelectSession(sid);
+                            }}
+                            title={label}
+                          >
+                            <MessageSquare className="w-3.5 h-3.5" />
+                            <span className="truncate">{label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="app-sidebar__subtools">
+                      <div className="app-sidebar__label">对话功能</div>
+                      <div className="app-sidebar__list">
+                        <button
+                          type="button"
+                          className={`app-sidebar__item ${(mainModule === 'chat' && chatSubTab === 'chaya') ? 'is-active' : ''}`}
+                          onClick={() => {
+                            setMainModule('chat');
+                            setChatSubTab('chaya');
+                          }}
+                          title="对话"
+                        >
+                          <MessageSquare className="w-3.5 h-3.5" />
+                          <span className="truncate">对话</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`app-sidebar__item ${(mainModule === 'harness' && harnessSubTab === 'mcp') ? 'is-active' : ''}`}
+                          onClick={() => {
+                            setMainModule('harness');
+                            setHarnessSubTab('mcp');
+                          }}
+                          title="MCP"
+                        >
+                          <Plug className="w-3.5 h-3.5" />
+                          <span className="truncate">MCP</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`app-sidebar__item ${(mainModule === 'harness' && harnessSubTab === 'skill') ? 'is-active' : ''}`}
+                          onClick={() => {
+                            setMainModule('harness');
+                            setHarnessSubTab('skill');
+                          }}
+                          title="Skill"
+                        >
+                          <Package className="w-3.5 h-3.5" />
+                          <span className="truncate">Skill</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`app-sidebar__item ${(mainModule === 'chat' && chatSubTab === 'persona' && chatAgentsPageSection === 'persona-presets') ? 'is-active' : ''}`}
+                          onClick={() => {
+                            setMainModule('chat');
+                            setChatSubTab('persona');
+                            setChatAgentsPageSection('persona-presets');
+                          }}
+                          title="人设管理"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span className="truncate">人设管理</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`app-sidebar__item ${(mainModule === 'chat' && chatSubTab === 'persona' && chatAgentsPageSection === 'voice-presets') ? 'is-active' : ''}`}
+                          onClick={() => {
+                            setMainModule('chat');
+                            setChatSubTab('persona');
+                            setChatAgentsPageSection('voice-presets');
+                          }}
+                          title="音色管理"
+                        >
+                          <Palette className="w-3.5 h-3.5" />
+                          <span className="truncate">音色管理</span>
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             )}
-
-            <div className="app-sidebar__section app-sidebar__section--nav">
-              {!isSidebarCollapsed && (
-                <div className="app-sidebar__label app-sidebar__label--nav">主功能</div>
-              )}
-              <div className="app-sidebar__nav-dock">
-                <div className="app-sidebar__nav-grid">
-                  <button type="button" className={`app-sidebar__icon-btn ${mainModule === 'chat' ? 'is-active' : ''}`} onClick={() => setMainModule('chat')} title="聊天">
-                    <Bot className="w-[17px] h-[17px]" strokeWidth={2} />
-                  </button>
-                  <button type="button" className={`app-sidebar__icon-btn ${mainModule === 'harness' ? 'is-active' : ''}`} onClick={() => { setMainModule('harness'); setHarnessSubTab('mcp'); }} title="Harness">
-                    <Plug className="w-[17px] h-[17px]" strokeWidth={2} />
-                  </button>
-                  <button type="button" className={`app-sidebar__icon-btn ${mainModule === 'media' ? 'is-active' : ''}`} onClick={() => setMainModule('media')} title="媒体创作">
-                    <Film className="w-[17px] h-[17px]" strokeWidth={2} />
-                  </button>
-                  <button type="button" className={`app-sidebar__icon-btn ${mainModule === 'persona' ? 'is-active' : ''}`} onClick={() => setMainModule('persona')} title="Persona">
-                    <Sparkles className="w-[17px] h-[17px]" strokeWidth={2} />
-                  </button>
-                  <button type="button" className={`app-sidebar__icon-btn ${mainModule === 'chill' ? 'is-active' : ''} ${chillNavPlaying ? 'app-rail-btn--chill-playing' : ''}`} onClick={() => setMainModule('chill')} title="Chill">
-                    <Headphones className="w-[17px] h-[17px]" strokeWidth={2} />
-                  </button>
-                  <button type="button" className={`app-sidebar__icon-btn ${mainModule === 'settings' ? 'is-active' : ''}`} onClick={() => setMainModule('settings')} title="设置">
-                    <Settings className="w-[17px] h-[17px]" strokeWidth={2} />
-                  </button>
-                </div>
-              </div>
-            </div>
 
             <div className="app-sidebar__footer">
               {!isSidebarCollapsed && (
@@ -1178,7 +1087,10 @@ const App: React.FC = () => {
                   className={`app-pass-chip app-pass-chip--${tenantPlan}`}
                   title="查看会员权益"
                 >
-                  <span className="app-pass-chip__icon"><Gem className="w-3.5 h-3.5" /></span>
+                  <span className={`app-pass-chip__icon app-pass-chip__avatar app-pass-chip__avatar--${tenantPlan}`}>
+                    {(user?.name || user?.email || 'U')[0].toUpperCase()}
+                    {user?.is_founder ? <span className="app-rail-profile-badge">♛</span> : null}
+                  </span>
                   <span className="app-pass-chip__copy">
                     <span className="app-pass-chip__title">{PLAN_LABELS[tenantPlan]} Pass</span>
                     <span className="app-pass-chip__sub">
@@ -1191,6 +1103,17 @@ const App: React.FC = () => {
               <div className="app-sidebar__footer-tools">
                 <button
                   type="button"
+                  onClick={() => {
+                    setMainModule('settings');
+                    setSettingsSubTab('general');
+                  }}
+                  className={`app-sidebar__icon-btn ${mainModule === 'settings' ? 'is-active' : ''}`}
+                  title="设置"
+                >
+                  <Settings className="w-[17px] h-[17px]" strokeWidth={2} />
+                </button>
+                <button
+                  type="button"
                   onClick={handleThemeModeToggle}
                   className="app-sidebar__icon-btn app-sidebar__footer-theme-btn"
                   title={`当前主题：${effectiveThemeLabel}`}
@@ -1199,15 +1122,6 @@ const App: React.FC = () => {
                     ? <Moon className="w-[17px] h-[17px]" strokeWidth={2} />
                     : <Sun className="w-[17px] h-[17px]" strokeWidth={2} />}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setShowUserProfile(true)}
-                  className={`app-rail-profile-btn app-sidebar__footer-avatar app-rail-profile-btn--${tenantPlan} ${user?.is_founder ? 'app-rail-profile-btn--founder' : ''}`}
-                  title={user?.name || user?.email || 'User'}
-                >
-                  {(user?.name || user?.email || 'U')[0].toUpperCase()}
-                  {user?.is_founder ? <span className="app-rail-profile-badge">♛</span> : null}
-                </button>
               </div>
             </div>
           </aside>
@@ -1215,7 +1129,7 @@ const App: React.FC = () => {
 
         {/* ─── 主区域 ─── */}
         <div className={`app-main relative ${isMobile ? 'app-main--mobile-dock' : ''}`}>
-          <ChillGlobalPlayer />
+          {mainModule === 'chat' && (
           <header className={`app-chat-header ${isElectron ? 'electron-titlebar-drag' : ''}`}>
             <div className="app-chat-header__left">
               {isMobile ? (
@@ -1229,33 +1143,73 @@ const App: React.FC = () => {
                 </button>
               ) : null}
               <button type="button" className="app-chat-header__session app-no-drag" onClick={() => setShowAgentNameplateDialog(true)}>
-                <span className="app-chat-header__session-title">{activeAgentMeta?.name || 'Chaya'}</span>
+                <span className="app-chat-header__session-avatar" aria-hidden>
+                  {activeAgentMeta?.avatar ? (
+                    <img src={activeAgentMeta.avatar} alt="" />
+                  ) : (
+                    <Bot className="w-3.5 h-3.5" />
+                  )}
+                </span>
+                <span className="app-chat-header__session-title">{activeSessionTitle}</span>
               </button>
+              {!isMobile ? (
+                <nav className="app-bubble-tabs app-chat-header__tabs app-no-drag">
+                  <span
+                    className="app-chat-header__mode-inline"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <CapsuleToggle
+                      checked={preciseMode}
+                      onCheckedChange={onPreciseModeChange}
+                      aria-label={
+                        preciseMode
+                          ? '当前为 Harness 模式，点击切换到极速模式'
+                          : '当前为极速模式，点击切换到 Harness 模式'
+                      }
+                      leftIcon={<Zap />}
+                      rightIcon={<Target />}
+                    />
+                  </span>
+                  <button
+                    type="button"
+                    className="app-bubble-tab"
+                    onClick={() => {
+                      if (typeof window !== 'undefined') {
+                        window.dispatchEvent(new CustomEvent('chaya:open-model-select'));
+                      }
+                    }}
+                    title={selectedModelLabel}
+                  >
+                    <span className="app-bubble-tab-icon"><Brain className="w-3.5 h-3.5" /></span>
+                    <span className="app-bubble-tab-label">{selectedModelLabel}</span>
+                  </button>
+                </nav>
+              ) : null}
             </div>
             <div className="app-chat-header__right">
-              <span
-                className="app-chat-header__mode app-no-drag"
-                title={
-                  preciseMode
-                    ? 'Harness模式：更严格意图判定与委派'
-                    : '极速模式：优先直答，低延迟'
-                }
-              >
-                <span className="app-chat-header__mode-label" aria-hidden>
-                  {preciseMode ? 'Harness模式' : '极速模式'}
-                </span>
-                <CapsuleToggle
-                  checked={preciseMode}
-                  onCheckedChange={onPreciseModeChange}
-                  aria-label={
+              {isMobile ? (
+                <span
+                  className="app-chat-header__mode app-no-drag"
+                  title={
                     preciseMode
-                      ? '当前为 Harness 模式，点击切换到极速模式'
-                      : '当前为极速模式，点击切换到 Harness 模式'
+                      ? 'Harness模式：更严格意图判定与委派'
+                      : '极速模式：优先直答，低延迟'
                   }
-                  leftIcon={<Zap />}
-                  rightIcon={<Target />}
-                />
-              </span>
+                >
+                  <CapsuleToggle
+                    checked={preciseMode}
+                    onCheckedChange={onPreciseModeChange}
+                    aria-label={
+                      preciseMode
+                        ? '当前为 Harness 模式，点击切换到极速模式'
+                        : '当前为极速模式，点击切换到 Harness 模式'
+                    }
+                    leftIcon={<Zap />}
+                    rightIcon={<Target />}
+                  />
+                </span>
+              ) : null}
               {isMobile ? (
                 <button
                   type="button"
@@ -1269,7 +1223,8 @@ const App: React.FC = () => {
               ) : null}
             </div>
           </header>
-          {mainModule !== 'chat' && !showDesktopOverlay && (
+          )}
+          {mainModule !== 'chat' && mainModule !== 'media' && (
             <header className={`app-bubble-bar ${isElectron ? 'electron-titlebar-drag' : ''}`}>
               <nav className="app-bubble-tabs">
                 {renderModuleTabs()}
@@ -1278,7 +1233,7 @@ const App: React.FC = () => {
           )}
 
           <main className="app-content">
-            <div className="app-content-inner">
+            <div className={`app-content-inner ${mainModule !== 'chat' ? 'app-content-inner--full' : ''}`}>
             <AgentNameplateDialog
               open={showAgentNameplateDialog}
               onOpenChange={setShowAgentNameplateDialog}
@@ -1350,101 +1305,14 @@ const App: React.FC = () => {
               </DialogContent>
             </Dialog>
 
-            {(!isMobile || mainModule === 'chat') && !isMcpSupportRoute ? (
+            {mainModule === 'chat' ? (
               <div className={`chat-workspace-shell flex-1 min-h-0 overflow-hidden flex relative ${isMobile ? 'gap-0 p-0' : 'gap-0 p-0'}`}>
                 <div className={`flex-1 min-h-0 overflow-hidden flex flex-col bg-[var(--surface-primary)] ${isMobile ? 'rounded-[18px] border border-[var(--border-default)] m-2 mb-0' : ''}`}>
-                  {/* 桌面端：气泡 Tab + Active Agent；移动端省略——顶栏与会话内胶囊已承担入口，避免输入框上方重复一块 */}
-                  {!isMobile ? (
-                    <div className="agent-stage-header app-no-drag">
-                      <div className="agent-stage-header__primary">
-                        <button
-                          type="button"
-                          onClick={() => setShowAgentNameplateDialog(true)}
-                          className="agent-stage-header__toggle"
-                          title="切换会话"
-                        >
-                          <MessageSquare className="w-4 h-4" />
-                        </button>
-                        <nav className="agent-stage-tabs">
-                          {displayedHeaderChatTabs.map((tab) => (
-                            <button
-                              key={tab.id}
-                              type="button"
-                              onClick={() => setChatSubTab(tab.id)}
-                              className={`agent-stage-tab ${chatSubTab === tab.id ? 'agent-stage-tab--active' : ''}`}
-                            >
-                              <span className="agent-stage-tab__icon">{tab.icon}</span>
-                              <span className="agent-stage-tab__label">{tab.label}</span>
-                              {tab.id === 'kb' && preciseMode ? (
-                                <span className="agent-stage-tab__auto-badge">自动激活</span>
-                              ) : null}
-                            </button>
-                          ))}
-                        </nav>
-                      </div>
-                      <div className="agent-stage-header__controls">
-                        <div className="agent-stage-card agent-stage-card--aside" title={`当前 Agent：${activeAgentMeta?.name || 'Agent'}`}>
-                          <button
-                            type="button"
-                            className="agent-stage-card__avatar agent-stage-card__avatar-btn"
-                            onClick={() => {
-                              setChatAgentsPageSection('persona-presets');
-                              setChatSubTab('persona');
-                            }}
-                            title="人设管理：选择全局预设并应用到当前 Agent"
-                          >
-                            {activeAgentMeta?.avatar ? (
-                              <img src={activeAgentMeta.avatar} alt="" className="w-full h-full object-cover" />
-                            ) : (
-                              <Bot className="w-4 h-4" strokeWidth={1.8} />
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            className="agent-stage-card__body"
-                            onClick={() => setChatSubTab('chaya')}
-                            title="返回聊天"
-                          >
-                            <span className="agent-stage-card__copy">
-                              <span className="agent-stage-card__eyebrow">Active Agent</span>
-                              <span className="agent-stage-card__name">{activeAgentMeta?.name || 'Agent'}</span>
-                              <span className="agent-stage-card__meta">
-                                <span>{preciseMode ? 'Harness模式' : '极速模式'}</span>
-                              </span>
-                            </span>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div className="flex-1 min-h-0 overflow-hidden">{renderChatBasePanel()}</div>
+                  <div className="flex-1 min-h-0 overflow-hidden">{renderPanel()}</div>
                 </div>
               </div>
-            ) : showDesktopOverlay ? null : (
+            ) : (
               <div className="flex-1 min-h-0 overflow-hidden">{renderPanel()}</div>
-            )}
-
-            {showDesktopOverlay && (
-              <div className="app-desktop-overlay app-no-drag">
-                <div className="app-desktop-overlay__backdrop" onClick={() => setMainModule('chat')} aria-hidden="true" />
-                <div className="app-desktop-overlay__panel">
-                  <div className="app-desktop-overlay__header">
-                    <nav className="app-bubble-tabs app-bubble-tabs--overlay">
-                      {renderModuleTabs()}
-                    </nav>
-                    <button
-                      type="button"
-                      className="app-desktop-overlay__close"
-                      onClick={() => setMainModule('chat')}
-                      title="关闭并返回聊天"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                  <div className="app-desktop-overlay__body">{renderPanel()}</div>
-                </div>
-              </div>
             )}
             </div>
           </main>
@@ -1475,87 +1343,6 @@ const App: React.FC = () => {
             {settingsSubTab === 'llm' && <LLMConfigPanel />}
             {settingsSubTab === 'agent-status' && <SettingsPanel settings={settings as any} onUpdateSettings={updateSettings as any} section="agent-status" />}
             {settingsSubTab === 'membership' && <SettingsPanel settings={settings as any} onUpdateSettings={updateSettings as any} section="membership" />}
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showMobilePersonaDialog} onOpenChange={setShowMobilePersonaDialog}>
-        <DialogContent className="max-w-[min(100vw-20px,760px)] h-[min(88vh,820px)] p-0 overflow-hidden">
-          <DialogHeader className="px-4 pt-4 pb-3 border-b border-[var(--border-default)]">
-            <DialogTitle>人格管理</DialogTitle>
-            <DialogDescription>移动端通过对话框管理全局人格与音色，并把基本设置融合到 Agent 头像入口。</DialogDescription>
-          </DialogHeader>
-          <div className="mobile-sheet-tabs">
-            <button
-              type="button"
-              onClick={() => setChatSubTab('persona')}
-              className={`mobile-sheet-tab ${chatSubTab === 'persona' ? 'mobile-sheet-tab--active' : ''}`}
-            >
-              基本设置
-            </button>
-            {personaTabs.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => {
-                  setChatSubTab('chaya');
-                  setPersonaSubTab(tab.id);
-                }}
-                className={`mobile-sheet-tab ${chatSubTab !== 'persona' && personaSubTab === tab.id ? 'mobile-sheet-tab--active' : ''}`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          <div className="mobile-sheet-body">
-            {chatSubTab === 'persona' ? (
-              <AgentsPage sessionId={activeAgentSessionId} section="chaya-config" />
-            ) : personaSubTab === 'voice' ? (
-              <AgentsPage sessionId={activeAgentSessionId} section="voice-presets" />
-            ) : (
-              <AgentsPage sessionId={activeAgentSessionId} section="persona-presets" />
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showMobileHarnessDialog} onOpenChange={setShowMobileHarnessDialog}>
-        <DialogContent className="max-w-[min(100vw-20px,760px)] h-[min(88vh,820px)] p-0 overflow-hidden">
-          <DialogHeader className="px-4 pt-4 pb-3 border-b border-[var(--border-default)]">
-            <DialogTitle>Harness 能力</DialogTitle>
-            <DialogDescription>Harness模式开启后自动激活的能力集合。移动端仅查看，不支持编辑。</DialogDescription>
-          </DialogHeader>
-          <div className="mobile-sheet-body mobile-sheet-body--padded overflow-y-auto">
-            <section className="mobile-capability-poster-grid">
-              {mobilePrecisePortalTabs.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`mobile-capability-poster ${
-                    (item.id === 'kb' && chatSubTab === 'kb') ||
-                    (item.id !== 'kb' && mainModule === 'harness' && harnessSubTab === item.id)
-                      ? 'mobile-capability-poster--active'
-                      : ''
-                  }`}
-                  onClick={() => {
-                    setShowMobileHarnessDialog(false);
-                    if (item.id === 'kb') {
-                      setMainModule('chat');
-                      setChatSubTab('kb');
-                    } else {
-                      setMainModule('harness');
-                      setHarnessSubTab(item.id);
-                    }
-                  }}
-                >
-                  <span className="mobile-capability-poster__glow" aria-hidden />
-                  <span className="mobile-capability-poster__icon">{item.icon}</span>
-                  <span className="mobile-capability-poster__title">{item.title}</span>
-                  <span className="mobile-capability-poster__desc">{item.desc}</span>
-                  <span className="mobile-capability-poster__tag mobile-capability-poster__tag--auto">自动激活</span>
-                </button>
-              ))}
-            </section>
           </div>
         </DialogContent>
       </Dialog>
@@ -1776,15 +1563,16 @@ const App: React.FC = () => {
                       type="button"
                       className="membership-mobile-portal-action"
                       onClick={() => {
-                        setPersonaSubTab('presets');
                         setShowUserProfile(false);
-                        setShowMobilePersonaDialog(true);
+                        setMainModule('chat');
+                        setChatSubTab('persona');
+                        setChatAgentsPageSection('persona-presets');
                       }}
                     >
                       <span className="membership-mobile-portal-action__icon"><Sparkles size={14} strokeWidth={1.9} /></span>
                       <span className="membership-mobile-portal-action__copy">
                         <span className="membership-mobile-portal-action__title">人格管理</span>
-                        <span className="membership-mobile-portal-action__desc">移动端改为从用户页进入，不再占用底部导航</span>
+                        <span className="membership-mobile-portal-action__desc">进入聊天内嵌的人设/音色维护页</span>
                       </span>
                     </button>
                   </div>

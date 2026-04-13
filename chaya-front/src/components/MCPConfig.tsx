@@ -156,7 +156,6 @@ const MCPConfig: React.FC<MCPConfigProps> = () => {
   // 新增：UI 状态
   const [selectedServerForDetail, setSelectedServerForDetail] = useState<MCPServerConfig | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
-  const [showToolsInDetail, setShowToolsInDetail] = useState(false);
 
   // MCP OAuth 二维码弹窗：授权 URL 生成后展示二维码，用户可扫码或在浏览器中打开
   const [oauthQrDialogOpen, setOauthQrDialogOpen] = useState(false);
@@ -979,7 +978,6 @@ const MCPConfig: React.FC<MCPConfigProps> = () => {
   const handleViewDetail = (server: MCPServerConfig) => {
     setSelectedServerForDetail(server);
     setShowDetailModal(true);
-    setShowToolsInDetail(false);
   };
 
   const cancelEdit = () => {
@@ -1327,7 +1325,6 @@ const MCPConfig: React.FC<MCPConfigProps> = () => {
                     size="sm"
                     className="border-0 bg-[var(--color-accent)] text-[var(--text-on-accent)] hover:bg-[var(--color-accent-hover)]"
                     onClick={() => {
-                      setShowToolsInDetail(true);
                       void handleFetchTools(selectedServerForDetail);
                     }}
                   >
@@ -1337,8 +1334,8 @@ const MCPConfig: React.FC<MCPConfigProps> = () => {
                 </div>
               </div>
 
-              {/* 右侧：工具列表 (明信片背面/详情页) */}
-              <div className={`mcp-detail-right flex w-full flex-col border-t border-[var(--border-default)] bg-[var(--surface-secondary)] transition-all duration-500 md:w-[380px] md:border-l md:border-t-0 ${showToolsInDetail ? 'translate-x-0 opacity-100' : 'translate-y-3 opacity-0 md:translate-x-full md:translate-y-0'}`}>
+               {/* 右侧：工具列表 (明信片背面/详情页) */}
+               <div className="mcp-detail-right flex w-full flex-col border-t border-[var(--border-default)] bg-[var(--surface-secondary)] md:w-[380px] md:border-l md:border-t-0">
                 <div className="mcp-tools-header flex items-center justify-between border-b border-[var(--border-default)] bg-[var(--surface-primary)] p-4 sm:p-6">
                   <h3 className="mcp-tools-header-title flex items-center gap-2 font-bold text-[var(--text-primary)]">
                     <Wrench className="mcp-tools-header-icon h-4 w-4 text-[var(--color-accent)]" />

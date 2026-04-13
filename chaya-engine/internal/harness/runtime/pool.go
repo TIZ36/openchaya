@@ -39,6 +39,22 @@ func NewActorPool(hub *gateway.Hub, registry *provider.Registry, db *gorm.DB, or
 
 // GetOrCreate returns the PrimaryAgent's mailbox for a user, creating the full
 // Supervisor + PrimaryAgent stack if needed.
+// PrimaryAgentIDForUser returns the primary agent row id for the user (for WS UX / logs).
+func PrimaryAgentIDForUser(db *gorm.DB, userID string) string {
+	if db == nil || userID == "" {
+		return ""
+	}
+	var id string
+	if err := db.Table("agents").
+		Where("user_id = ? AND is_primary = true", userID).
+		Select("id").
+		Limit(1).
+		Scan(&id).Error; err != nil || id == "" {
+		return ""
+	}
+	return id
+}
+
 func (p *ActorPool) GetOrCreate(userID, convID string) (*PrimaryActor, error) {
 	p.mu.RLock()
 	if sv, ok := p.supervisors[userID]; ok {

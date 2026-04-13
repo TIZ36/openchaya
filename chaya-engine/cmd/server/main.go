@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -121,12 +122,38 @@ func main() {
 
 			hub.Subscribe(client.ID, payload.ConvID) // topic = convid
 
+			// 首包提示：SendToUser 前（含首次拉起 Supervisor/Primary）可能阻塞数秒，先推 execution_log 让前端有反馈。
+			if aid := runtime.PrimaryAgentIDForUser(db, client.UserID); aid != "" {
+				ts := time.Now().UnixMilli()
+				hub.Publish(payload.ConvID, map[string]any{
+					"type":       "execution_log",
+					"id":         fmt.Sprintf("gw-preamble-%d", ts),
+					"log_type":   "step",
+					"message":    "已收到消息，正在接入智能体（首次连接可能需要几秒）…",
+					"timestamp":  ts,
+					"agent_id":   aid,
+					"agent_name": "Chaya",
+				})
+			}
+
 			env := envelope.Chat(client.UserID, payload.ConvID, payload.Content)
 			if len(payload.Ext) > 0 {
 				env.WithData(payload.Ext)
 			}
 			if err := actorPool.SendToUser(client.UserID, env); err != nil {
 				slog.Error("send to user", "err", err)
+				if aid := runtime.PrimaryAgentIDForUser(db, client.UserID); aid != "" {
+					ts := time.Now().UnixMilli()
+					hub.Publish(payload.ConvID, map[string]any{
+						"type":       "execution_log",
+						"id":         fmt.Sprintf("gw-err-%d", ts),
+						"log_type":   "error",
+						"message":    "消息未能进入处理队列：" + err.Error(),
+						"timestamp":  ts,
+						"agent_id":   aid,
+						"agent_name": "Chaya",
+					})
+				}
 			}
 		}
 	}

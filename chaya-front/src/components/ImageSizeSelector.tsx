@@ -34,6 +34,7 @@ const DEFAULT_SIZE = 1024;
 export const ImageSizeSelector: React.FC<ImageSizeSelectorProps> = ({ value, onChange, disabled, hideTitle }) => {
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const [density, setDensity] = React.useState<'compact' | 'balanced' | 'comfy'>('balanced');
+  const [isNarrow, setIsNarrow] = React.useState(false);
 
   React.useEffect(() => {
     const pickDensity = () => {
@@ -42,15 +43,17 @@ export const ImageSizeSelector: React.FC<ImageSizeSelectorProps> = ({ value, onC
 
       const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
       const viewportWidth = window.innerWidth;
+      const rootWidth = root.clientWidth;
       const leftCol = root.closest('.media-create-left-col') as HTMLElement | null;
       const leftColHeight = leftCol?.clientHeight ?? 0;
 
-      const isNarrow = viewportWidth < 900;
+      const narrow = viewportWidth < 900 || (!!rootWidth && rootWidth < 340);
       const isShort = viewportHeight < 760 || (!!leftColHeight && leftColHeight < 620);
-      const isRoomy = !isNarrow && (viewportHeight > 920 || leftColHeight > 760);
+      const isRoomy = !narrow && (viewportHeight > 920 || leftColHeight > 760);
 
       const nextDensity = isShort ? 'compact' : isRoomy ? 'comfy' : 'balanced';
       setDensity((prev) => (prev === nextDensity ? prev : nextDensity));
+      setIsNarrow((prev) => (prev === narrow ? prev : narrow));
     };
 
     pickDensity();
@@ -85,7 +88,7 @@ export const ImageSizeSelector: React.FC<ImageSizeSelectorProps> = ({ value, onC
   };
 
   return (
-    <div ref={rootRef} className={`image-size-block image-size-selector image-size-selector--${density}`}>
+    <div ref={rootRef} className={`image-size-block image-size-selector image-size-selector--${density} ${isNarrow ? 'image-size-selector--stacked' : ''}`}>
       {!hideTitle && (
         <div className="flex items-center gap-2 mb-2">
           <Maximize2 className="w-5 h-5 text-[var(--color-accent)]" />

@@ -173,6 +173,9 @@ function normalizeGeneratedImageMedia(media?: unknown) {
     inlineDataSnake?.data,
   );
 
+  const fileData = typeof entry.fileData === 'object' && entry.fileData ? (entry.fileData as Record<string, unknown>) : undefined;
+  const fileDataSnake = typeof entry.file_data === 'object' && entry.file_data ? (entry.file_data as Record<string, unknown>) : undefined;
+
   const candidateUrl = pickFirstString(
     entry.url,
     entry.image_url,
@@ -181,6 +184,10 @@ function normalizeGeneratedImageMedia(media?: unknown) {
     entry.uri,
     entry.output,
     entry.download_url,
+    fileData?.fileUri,
+    fileData?.file_uri,
+    fileDataSnake?.fileUri,
+    fileDataSnake?.file_uri,
   );
 
   const parsedData = candidateData?.startsWith('data:') ? parseDataUrl(candidateData) : undefined;
@@ -1536,6 +1543,14 @@ const MediaCreatorPage: React.FC<MediaCreatorPageProps> = ({ embedded = false, m
     const mainSrc = safeImgSrc(main?.url);
     const mainPending = main?.status === 'pending';
     const mainError = main?.status === 'error';
+    const sourceLabel = main?.source === 'upload'
+      ? '上传'
+      : main?.source === 'paste'
+        ? '粘贴'
+        : main?.source === 'generated'
+          ? '生成'
+          : '会话';
+    const createdAtLabel = main?.created_at ? new Date(main.created_at).toLocaleString() : '刚刚';
     const dayMap = new Map<string, number[]>();
     createdMedia.forEach((item, index) => {
       const label = getDateLabel(item.created_at);
@@ -1552,50 +1567,63 @@ const MediaCreatorPage: React.FC<MediaCreatorPageProps> = ({ embedded = false, m
           <span className={`text-xs ${textMuted}`}>{createdMedia.length} 张</span>
         </div>
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden gap-1.5">
-          <div className="media-create-gallery-main group/main relative min-h-0 overflow-hidden rounded-xl bg-[var(--surface-inverse)]">
-            {mainPending ? (
-              <div className="chatu-generating-spectrum-strong w-full h-full flex flex-col items-center justify-center gap-2 text-[var(--text-muted)]">
-                <span className="relative z-10 text-sm font-medium text-white/90">生成中...</span>
-              </div>
-            ) : mainError ? (
-              <div className="w-full h-full flex flex-col items-center justify-center gap-1 text-[var(--color-secondary)] px-3">
-                <X className="w-8 h-8" />
-                <span className="text-xs text-center">{main?.error_message || '生成失败'}</span>
-              </div>
-            ) : mainIsVideo ? (
-              <button type="button" className="w-full h-full flex items-center justify-center" onClick={() => main && window.open(main.url, '_blank')}>
-                <Film className="w-12 h-12 text-[var(--color-secondary)]" />
-              </button>
-            ) : mainSrc ? (
-              <img src={mainSrc} alt="当前" className="w-full h-full object-contain cursor-pointer" onClick={() => main && setLightboxUrl(resolveMediaSrc(main.url ?? ''))} />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-[var(--text-muted)]">
-                <ImageIcon className="w-10 h-10" />
-              </div>
-            )}
-            <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover/main:opacity-100 transition-opacity z-10">
-              <button type="button" className="rounded-lg bg-[var(--surface-overlay)] p-1.5 text-[var(--text-primary)] transition-colors hover:bg-[var(--color-secondary)]/18 hover:text-[var(--color-secondary)]" onClick={() => main && removeCreatedItem(main, galleryIndex)} title="删除">
-                <Trash2 className="w-4 h-4" />
-              </button>
-              {!mainPending && !mainError && !mainIsVideo && main && mainSrc && (
-                <>
-                  <button type="button" className="rounded-lg bg-[var(--surface-overlay)] p-1.5 text-[var(--text-primary)] transition-colors hover:bg-[var(--color-accent)]/18 hover:text-[var(--color-accent)]" onClick={() => main && pickRefImage({ url: main.url ?? '', mimeType: main.mimeType || 'image/png', rawB64: main.rawB64, source: 'generated' })} title="二创（追加为参考图）">
-                    <Sparkles className="w-4 h-4" />
-                  </button>
-                  <button type="button" className="rounded-lg bg-[var(--surface-overlay)] p-1.5 text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-inverse)] hover:text-[var(--text-on-accent)]" onClick={() => dl(mainSrc, 'gen.png')} title="保存到本地">
-                    <Download className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-lg bg-[var(--surface-overlay)] p-1.5 text-[var(--text-primary)] transition-colors hover:bg-[var(--color-accent)]/18 hover:text-[var(--color-accent)]"
-                    onClick={() => uploadToGoogleDrive(main)}
-                    title="保存到 Google Drive"
-                  >
-                    {driveUploadingOutputId === main.output_id ? <Loader2 className="w-4 h-4 animate-spin" /> : <GoogleDriveIcon className="w-4 h-4" />}
-                  </button>
-                </>
+          <div className="media-create-gallery-top min-h-0">
+            <div className="media-create-gallery-main group/main relative min-h-0 overflow-hidden rounded-xl bg-[var(--surface-inverse)]">
+              {mainPending ? (
+                <div className="chatu-generating-spectrum-strong w-full h-full flex flex-col items-center justify-center gap-2 text-[var(--text-muted)]">
+                  <span className="relative z-10 text-sm font-medium text-white/90">生成中...</span>
+                </div>
+              ) : mainError ? (
+                <div className="w-full h-full flex flex-col items-center justify-center gap-1 text-[var(--color-secondary)] px-3">
+                  <X className="w-8 h-8" />
+                  <span className="text-xs text-center">{main?.error_message || '生成失败'}</span>
+                </div>
+              ) : mainIsVideo ? (
+                <button type="button" className="w-full h-full flex items-center justify-center" onClick={() => main && window.open(main.url, '_blank')}>
+                  <Film className="w-12 h-12 text-[var(--color-secondary)]" />
+                </button>
+              ) : mainSrc ? (
+                <img src={mainSrc} alt="当前" className="w-full h-full object-contain cursor-pointer" onClick={() => main && setLightboxUrl(resolveMediaSrc(main.url ?? ''))} />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-[var(--text-muted)]">
+                  <ImageIcon className="w-10 h-10" />
+                </div>
               )}
+              <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover/main:opacity-100 transition-opacity z-10">
+                <button type="button" className="rounded-lg bg-[var(--surface-overlay)] p-1.5 text-[var(--text-primary)] transition-colors hover:bg-[var(--color-secondary)]/18 hover:text-[var(--color-secondary)]" onClick={() => main && removeCreatedItem(main, galleryIndex)} title="删除">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
             </div>
+            <aside className="media-create-gallery-meta">
+              <div className="media-create-gallery-meta__item">
+                <span>来源</span>
+                <strong>{sourceLabel}</strong>
+              </div>
+              <div className="media-create-gallery-meta__item">
+                <span>类型</span>
+                <strong>{mainIsVideo ? '视频' : '图片'}</strong>
+              </div>
+              <div className="media-create-gallery-meta__item">
+                <span>时间</span>
+                <strong title={createdAtLabel}>{createdAtLabel}</strong>
+              </div>
+              <div className="media-create-gallery-meta__actions">
+                {!mainPending && !mainError && !mainIsVideo && main && mainSrc ? (
+                  <>
+                    <button type="button" className="media-create-gallery-meta__btn" onClick={() => dl(mainSrc, 'gen.png')}>
+                      <Download className="w-3.5 h-3.5" /> 保存
+                    </button>
+                    <button type="button" className="media-create-gallery-meta__btn" onClick={() => pickRefImage({ url: main.url ?? '', mimeType: main.mimeType || 'image/png', rawB64: main.rawB64, source: 'generated' })}>
+                      <Sparkles className="w-3.5 h-3.5" /> 二创
+                    </button>
+                    <button type="button" className="media-create-gallery-meta__btn" onClick={() => uploadToGoogleDrive(main)}>
+                      {driveUploadingOutputId === main.output_id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <GoogleDriveIcon className="w-3.5 h-3.5" />} Drive
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            </aside>
           </div>
           <div className="media-create-gallery-thumb-strip no-scrollbar flex flex-col flex-1 min-h-0 overflow-hidden">
             <div className="flex flex-col gap-4 media-create-gallery-by-day flex-1 min-h-0 no-scrollbar">
@@ -1659,7 +1687,7 @@ const MediaCreatorPage: React.FC<MediaCreatorPageProps> = ({ embedded = false, m
 
   const mainContent = (
     <>
-      <div className={`chatu-page chatu-page-one-screen chatu-compact h-full w-full flex flex-col min-h-0 px-1 py-1 sm:px-2 md:px-3 lg:px-4 max-w-none mx-auto box-border ${isMobile ? 'chatu-page--mobile' : ''}`}>
+      <div className={`chatu-page chatu-page-one-screen chatu-compact media-workbench-v2 h-full w-full flex flex-col min-h-0 px-2 py-2 sm:px-3 md:px-4 lg:px-6 max-w-none mx-auto box-border ${isMobile ? 'chatu-page--mobile' : ''}`}>
         <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
         {/* ════════ 创作区 ════════ */}
         <Card variant="persona" size="default" className="media-create-card flex-1 min-h-0 flex flex-col overflow-hidden">
@@ -1698,9 +1726,9 @@ const MediaCreatorPage: React.FC<MediaCreatorPageProps> = ({ embedded = false, m
             {/* ── 图像 Tab — 上传区 + 描述 + 选项 + 结果；移动端图库用底部抽屉 ── */}
             {createTab === 'image' && (
               <>
-              <div className="media-create-layout flex-1 min-h-0 overflow-hidden">
+              <div className="media-create-layout media-workbench media-workbench--image flex-1 min-h-0 overflow-hidden">
                 {/* 左栏：参考图+描述 合体 → 自定义提示词 → 图片尺寸；移动端底部留空避免被 FAB 遮挡 */}
-                <div className={`media-create-left-col flex flex-col gap-2 min-w-0 min-h-0 overflow-y-auto no-scrollbar ${isMobile ? 'chatu-left-col-with-fab chatu-left-col--mobile' : ''}`}>
+                <div className={`media-create-left-col media-workbench__director flex flex-col gap-2 min-w-0 min-h-0 overflow-y-auto no-scrollbar ${isMobile ? 'chatu-left-col-with-fab chatu-left-col--mobile' : ''}`}>
                   {isMobile ? (
                     <>
                       <div className="prompt-and-ref-card rounded-xl overflow-visible flex flex-col relative">
@@ -2239,7 +2267,7 @@ const MediaCreatorPage: React.FC<MediaCreatorPageProps> = ({ embedded = false, m
                   </div>
 
                 {/* 右栏：图库 — 桌面端默认直接显示完整图集，移动端用底部抽屉 */}
-                <div className="media-create-results-card media-create-gallery min-w-0 min-h-0 flex flex-col overflow-hidden hidden md:flex">
+                <div className="media-create-results-card media-create-gallery media-workbench__stage min-w-0 min-h-0 flex flex-col overflow-hidden hidden md:flex">
                   {renderGalleryBody()}
                 </div>
               </div>
@@ -2305,8 +2333,8 @@ const MediaCreatorPage: React.FC<MediaCreatorPageProps> = ({ embedded = false, m
             {/* ── 视频 Tab：与图像 Tab 相同布局；移动端视频任务用底部抽屉 ── */}
             {createTab === 'video' && (
               <>
-              <div className="media-create-layout flex-1 min-h-0 overflow-hidden">
-                <div className={`media-create-left-col flex flex-col gap-2 min-w-0 min-h-0 overflow-y-auto no-scrollbar ${isMobile ? 'chatu-left-col-with-fab chatu-left-col--mobile' : ''}`}>
+              <div className="media-create-layout media-workbench media-workbench--video flex-1 min-h-0 overflow-hidden">
+                <div className={`media-create-left-col media-workbench__director flex flex-col gap-2 min-w-0 min-h-0 overflow-y-auto no-scrollbar ${isMobile ? 'chatu-left-col-with-fab chatu-left-col--mobile' : ''}`}>
                   {providerLoading ? (
                     <div className={`text-sm ${textMuted} ${panelClass} p-3 rounded-xl`}><Loader2 className="w-4 h-4 animate-spin inline mr-2" /> 加载模型...</div>
                   ) : currentConfigs.length === 0 ? (
@@ -2500,7 +2528,7 @@ const MediaCreatorPage: React.FC<MediaCreatorPageProps> = ({ embedded = false, m
                   )}
                 </div>
                 {/* 右栏：视频任务与输出 — 桌面端 md+ 显示，移动端用底部抽屉 */}
-                <div className="media-create-results-card min-w-0 min-h-0 flex flex-col overflow-hidden bg-[var(--surface-secondary)] rounded-xl hidden md:flex">
+                <div className="media-create-results-card media-workbench__stage media-workbench__stage--video min-w-0 min-h-0 flex flex-col overflow-hidden bg-[var(--surface-secondary)] rounded-xl hidden md:flex">
                   <h3 className="media-create-results-title"><Film className="w-4 h-4" /> 视频任务</h3>
                   {!videoTaskId && !videoError ? (
                     <div className="media-create-empty-state flex-1 flex flex-col items-center justify-center py-8 text-[var(--text-muted)]">
