@@ -173,7 +173,7 @@ func main() {
 		r.Group(func(r chi.Router) {
 			r.Use(mw.JWTAuth(cfg.Auth.JWTSecret))
 			api.RegisterAdminRoutes(r, db)
-			api.RegisterConversationRoutes(r, db)
+			api.RegisterConversationRoutes(r, db, providerRegistry)
 			api.RegisterAgentRoutes(r, db)
 			api.RegisterAgentHarnessRoutes(r, db, mcpReg)
 			api.RegisterLLMConfigRoutes(r, db, providerRegistry)

@@ -5,6 +5,8 @@
 
 import { getBackendUrl } from '../utils/backendUrl';
 
+const TOKEN_KEY = 'chaya_token';
+
 // 使用统一的后端 URL 获取函数
 // 注意：这个服务原本是用于 Golang 微服务的，但现在应该使用 Flask 后端（3002端口）
 // 如果确实需要不同的后端，可以通过环境变量 VITE_API_URL 覆盖
@@ -73,9 +75,11 @@ export class ApiClient {
     options: RequestInit = {}
   ): Promise<T> {
     const url = `${this.baseURL}${endpoint}`;
+    const token = typeof window !== 'undefined' ? localStorage.getItem(TOKEN_KEY) : null;
     
     const defaultHeaders: HeadersInit = {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     };
 
     const mergedHeaders: HeadersInit = {
@@ -343,4 +347,3 @@ export interface FileInfo {
 
 // 导出单例
 export const apiClient = new ApiClient();
-

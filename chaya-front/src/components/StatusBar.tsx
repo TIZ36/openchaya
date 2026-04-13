@@ -8,6 +8,7 @@ import { Key, MessageSquare, RefreshCw, Users } from 'lucide-react';
 import { getBackendUrl } from '../utils/backendUrl';
 import { Button } from '@/components/ui/Button';
 import ActorPoolDialog from './ActorPoolDialog';
+import { api } from '../utils/apiClient';
 
 interface LLMKeyStatus {
   total: number;
@@ -50,51 +51,43 @@ const StatusBar: React.FC = () => {
     try {
       // 检查LLM配置和Key状态
       try {
-        const llmRes = await fetch(`${backendUrl}/api/llm/configs`);
-        if (llmRes.ok) {
-          const llmData = await llmRes.json();
-          const configs = Array.isArray(llmData) ? llmData : (llmData.configs || []);
-          const enabled = configs.filter((c: any) => c.enabled);
-          const withKey = enabled.filter((c: any) => {
-            if (c.provider === 'ollama') return true;
-            if (c.has_api_key !== undefined) return c.has_api_key === true;
-            return !!c.api_key;
-          });
-          const withoutKey = enabled.filter((c: any) => {
-            if (c.provider === 'ollama') return false;
-            if (c.has_api_key !== undefined) return c.has_api_key === false;
-            return !c.api_key;
-          });
+        const configs = await api.get<any[]>('/api/llm/configs');
+        const enabled = configs.filter((c: any) => c.enabled);
+        const withKey = enabled.filter((c: any) => {
+          if (c.provider === 'ollama') return true;
+          if (c.has_api_key !== undefined) return c.has_api_key === true;
+          return !!c.api_key;
+        });
+        const withoutKey = enabled.filter((c: any) => {
+          if (c.provider === 'ollama') return false;
+          if (c.has_api_key !== undefined) return c.has_api_key === false;
+          return !c.api_key;
+        });
 
-          setLlmKeyStatus({
-            total: configs.length,
-            enabled: enabled.length,
-            withKey: withKey.length,
-            withoutKey: withoutKey.length,
-          });
-        }
+        setLlmKeyStatus({
+          total: configs.length,
+          enabled: enabled.length,
+          withKey: withKey.length,
+          withoutKey: withoutKey.length,
+        });
       } catch (error) {
         console.error('[StatusBar] Failed to fetch LLM configs:', error);
       }
 
       // 检查Topic状态
       try {
-        const topicRes = await fetch(`${backendUrl}/api/sessions`);
-        if (topicRes.ok) {
-          const topicData = await topicRes.json();
-          const topics = Array.isArray(topicData) ? topicData : (topicData.sessions || topicData.topics || []);
-          const activeTopics = topics.filter((t: any) => {
-            if (!t.last_message_at) return false;
-            const lastMessageTime = new Date(t.last_message_at).getTime();
-            return Date.now() - lastMessageTime < 24 * 60 * 60 * 1000;
-          });
+        const topics = await api.get<any[]>('/api/sessions');
+        const activeTopics = topics.filter((t: any) => {
+          if (!t.last_message_at) return false;
+          const lastMessageTime = new Date(t.last_message_at).getTime();
+          return Date.now() - lastMessageTime < 24 * 60 * 60 * 1000;
+        });
 
-          setTopicStatus({
-            total: topics.length,
-            active: activeTopics.length,
-            participants: 0,
-          });
-        }
+        setTopicStatus({
+          total: topics.length,
+          active: activeTopics.length,
+          participants: 0,
+        });
       } catch (error) {
         console.error('[StatusBar] Failed to fetch topics:', error);
       }

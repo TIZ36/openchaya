@@ -2,9 +2,7 @@
  * 角色生成器自定义维度选项 API
  */
 
-import { getBackendUrl } from '../utils/backendUrl';
-
-const API_BASE = `${getBackendUrl()}/api`;
+import { api } from '../utils/apiClient';
 
 export interface DimensionOption {
   option_id: string;
@@ -23,14 +21,9 @@ export async function getDimensionOptions(
   roleType: 'career' | 'game'
 ): Promise<string[]> {
   try {
-    const response = await fetch(
-      `${API_BASE}/role-generator/dimension-options?dimension_type=${encodeURIComponent(dimensionType)}&role_type=${encodeURIComponent(roleType)}`
+    const data = await api.get<{ options?: string[] }>(
+      `/api/role-generator/dimension-options?dimension_type=${encodeURIComponent(dimensionType)}&role_type=${encodeURIComponent(roleType)}`
     );
-    if (!response.ok) {
-      console.warn(`Failed to fetch dimension options: ${response.statusText}`);
-      return [];
-    }
-    const data = await response.json();
     return data.options || [];
   } catch (error) {
     console.warn('Error fetching dimension options:', error);
@@ -47,24 +40,14 @@ export async function saveDimensionOption(
   optionValue: string
 ): Promise<{ success: boolean; option_id?: string; option_value?: string; error?: string }> {
   try {
-    const response = await fetch(`${API_BASE}/role-generator/dimension-options`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
+    return await api.post<{ success: boolean; option_id?: string; option_value?: string; error?: string }>(
+      '/api/role-generator/dimension-options',
+      {
         dimension_type: dimensionType,
         role_type: roleType,
         option_value: optionValue,
-      }),
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || `Failed to save dimension option: ${response.statusText}`);
-    }
-    
-    return await response.json();
+      }
+    );
   } catch (error) {
     console.error('Error saving dimension option:', error);
     return {
@@ -73,4 +56,3 @@ export async function saveDimensionOption(
     };
   }
 }
-

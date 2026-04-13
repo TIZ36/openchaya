@@ -409,6 +409,7 @@ const MediaCreatorPage: React.FC<MediaCreatorPageProps> = ({ embedded = false, m
   const [packsHydrated, setPacksHydrated] = useState(false);
   const [showPackImportDialog, setShowPackImportDialog] = useState(false);
   const [packImportMode, setPackImportMode] = useState<'merge' | 'replace' | 'pinned_only'>('merge');
+  const [showAllPromptPacks, setShowAllPromptPacks] = useState(false);
   const [showAddPrompt, setShowAddPrompt] = useState(false);
   const [newPromptLabel, setNewPromptLabel] = useState('');
   const [newPromptText, setNewPromptText] = useState('');
@@ -738,6 +739,13 @@ const MediaCreatorPage: React.FC<MediaCreatorPageProps> = ({ embedded = false, m
       return b.createdAt - a.createdAt;
     });
   }, [imagePromptPacks]);
+
+  const visibleImagePromptPacks = useMemo(() => {
+    if (showAllPromptPacks) return displayedImagePromptPacks;
+    return displayedImagePromptPacks.slice(0, 6);
+  }, [displayedImagePromptPacks, showAllPromptPacks]);
+
+  const pinnedPromptPackCount = useMemo(() => displayedImagePromptPacks.filter((pack) => pack.pinned).length, [displayedImagePromptPacks]);
 
   const renamePromptPack = useCallback((packId: string) => {
     const target = imagePromptPacks.find((p) => p.id === packId);
@@ -1543,14 +1551,6 @@ const MediaCreatorPage: React.FC<MediaCreatorPageProps> = ({ embedded = false, m
     const mainSrc = safeImgSrc(main?.url);
     const mainPending = main?.status === 'pending';
     const mainError = main?.status === 'error';
-    const sourceLabel = main?.source === 'upload'
-      ? '上传'
-      : main?.source === 'paste'
-        ? '粘贴'
-        : main?.source === 'generated'
-          ? '生成'
-          : '会话';
-    const createdAtLabel = main?.created_at ? new Date(main.created_at).toLocaleString() : '刚刚';
     const dayMap = new Map<string, number[]>();
     createdMedia.forEach((item, index) => {
       const label = getDateLabel(item.created_at);
@@ -1595,36 +1595,20 @@ const MediaCreatorPage: React.FC<MediaCreatorPageProps> = ({ embedded = false, m
                 </button>
               </div>
             </div>
-            <aside className="media-create-gallery-meta">
-              <div className="media-create-gallery-meta__item">
-                <span>来源</span>
-                <strong>{sourceLabel}</strong>
-              </div>
-              <div className="media-create-gallery-meta__item">
-                <span>类型</span>
-                <strong>{mainIsVideo ? '视频' : '图片'}</strong>
-              </div>
-              <div className="media-create-gallery-meta__item">
-                <span>时间</span>
-                <strong title={createdAtLabel}>{createdAtLabel}</strong>
-              </div>
-              <div className="media-create-gallery-meta__actions">
-                {!mainPending && !mainError && !mainIsVideo && main && mainSrc ? (
-                  <>
-                    <button type="button" className="media-create-gallery-meta__btn" onClick={() => dl(mainSrc, 'gen.png')}>
-                      <Download className="w-3.5 h-3.5" /> 保存
-                    </button>
-                    <button type="button" className="media-create-gallery-meta__btn" onClick={() => pickRefImage({ url: main.url ?? '', mimeType: main.mimeType || 'image/png', rawB64: main.rawB64, source: 'generated' })}>
-                      <Sparkles className="w-3.5 h-3.5" /> 二创
-                    </button>
-                    <button type="button" className="media-create-gallery-meta__btn" onClick={() => uploadToGoogleDrive(main)}>
-                      {driveUploadingOutputId === main.output_id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <GoogleDriveIcon className="w-3.5 h-3.5" />} Drive
-                    </button>
-                  </>
-                ) : null}
-              </div>
-            </aside>
           </div>
+          {!mainPending && !mainError && !mainIsVideo && main && mainSrc ? (
+            <div className="media-create-gallery-toolbar flex items-center gap-2 overflow-x-auto no-scrollbar">
+              <button type="button" className="media-create-gallery-toolbar__btn" onClick={() => dl(mainSrc, 'gen.png')}>
+                <Download className="w-3.5 h-3.5" /> 保存
+              </button>
+              <button type="button" className="media-create-gallery-toolbar__btn" onClick={() => pickRefImage({ url: main.url ?? '', mimeType: main.mimeType || 'image/png', rawB64: main.rawB64, source: 'generated' })}>
+                <Sparkles className="w-3.5 h-3.5" /> 二创
+              </button>
+              <button type="button" className="media-create-gallery-toolbar__btn" onClick={() => uploadToGoogleDrive(main)}>
+                {driveUploadingOutputId === main.output_id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <GoogleDriveIcon className="w-3.5 h-3.5" />} Drive
+              </button>
+            </div>
+          ) : null}
           <div className="media-create-gallery-thumb-strip no-scrollbar flex flex-col flex-1 min-h-0 overflow-hidden">
             <div className="flex flex-col gap-4 media-create-gallery-by-day flex-1 min-h-0 no-scrollbar">
               {dayOrder.map((dayLabel) => {
@@ -1913,13 +1897,13 @@ const MediaCreatorPage: React.FC<MediaCreatorPageProps> = ({ embedded = false, m
                     onDrop={onDrop}
                   >
                     {/* 上方：描述你的画面，文字区全宽；底部：模型+生成按钮栏，不显示文字 */}
-                      <div className={`prompt-and-ref-card__prompt flex-1 min-h-0 flex flex-col p-2 ${isMobile ? 'prompt-and-ref-card__prompt--mobile' : ''}`}>
+                      <div className={`prompt-and-ref-card__prompt ${refImages.length > 0 ? 'prompt-and-ref-card__prompt--with-ref' : ''} flex-1 min-h-0 flex flex-col p-2 ${isMobile ? 'prompt-and-ref-card__prompt--mobile' : ''}`}>
                       <label className="media-create-prompt-label flex items-center gap-1 mb-1 text-xs flex-shrink-0">
                         <Wand2 className="w-3.5 h-3.5 text-[var(--color-accent)]" />
                         描述你的画面
                       </label>
                       {/* 文字输入区：全宽排满 */}
-                      <div className="flex-1 min-h-0 flex flex-col">
+                      <div className="media-create-prompt-editor flex-1 min-h-0 flex flex-col">
                         <textarea
                           placeholder={refImages.length > 0 ? '描述你希望对图片进行的修改或风格变换...' : '描述你想要的画面...'}
                           className={`${inputClass} resize-none rounded-lg min-h-[140px] flex-1 min-w-0 overflow-y-auto !py-1.5 !px-2`}
@@ -1929,18 +1913,20 @@ const MediaCreatorPage: React.FC<MediaCreatorPageProps> = ({ embedded = false, m
                           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleGenerate(); } }}
                         />
                         {imgError && <p className="text-xs text-[var(--color-secondary)] mt-1 flex-shrink-0">{imgError}</p>}
+                      </div>
 
+                      <div className="media-create-prompt-tail flex-shrink-0">
                         {refImages.length > 0 && (
-                          <div className="mt-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-primary)]/70 p-1.5 space-y-1.5">
-                            <div className="flex items-center justify-between gap-2">
-                              <p className={`text-[10px] ${textMuted}`}>参考图定向模板（可选）：为某张图写指定要求，前端会自动拼接到最终提示词</p>
+                          <div className="media-create-ref-directives mt-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-primary)]/70 p-1.5 space-y-1.5">
+                            <div className="media-create-ref-directives__head flex items-center justify-between gap-2">
+                              <p className={`media-create-ref-directives__copy text-[10px] ${textMuted}`}>参考图定向模板（可选）：为某张图写指定要求，前端会自动拼接到最终提示词</p>
                             </div>
                             <div className="space-y-1">
                               {refImages.map((img, idx) => {
                                 const refKey = getRefImageKey(img);
                                 const value = refImagePromptMap[refKey] || '';
                                 return (
-                                  <div key={refKey} className="flex items-center gap-1.5">
+                                  <div key={refKey} className="media-create-ref-directives__row flex items-center gap-1.5">
                                     <span className="inline-flex items-center justify-center w-8 h-7 rounded-md border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 text-[11px] font-semibold text-[var(--color-accent)]">#{idx + 1}</span>
                                     <input
                                       type="text"
@@ -1960,10 +1946,19 @@ const MediaCreatorPage: React.FC<MediaCreatorPageProps> = ({ embedded = false, m
                         )}
 
                         {imagePromptPacks.length > 0 && (
-                          <div className="mt-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-primary)]/65 p-1.5 space-y-1.5">
-                            <div className="flex items-center justify-between gap-2">
-                              <p className={`text-[10px] ${textMuted}`}>原料 Pack（按发出记录自动保留，点击可一键回填）</p>
-                              <div className="flex items-center gap-1">
+                          <div className="media-create-pack-strip mt-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-primary)]/65 p-1.5 space-y-1.5">
+                            <div className="media-create-pack-strip__head flex items-center justify-between gap-2">
+                              <div className="media-create-pack-strip__summary min-w-0">
+                                <p className={`media-create-pack-strip__copy text-[10px] ${textMuted}`}>原料 Pack（按发出记录自动保留，点击可一键回填）</p>
+                                <div className="media-create-pack-strip__meta flex items-center gap-1.5 text-[10px] text-[var(--text-muted)]">
+                                  <span>{displayedImagePromptPacks.length} 条</span>
+                                  {pinnedPromptPackCount > 0 ? <span>置顶 {pinnedPromptPackCount}</span> : null}
+                                  {!showAllPromptPacks && displayedImagePromptPacks.length > visibleImagePromptPacks.length ? (
+                                    <span>显示最近 {visibleImagePromptPacks.length} 条</span>
+                                  ) : null}
+                                </div>
+                              </div>
+                              <div className="media-create-pack-strip__actions flex items-center gap-1">
                                 <button
                                   type="button"
                                   className="text-[10px] px-1.5 py-0.5 rounded border border-[var(--border-default)] text-[var(--text-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)]/45"
@@ -1981,14 +1976,26 @@ const MediaCreatorPage: React.FC<MediaCreatorPageProps> = ({ embedded = false, m
                                 <button
                                   type="button"
                                   className="text-[10px] px-1.5 py-0.5 rounded border border-[var(--border-default)] text-[var(--text-muted)] hover:text-[var(--color-secondary)] hover:border-[var(--color-secondary)]/45"
-                                  onClick={() => setImagePromptPacks([])}
+                                  onClick={() => {
+                                    setImagePromptPacks([]);
+                                    setShowAllPromptPacks(false);
+                                  }}
                                 >
                                   清空
                                 </button>
+                                {displayedImagePromptPacks.length > 6 ? (
+                                  <button
+                                    type="button"
+                                    className={`media-create-pack-strip__toggle text-[10px] px-1.5 py-0.5 rounded border ${showAllPromptPacks ? 'border-[var(--color-accent)]/40 text-[var(--color-accent)] bg-[var(--color-accent)]/8' : 'border-[var(--border-default)] text-[var(--text-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)]/45'}`}
+                                    onClick={() => setShowAllPromptPacks((prev) => !prev)}
+                                  >
+                                    {showAllPromptPacks ? 'History · 收起' : `History · ${displayedImagePromptPacks.length}`}
+                                  </button>
+                                ) : null}
                               </div>
                             </div>
-                            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-                              {displayedImagePromptPacks.map((pack) => (
+                            <div className={`media-create-pack-strip__list ${showAllPromptPacks ? 'is-expanded' : ''} flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5`}>
+                              {visibleImagePromptPacks.map((pack) => (
                                 <div
                                   key={pack.id}
                                   className="flex-shrink-0 rounded-md border border-[var(--border-default)] bg-[var(--surface-secondary)] hover:border-[var(--color-accent)]/55 px-1.5 py-1"
@@ -2071,8 +2078,8 @@ const MediaCreatorPage: React.FC<MediaCreatorPageProps> = ({ embedded = false, m
                         />
                       </div>
                       {/* 底部按钮栏：自定义提示词(左) | 模型+生成(右)，简练笔触 */}
-                        <div className={`flex-shrink-0 flex items-center justify-between gap-2 pt-1 mt-0.5 min-h-[38px] ${isMobile ? 'media-create-actions-row--mobile' : ''}`}>
-                        <div className="flex-1 min-w-0 flex items-center gap-2 overflow-x-auto no-scrollbar">
+                        <div className={`media-create-actions-row ${refImages.length > 0 ? 'media-create-actions-row--with-ref' : ''} flex-shrink-0 flex items-center justify-between gap-2 pt-1 mt-0.5 min-h-[38px] ${isMobile ? 'media-create-actions-row--mobile' : ''}`}>
+                        <div className="media-create-actions-pills flex-1 min-w-0 flex items-center gap-2 overflow-x-auto no-scrollbar">
                           <button
                             type="button"
                             className={`flex-shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-normal transition-all ${showAddPrompt ? 'bg-[var(--color-secondary)]/15 text-[var(--color-secondary)]' : 'bg-transparent text-[var(--color-secondary)] hover:bg-[var(--color-secondary)]/10'}`}

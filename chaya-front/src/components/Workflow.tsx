@@ -20,6 +20,7 @@ import type { PersonaPreset } from '../services/roleApi';
 import { getAgentKB, listKBs, addTextDocument, type KnowledgeBase } from '../services/kbApi';
 import { createSkillPack, saveSkillPack, optimizeSkillPackSummary, getSkillPacks, getSessionSkillPacks, createSopSkillPack, setCurrentSop, getCurrentSop, SkillPack, SessionSkillPack, SkillPackCreationResult, SkillPackProcessInfo } from '../services/skillPackApi';
 import { getBackendUrl } from '../utils/backendUrl';
+import { api } from '../utils/apiClient';
 import { estimate_messages_tokens, get_model_max_tokens, estimate_tokens } from '../services/tokenCounter';
 import AttachmentMenu from './AttachmentMenu';
 import { readMcpAutoUseEnabled } from '../utils/mcpAutoUse';
@@ -418,7 +419,122 @@ const Workflow: React.FC<WorkflowProps> = ({
     },
     [isPersistedMessageId],
   );
-  
+
+  const isExecPlaceholderMessage = useCallback((message: Message | null | undefined) => {
+    return Boolean(message && message.role === 'assistant' && (message.ext as any)?.__exec_placeholder);
+  }, []);
+
+  const isDecisionPlaceholderMessage = useCallback((message: Message | null | undefined) => {
+    return Boolean(message && message.role === 'assistant' && (message.ext as any)?.decision_type === 'silent');
+  }, []);
+
+  const mergeExecutionLogs = useCallback((left?: ExecutionLogEntry[], right?: ExecutionLogEntry[]) => {
+    const merged = [...(left || []), ...(right || [])];
+    const seen = new Set<string>();
+    return merged.filter((entry) => {
+      const key = String(entry?.id || `${entry?.timestamp || 0}-${entry?.message || ''}`);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(-200);
+  }, []);
+
+  const mergeAssistantMessages = useCallback((older: Message, newer: Message): Message => {
+    const olderExt = (older.ext || {}) as any;
+    const newerExt = (newer.ext || {}) as any;
+    const mergedExecutionLogs = mergeExecutionLogs(
+      ((olderExt.agent_log || olderExt.log || older.executionLogs) as ExecutionLogEntry[]) || [],
+      ((newerExt.agent_log || newerExt.log || newer.executionLogs) as ExecutionLogEntry[]) || [],
+    );
+    const mergedProcessMessages =
+      mergeByAppend(older.processMessages || [], newer.processMessages || []).length > 0
+        ? mergeByAppend(older.processMessages || [], newer.processMessages || [])
+        : undefined;
+    const mergedProcessSteps =
+      mergeByAppend((olderExt.processSteps as any[]) || [], (newerExt.processSteps as any[]) || []).length > 0
+        ? mergeByAppend((olderExt.processSteps as any[]) || [], (newerExt.processSteps as any[]) || [])
+        : undefined;
+
+    return {
+      ...older,
+      ...newer,
+      id: getPersistedMessageId(newer) || getPersistedMessageId(older) || newer.id || older.id,
+      message_id: getPersistedMessageId(newer) || getPersistedMessageId(older) || newer.message_id || older.message_id,
+      content: newer.content || older.content,
+      sender_id: newer.sender_id || older.sender_id,
+      sender_type: newer.sender_type || older.sender_type,
+      sender_avatar: newer.sender_avatar || older.sender_avatar,
+      sender_name: newer.sender_name || older.sender_name,
+      media: newer.media || older.media,
+      isStreaming: newer.isStreaming ?? older.isStreaming,
+      isThinking: newer.isThinking ?? older.isThinking,
+      processMessages: mergedProcessMessages,
+      executionLogs: mergedExecutionLogs,
+      ext: {
+        ...olderExt,
+        ...newerExt,
+        __exec_placeholder: Boolean(olderExt.__exec_placeholder && newerExt.__exec_placeholder),
+        sender_avatar: newer.sender_avatar || newerExt.sender_avatar || older.sender_avatar || olderExt.sender_avatar,
+        sender_name: newer.sender_name || newerExt.sender_name || older.sender_name || olderExt.sender_name,
+        processSteps: mergedProcessSteps,
+        processMessages: mergedProcessMessages,
+        agent_log: mergedExecutionLogs,
+        log: mergedExecutionLogs,
+        executionLogs: mergedExecutionLogs,
+      },
+    };
+  }, [getPersistedMessageId, mergeExecutionLogs]);
+
+  const dedupeAssistantMessages = useCallback((list: Message[]): Message[] => {
+    const next: Message[] = [];
+    const persistedIndex = new Map<string, number>();
+
+    for (const message of list) {
+      if (message.role !== 'assistant') {
+        next.push(message);
+        continue;
+      }
+
+      const persistedId = getPersistedMessageId(message);
+      if (persistedId && persistedIndex.has(persistedId)) {
+        const idx = persistedIndex.get(persistedId)!;
+        next[idx] = mergeAssistantMessages(next[idx], message);
+        continue;
+      }
+
+      const senderId = (message.sender_id || 'agent').trim() || 'agent';
+      const placeholderIndex = next.findIndex((item) => {
+        if (item.role !== 'assistant') return false;
+        const itemSender = (item.sender_id || 'agent').trim() || 'agent';
+        return itemSender === senderId && (isExecPlaceholderMessage(item) || isDecisionPlaceholderMessage(item));
+      });
+
+      if (!isExecPlaceholderMessage(message) && placeholderIndex >= 0) {
+        next[placeholderIndex] = mergeAssistantMessages(next[placeholderIndex], message);
+        const mergedPersistedId = getPersistedMessageId(next[placeholderIndex]);
+        if (mergedPersistedId) persistedIndex.set(mergedPersistedId, placeholderIndex);
+        continue;
+      }
+
+      if (isExecPlaceholderMessage(message) || isDecisionPlaceholderMessage(message)) {
+        const realIndex = next.findIndex((item) => {
+          if (item.role !== 'assistant') return false;
+          const itemSender = (item.sender_id || 'agent').trim() || 'agent';
+          return itemSender === senderId && !isExecPlaceholderMessage(item) && !isDecisionPlaceholderMessage(item);
+        });
+        if (realIndex >= 0) {
+          next[realIndex] = mergeAssistantMessages(message, next[realIndex]);
+          continue;
+        }
+      }
+
+      const insertIndex = next.push(message) - 1;
+      if (persistedId) persistedIndex.set(persistedId, insertIndex);
+    }
+
+    return next;
+  }, [getPersistedMessageId, isDecisionPlaceholderMessage, isExecPlaceholderMessage, mergeAssistantMessages]);
+
   // Agent Persona 配置对话框状态（用于从会话面板点击agent头像时打开）
   const [showAgentPersonaDialog, setShowAgentPersonaDialog] = useState(false);
   const [agentPersonaDialogAgent, setAgentPersonaDialogAgent] = useState<Session | null>(null);
@@ -1093,6 +1209,67 @@ const Workflow: React.FC<WorkflowProps> = ({
                 return updated;
               }
 
+              // execution_log 可能先创建了一个 exec-pending 占位 assistant；
+              // 当 new_message 抵达时，需要把它升级成正式消息，而不是再插入一条新消息。
+              if (msg.role === 'assistant') {
+                const senderId = (msg.sender_id || 'agent') as string;
+                const placeholderIndex = prev.findIndex((m) => {
+                  if (m.id === `exec-pending-${senderId}` || m.id === 'exec-pending-agent') return true;
+                  if (m.role !== 'assistant') return false;
+                  const ext = (m.ext || {}) as any;
+                  if (ext.__exec_placeholder || ext.decision_type === 'silent') {
+                    const sid = (m.sender_id || 'agent') as string;
+                    return sid === senderId || sid === 'agent' || sid === '';
+                  }
+                  return false;
+                });
+                if (placeholderIndex >= 0) {
+                  const updated = [...prev];
+                  const placeholder = updated[placeholderIndex];
+                  const mergedSteps =
+                    normalizeIncomingProcessSteps(msg.processSteps || msg.ext?.processSteps) ||
+                    placeholder.ext?.processSteps;
+                  const mergedProcessMessages =
+                    incomingProcessMessages ||
+                    placeholder.processMessages ||
+                    (placeholder.ext as any)?.processMessages;
+                  const senderAvatar = sanitizeAvatar(msg.sender_avatar || msg.ext?.sender_avatar);
+                  const senderName = msg.sender_name || msg.ext?.sender_name || (placeholder.ext as any)?.sender_name;
+                  updated[placeholderIndex] = {
+                    ...placeholder,
+                    id: msg.message_id || msg.id || placeholder.id,
+                    message_id: msg.message_id || msg.id || placeholder.message_id,
+                    role: msg.role as any,
+                    content: msg.content,
+                    thinking: msg.thinking,
+                    toolCalls: msg.tool_calls,
+                    sender_id: msg.sender_id || placeholder.sender_id,
+                    sender_type: msg.sender_type || placeholder.sender_type,
+                    sender_avatar: senderAvatar || placeholder.sender_avatar,
+                    sender_name: senderName,
+                    isStreaming: false,
+                    isThinking: false,
+                    media: msg.media || placeholder.media,
+                    processMessages: mergedProcessMessages,
+                    ext: {
+                      ...(placeholder.ext || {}),
+                      ...(msg.ext || {}),
+                      __exec_placeholder: false,
+                      processSteps: mergedSteps,
+                      processMessages: mergedProcessMessages,
+                      sender_avatar: senderAvatar || (placeholder.ext as any)?.sender_avatar,
+                      sender_name: senderName,
+                      agent_log: msg.ext?.agent_log || msg.ext?.log || msg.ext?.executionLogs || (placeholder.ext as any)?.agent_log,
+                      log: msg.ext?.log || msg.ext?.agent_log || msg.ext?.executionLogs || (placeholder.ext as any)?.log,
+                      executionLogs: msg.ext?.executionLogs || msg.ext?.agent_log || msg.ext?.log || (placeholder.ext as any)?.executionLogs,
+                    },
+                  };
+                  setIsLoading(false);
+                  wasAtBottomRef.current = true;
+                  return dedupeAssistantMessages(updated);
+                }
+              }
+
               // 提取 sender 信息，优先从顶层获取，然后从 ext 中获取
               const senderAvatar = sanitizeAvatar(msg.sender_avatar || msg.ext?.sender_avatar);
               const senderName = msg.sender_name || msg.ext?.sender_name;
@@ -1132,7 +1309,7 @@ const Workflow: React.FC<WorkflowProps> = ({
               // 每条 assistant 消息会把日志持久化到 ext.log / ext.executionLogs，
               // SplitView 将优先读取消息级日志。
               
-              return [...prev, newMessage];
+              return dedupeAssistantMessages([...prev, newMessage]);
             });
             
           } else if (payload.type === 'topic_participants_updated') {
@@ -1260,8 +1437,8 @@ const Workflow: React.FC<WorkflowProps> = ({
                     // 更新现有日志的 detail
                     const updated = [...prev];
                     updated[existingIdx] = { ...updated[existingIdx], detail: data.detail, timestamp: Date.now() };
-                    return updated;
-                  }
+                  return dedupeAssistantMessages(updated);
+                }
                   // 没有现有日志，添加新的
                   return [...prev.slice(-99), logEntry];
                 } else if (msgText === '思考完成') {
@@ -1398,7 +1575,46 @@ const Workflow: React.FC<WorkflowProps> = ({
 	                    executionLogs: data.execution_logs || (updated[existingIndex].ext as any)?.executionLogs,
                   }
                 };
-                return updated;
+                return dedupeAssistantMessages(updated);
+              }
+
+              // 若先收到 agent_silent 产生了 decision-* 占位，这里应升级该占位，避免再生成一块日志卡。
+              const decisionIndex = prev.findIndex((m) =>
+                m.role === 'assistant' &&
+                (m.sender_id || '') === (data.agent_id || '') &&
+                ((m.ext as any)?.decision_type === 'silent')
+              );
+              if (decisionIndex >= 0) {
+                const updated = [...prev];
+                const decision = updated[decisionIndex];
+                const mergedProcessMessages =
+                  mergeByAppend(decision.processMessages || [], incomingProcessMessages || []).length > 0
+                    ? mergeByAppend(decision.processMessages || [], incomingProcessMessages || [])
+                    : decision.processMessages;
+
+                updated[decisionIndex] = {
+                  ...decision,
+                  id: data.message_id || decision.id,
+                  message_id: data.message_id || decision.message_id,
+                  sender_id: data.agent_id || decision.sender_id,
+                  sender_type: 'agent',
+                  isStreaming: true,
+                  isThinking: false,
+                  processMessages: mergedProcessMessages,
+                  executionLogs: data.execution_logs || decision.executionLogs || [],
+                  ext: {
+                    ...(decision.ext || {}),
+                    decision_type: undefined,
+                    sender_name: data.agent_name || (decision.ext as any)?.sender_name,
+                    sender_avatar: (typeof data.agent_avatar === 'string' && data.agent_avatar.startsWith('data:image/')) ? undefined : (data.agent_avatar || (decision.ext as any)?.sender_avatar),
+                    processSteps: normalizeIncomingProcessSteps(data.processSteps) || (decision.ext as any)?.processSteps || [],
+                    processMessages: mergedProcessMessages || (decision.ext as any)?.processMessages || [],
+                    agent_log: data.execution_logs || (decision.ext as any)?.agent_log || [],
+                    log: data.execution_logs || (decision.ext as any)?.log || [],
+                    executionLogs: data.execution_logs || (decision.ext as any)?.executionLogs || [],
+                  },
+                };
+                return dedupeAssistantMessages(updated);
               }
 
               // 若 execution_log 先到了，会先创建临时占位消息；此处升级为正式 message_id
@@ -1430,7 +1646,7 @@ const Workflow: React.FC<WorkflowProps> = ({
                     processMessages: incomingProcessMessages || (placeholder.ext as any)?.processMessages || [],
                   },
                 };
-                return updated;
+                return dedupeAssistantMessages(updated);
               }
               
               // 消息不存在，创建新消息
@@ -1456,7 +1672,7 @@ const Workflow: React.FC<WorkflowProps> = ({
                 }
               };
               wasAtBottomRef.current = true;
-              return [...prev, thinkingMessage];
+              return dedupeAssistantMessages([...prev, thinkingMessage]);
             });
             
           } else if (payload.type === 'agent_stream_chunk' || payload.type === 'stream_chunk') {
@@ -1512,7 +1728,7 @@ const Workflow: React.FC<WorkflowProps> = ({
                   }
                 };
                 wasAtBottomRef.current = true;
-                return [...prev, newMsg];
+                return dedupeAssistantMessages([...prev, newMsg]);
               }
               
               // 更新现有消息，合并 processMessages
@@ -1530,7 +1746,7 @@ const Workflow: React.FC<WorkflowProps> = ({
                 }
               };
               wasAtBottomRef.current = true;
-              return updated;
+              return dedupeAssistantMessages(updated);
             });
             
           } else if (payload.type === 'agent_interrupt_ack') {
@@ -2430,17 +2646,10 @@ const Workflow: React.FC<WorkflowProps> = ({
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 15000);
         try {
-          const response = await fetch(`${getBackendUrl()}/api/mcp/servers/${serverId}/test`, {
+          const data = await api.requestRaw<any>(`/api/mcp/servers/${serverId}/test`, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
             signal: controller.signal,
           });
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
-          const data = await response.json();
           return Array.isArray(data?.tools) ? data.tools : [];
         } finally {
           clearTimeout(timeoutId);

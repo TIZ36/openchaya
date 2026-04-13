@@ -42,6 +42,7 @@ import {
   NotionRegistration,
 } from '../services/mcpApi';
 import { getBackendUrl } from '../utils/backendUrl';
+import { api } from '../utils/apiClient';
 
 interface MCPConfigProps {}
 
@@ -254,31 +255,23 @@ const MCPConfig: React.FC<MCPConfigProps> = () => {
       
       try {
         // 测试连接（后端会自动处理 token 检查和刷新）
-        const response = await fetch(`${getBackendUrl()}/api/mcp/servers/${existingServer.id}/test`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
-        
-        if (response.ok) {
-          const result = await response.json();
+        try {
+          const result = await api.post<any>(`/api/mcp/servers/${existingServer.id}/test`);
           console.log('[Notion] ✅ Connection test successful:', result);
           setNotionAuthState('authenticated');
           await loadServers(); // 重新加载服务器列表
           alert('Notion MCP 服务器连接成功！');
           return;
-        } else {
-          const error = await response.json();
+        } catch (error: any) {
           console.log('[Notion] Connection test failed:', error);
-          
+
           // 如果明确需要 OAuth（token 不存在或无效），走 OAuth 流程
-          if (error.requires_oauth || response.status === 401) {
+          if (error?.requires_oauth || error?.code === 401 || /401/.test(String(error?.message || ''))) {
             console.log('[Notion] OAuth required, starting OAuth flow...');
             await performNotionOAuth(registration.client_id);
           } else {
             // 其他错误（如网络错误），提示用户
-            alert('连接失败: ' + (error.error || '未知错误'));
+            alert('连接失败: ' + ((error && (error.error || error.message)) || '未知错误'));
             setNotionAuthState('idle');
           }
         }
@@ -862,25 +855,15 @@ const MCPConfig: React.FC<MCPConfigProps> = () => {
       // 先走后端测试接口（稳定，不依赖前端 session-id）
       console.log(`[MCP Config] Fetching tools via backend test API: ${server.id}`);
       try {
-        const response = await fetch(`${getBackendUrl()}/api/mcp/servers/${server.id}/test`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
-        if (response.ok) {
-          const data = await response.json();
-          const tools: MCPTool[] = Array.isArray(data?.tools) ? data.tools : [];
-          setTestResults(prev => new Map(prev).set(server.id, {
-            success: true,
-            connected: true,
-            tools,
-            message: `连接成功，发现 ${tools.length} 个工具`,
-          }));
-          return;
-        }
-        const apiError = await response.json().catch(() => ({}));
-        console.warn('[MCP Config] Backend test API failed, fallback to client flow:', apiError);
+        const data = await api.post<any>(`/api/mcp/servers/${server.id}/test`);
+        const tools: MCPTool[] = Array.isArray(data?.tools) ? data.tools : [];
+        setTestResults(prev => new Map(prev).set(server.id, {
+          success: true,
+          connected: true,
+          tools,
+          message: `连接成功，发现 ${tools.length} 个工具`,
+        }));
+        return;
       } catch (backendApiError) {
         console.warn('[MCP Config] Backend test API exception, fallback to client flow:', backendApiError);
       }

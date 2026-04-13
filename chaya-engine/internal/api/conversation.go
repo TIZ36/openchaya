@@ -9,6 +9,7 @@ import (
 
 	"github.com/chaya-ai/chaya-engine/internal/gateway/middleware"
 	"github.com/chaya-ai/chaya-engine/internal/harness/intelligence/topology"
+	"github.com/chaya-ai/chaya-engine/internal/provider"
 	pgstore "github.com/chaya-ai/chaya-engine/internal/storage/postgres"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -16,7 +17,8 @@ import (
 )
 
 type ConversationAPI struct {
-	db *gorm.DB
+	db  *gorm.DB
+	reg *provider.Registry
 }
 
 func (a *ConversationAPI) resolvePrimaryConversation(userID, tenantID string) (*pgstore.Conversation, error) {
@@ -114,8 +116,8 @@ func (a *ConversationAPI) resolveConversation(id, userID, tenantID string) (*pgs
 	return &newConv, nil
 }
 
-func RegisterConversationRoutes(r chi.Router, db *gorm.DB) {
-	a := &ConversationAPI{db: db}
+func RegisterConversationRoutes(r chi.Router, db *gorm.DB, reg *provider.Registry) {
+	a := &ConversationAPI{db: db, reg: reg}
 
 	// Primary paths
 	r.Get("/api/conversations", a.list)
@@ -293,8 +295,9 @@ func mergeMessageExtMap(existing json.RawMessage, fn func(map[string]any)) (json
 }
 
 // patchMessageFeedback merges assistant_feedback into messages.ext and appends a topology trace for consolidation.
+// The URL {id} param is accepted for routing but ignored: ownership is validated via the message's own conv_id,
+// so session_id / agent_id / conversation_id are all accepted as {id} without error.
 func (a *ConversationAPI) patchMessageFeedback(w http.ResponseWriter, r *http.Request) {
-	convKey := chi.URLParam(r, "id")
 	msgID := chi.URLParam(r, "msgId")
 	userID := middleware.UserID(r.Context())
 	if _, err := uuid.Parse(msgID); err != nil {
@@ -302,11 +305,7 @@ func (a *ConversationAPI) patchMessageFeedback(w http.ResponseWriter, r *http.Re
 		return
 	}
 	tenantID := middleware.TenantID(r.Context())
-	conv, err := a.resolveConversation(convKey, userID, tenantID)
-	if err != nil {
-		Fail(w, CodeNotFound, "not found")
-		return
-	}
+
 	var req struct {
 		Rating string `json:"rating"` // "", "up", "down"
 	}
@@ -320,9 +319,14 @@ func (a *ConversationAPI) patchMessageFeedback(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Look up message by its ID alone; validate ownership via the message's actual conv_id.
 	var msg pgstore.Message
-	if err := a.db.Where("id = ? AND conv_id = ?", msgID, conv.ID).First(&msg).Error; err != nil {
+	if err := a.db.Where("id = ?", msgID).First(&msg).Error; err != nil {
 		Fail(w, CodeNotFound, "message not found")
+		return
+	}
+	if !ConversationAccessForUser(a.db, msg.ConvID, userID, tenantID) {
+		Fail(w, CodeForbidden, "no access to this message")
 		return
 	}
 	if msg.Role != "assistant" {
@@ -348,12 +352,16 @@ func (a *ConversationAPI) patchMessageFeedback(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	agentID := topology.AgentIDForConversation(a.db, conv.ID)
+	agentID := topology.AgentIDForConversation(a.db, msg.ConvID)
 	if msg.AgentID != nil && strings.TrimSpace(*msg.AgentID) != "" {
 		agentID = strings.TrimSpace(*msg.AgentID)
 	}
 	if agentID != "" && (rating == "up" || rating == "down") {
 		_ = topology.AppendAssistantRatingTrace(a.db, agentID, msgID, rating == "up")
+		// Thumbs-up: trigger async topology rebuild to reinforce this successful interaction.
+		if rating == "up" {
+			AsyncRebuildTopology(a.db, a.reg, agentID)
+		}
 	}
 
 	var out pgstore.Message

@@ -14,6 +14,7 @@ import {
 import { Button } from '@/components/ui/Button';
 import { getBackendUrl } from '../utils/backendUrl';
 import { RefreshCw, Users } from 'lucide-react';
+import { api } from '../utils/apiClient';
 
 export interface ActorStatus {
   agent_id: string;
@@ -38,17 +39,14 @@ const ActorPoolDialog: React.FC<ActorPoolDialogProps> = ({ open, onOpenChange })
   const [actors, setActors] = useState<ActorStatus[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [backendUrl, setBackendUrl] = useState('');
 
   const fetchPool = useCallback(async () => {
     const base = getBackendUrl();
-    setBackendUrl(base);
     if (!base) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${base}/api/actor-pool/status`);
-      const data = await res.json();
+      const data = await api.get<any>('/api/actor-pool/status');
       if (data.ok && Array.isArray(data.actors)) {
         setActors(data.actors);
       } else {

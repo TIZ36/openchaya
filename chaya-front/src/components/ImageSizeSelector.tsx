@@ -21,12 +21,12 @@ interface ImageSizeSelectorProps {
   hideTitle?: boolean;
 }
 
-const ASPECT_RATIOS: { label: string; ratio: number; w: number; h: number }[] = [
-  { label: '1:1', ratio: 1, w: 56, h: 56 },
-  { label: '4:3', ratio: 1.33, w: 64, h: 48 },
-  { label: '3:4', ratio: 0.75, w: 48, h: 64 },
-  { label: '16:9', ratio: 1.78, w: 72, h: 40 },
-  { label: '9:16', ratio: 0.56, w: 40, h: 72 },
+const ASPECT_RATIOS: { label: string; ratio: number }[] = [
+  { label: '1:1', ratio: 1 },
+  { label: '4:3', ratio: 1.33 },
+  { label: '3:4', ratio: 0.75 },
+  { label: '16:9', ratio: 1.78 },
+  { label: '9:16', ratio: 0.56 },
 ];
 
 const DEFAULT_SIZE = 1024;
@@ -105,11 +105,6 @@ export const ImageSizeSelector: React.FC<ImageSizeSelectorProps> = ({ value, onC
           <div className="image-size-selector__aspect-grid">
             {ASPECT_RATIOS.map((aspect) => {
               const isSelected = value.aspectRatio === aspect.label;
-              const maxEdge = Math.max(aspect.w, aspect.h);
-              const targetEdge = density === 'comfy' ? 68 : density === 'compact' ? 52 : 60;
-              const scale = targetEdge / maxEdge;
-              const previewWidth = Math.round(aspect.w * scale);
-              const previewHeight = Math.round(aspect.h * scale);
               return (
                 <button
                   key={aspect.label}
@@ -122,12 +117,6 @@ export const ImageSizeSelector: React.FC<ImageSizeSelectorProps> = ({ value, onC
                   `}
                   title={aspect.label}
                 >
-                  <div className="image-size-selector__aspect-preview-wrap">
-                  <div
-                    className="image-size-selector__aspect-preview"
-                    style={{ width: previewWidth, height: previewHeight }}
-                  />
-                  </div>
                   <span className="image-size-selector__aspect-label">{aspect.label}</span>
                 </button>
               );

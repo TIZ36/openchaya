@@ -539,6 +539,10 @@ const App: React.FC = () => {
     { id: 'skill', label: 'Skill' },
     { id: 'kb', label: '知识库' },
   ];
+  const personaTabs: { id: Exclude<ChatAgentsPageSection, 'chaya-config'>; label: string }[] = [
+    { id: 'persona-presets', label: '人设管理' },
+    { id: 'voice-presets', label: '音色管理' },
+  ];
 
   useEffect(() => {
     if (settingsSubTab === 'membership' && !user?.is_founder) {
@@ -638,45 +642,8 @@ const App: React.FC = () => {
       if (chatSubTab === 'chaya') return <div key={`c-${activeAgentSessionId}`} className="h-full min-h-0"><Workflow sessionId={activeAgentSessionId} onSelectSession={handleSelectSession} enableToolCalling={settings.enableToolCalling} onToggleToolCalling={(v) => updateSettings({ enableToolCalling: v })} preciseMode={preciseMode} /></div>;
       if (chatSubTab === 'persona') {
         return (
-          <div className="flex h-full min-h-0 flex-col overflow-hidden">
-            <div className="flex shrink-0 items-center gap-1 border-b border-[var(--border-default)] bg-[var(--surface-secondary)] px-2 py-1.5">
-              <button
-                type="button"
-                onClick={() => setChatAgentsPageSection('persona-presets')}
-                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                  chatAgentsPageSection === 'persona-presets'
-                    ? 'bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-sm'
-                    : 'text-[var(--text-secondary)] hover:bg-[var(--color-hover-bg)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                人设管理
-              </button>
-              <button
-                type="button"
-                onClick={() => setChatAgentsPageSection('voice-presets')}
-                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                  chatAgentsPageSection === 'voice-presets'
-                    ? 'bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-sm'
-                    : 'text-[var(--text-secondary)] hover:bg-[var(--color-hover-bg)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                音色管理
-              </button>
-              <button
-                type="button"
-                onClick={() => setChatAgentsPageSection('chaya-config')}
-                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                  chatAgentsPageSection === 'chaya-config'
-                    ? 'bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-sm'
-                    : 'text-[var(--text-secondary)] hover:bg-[var(--color-hover-bg)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                基本设置
-              </button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-hidden">
-              <AgentsPage sessionId={activeAgentSessionId} section={chatAgentsPageSection} />
-            </div>
+          <div className="h-full min-h-0 overflow-hidden">
+            <AgentsPage sessionId={activeAgentSessionId} section={chatAgentsPageSection} />
           </div>
         );
       }
@@ -827,6 +794,16 @@ const App: React.FC = () => {
 
   const renderModuleTabs = () => (
     <>
+      {mainModule === 'chat' && chatSubTab === 'persona' && chatAgentsPageSection !== 'chaya-config' && personaTabs.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          onClick={() => setChatAgentsPageSection(t.id)}
+          className={`app-bubble-tab app-no-drag ${chatAgentsPageSection === t.id ? 'app-bubble-tab--active' : ''}`}
+        >
+          <span className="app-bubble-tab-label">{t.label}</span>
+        </button>
+      ))}
       {mainModule === 'media' && mediaTabs.map((t) => (
         <button
           key={t.id}
@@ -865,6 +842,11 @@ const App: React.FC = () => {
     return <LoginPage onLogin={() => { setUser(api.getUser()); setAuthed(true); }} />;
   }
 
+  const isGlobalPersonaLibraryPage = mainModule === 'chat' && chatSubTab === 'persona' && chatAgentsPageSection !== 'chaya-config';
+  const isAgentScopedChatPage = mainModule === 'chat' && (chatSubTab === 'chaya' || (chatSubTab === 'persona' && chatAgentsPageSection === 'chaya-config'));
+  const showChatAgentHeader = isAgentScopedChatPage;
+  const showBubbleHeader = (mainModule !== 'chat' && mainModule !== 'media') || isGlobalPersonaLibraryPage;
+
   return (
     <div className={`app-shell ${isElectron && isDarwin ? 'app-shell--darwin' : ''}`}>
       {/* macOS 红绿灯占位条 — 在 app-frame 外面，背景跟外壳一致 */}
@@ -877,12 +859,18 @@ const App: React.FC = () => {
           <aside className={`app-sidebar app-no-drag ${isSidebarCollapsed ? 'app-sidebar--collapsed' : ''}`}>
             <div className="app-sidebar__header">
               <div className="app-sidebar__header-top">
-                {!isSidebarCollapsed && <span className="app-sidebar__brand">Chaya</span>}
+                {!isSidebarCollapsed && (
+                  <span className="app-sidebar__brand-wrap">
+                    <span className="app-sidebar__brand-dot" aria-hidden />
+                    <span className="app-sidebar__brand">Chaya</span>
+                  </span>
+                )}
                 <button
                   type="button"
-                  className="app-sidebar__icon-btn"
+                  className="app-sidebar__collapse-btn"
                   onClick={() => setIsSidebarCollapsed((prev) => !prev)}
                   title={isSidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+                  aria-label={isSidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
                 >
                   {isSidebarCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
                 </button>
@@ -958,6 +946,7 @@ const App: React.FC = () => {
                         const isActive = sid === selectedSessionId;
                         const label = agent.name || agent.title || `Agent ${sid.slice(0, 6)}`;
                         const allowDelete = !agent.is_primary;
+                        const avatar = agent.avatar?.trim() || '';
                         return (
                           <button
                             key={`agent-${sid}`}
@@ -970,8 +959,10 @@ const App: React.FC = () => {
                             }}
                             title={label}
                           >
-                            <Bot className="w-3.5 h-3.5" />
-                            <span className="truncate">{label}</span>
+                            <span className="app-sidebar__agent-avatar" aria-hidden>
+                              {avatar ? <img src={avatar} alt="" /> : <span>{label.slice(0, 1).toUpperCase()}</span>}
+                            </span>
+                            <span className="truncate flex-1 min-w-0">{label}</span>
                             {allowDelete ? (
                               <button
                                 type="button"
@@ -1010,18 +1001,6 @@ const App: React.FC = () => {
                     <div className="app-sidebar__subtools">
                       <div className="app-sidebar__label">对话功能</div>
                       <div className="app-sidebar__list">
-                        <button
-                          type="button"
-                          className={`app-sidebar__item ${(mainModule === 'chat' && chatSubTab === 'chaya') ? 'is-active' : ''}`}
-                          onClick={() => {
-                            setMainModule('chat');
-                            setChatSubTab('chaya');
-                          }}
-                          title="对话"
-                        >
-                          <MessageSquare className="w-3.5 h-3.5" />
-                          <span className="truncate">对话</span>
-                        </button>
                         <button
                           type="button"
                           className={`app-sidebar__item ${(mainModule === 'harness' && harnessSubTab === 'mcp') ? 'is-active' : ''}`}
@@ -1080,26 +1059,6 @@ const App: React.FC = () => {
             )}
 
             <div className="app-sidebar__footer">
-              {!isSidebarCollapsed && (
-                <button
-                  type="button"
-                  onClick={() => setShowUserProfile(true)}
-                  className={`app-pass-chip app-pass-chip--${tenantPlan}`}
-                  title="查看会员权益"
-                >
-                  <span className={`app-pass-chip__icon app-pass-chip__avatar app-pass-chip__avatar--${tenantPlan}`}>
-                    {(user?.name || user?.email || 'U')[0].toUpperCase()}
-                    {user?.is_founder ? <span className="app-rail-profile-badge">♛</span> : null}
-                  </span>
-                  <span className="app-pass-chip__copy">
-                    <span className="app-pass-chip__title">{PLAN_LABELS[tenantPlan]} Pass</span>
-                    <span className="app-pass-chip__sub">
-                      {tenantPlan === 'free' ? 'Upgrade to Pro' : tenantPlan === 'pro' ? 'Upgrade to Ultra' : 'All features unlocked'}
-                    </span>
-                  </span>
-                  {tenantPlan !== 'ultra' ? <span className="app-pass-chip__cta">升级</span> : null}
-                </button>
-              )}
               <div className="app-sidebar__footer-tools">
                 <button
                   type="button"
@@ -1111,6 +1070,16 @@ const App: React.FC = () => {
                   title="设置"
                 >
                   <Settings className="w-[17px] h-[17px]" strokeWidth={2} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowUserProfile(true)}
+                  className={`app-rail-profile-btn app-rail-profile-btn--${tenantPlan} ${user?.is_founder ? 'app-rail-profile-btn--founder' : ''}`}
+                  title={`查看账号信息 · ${user?.is_founder ? 'Founder' : PLAN_LABELS[tenantPlan]} Pass`}
+                  aria-label={`查看账号信息，当前等级 ${user?.is_founder ? 'Founder' : PLAN_LABELS[tenantPlan]} Pass`}
+                >
+                  {(user?.name || user?.email || 'U')[0].toUpperCase()}
+                  {user?.is_founder ? <span className="app-rail-profile-badge">♛</span> : null}
                 </button>
                 <button
                   type="button"
@@ -1129,7 +1098,7 @@ const App: React.FC = () => {
 
         {/* ─── 主区域 ─── */}
         <div className={`app-main relative ${isMobile ? 'app-main--mobile-dock' : ''}`}>
-          {mainModule === 'chat' && (
+          {showChatAgentHeader && (
           <header className={`app-chat-header ${isElectron ? 'electron-titlebar-drag' : ''}`}>
             <div className="app-chat-header__left">
               {isMobile ? (
@@ -1224,7 +1193,7 @@ const App: React.FC = () => {
             </div>
           </header>
           )}
-          {mainModule !== 'chat' && mainModule !== 'media' && (
+          {showBubbleHeader && (
             <header className={`app-bubble-bar ${isElectron ? 'electron-titlebar-drag' : ''}`}>
               <nav className="app-bubble-tabs">
                 {renderModuleTabs()}
@@ -1233,7 +1202,7 @@ const App: React.FC = () => {
           )}
 
           <main className="app-content">
-            <div className={`app-content-inner ${mainModule !== 'chat' ? 'app-content-inner--full' : ''}`}>
+            <div className={`app-content-inner ${(mainModule !== 'chat' || isGlobalPersonaLibraryPage) ? 'app-content-inner--full' : ''}`}>
             <AgentNameplateDialog
               open={showAgentNameplateDialog}
               onOpenChange={setShowAgentNameplateDialog}
@@ -1305,7 +1274,7 @@ const App: React.FC = () => {
               </DialogContent>
             </Dialog>
 
-            {mainModule === 'chat' ? (
+            {isAgentScopedChatPage ? (
               <div className={`chat-workspace-shell flex-1 min-h-0 overflow-hidden flex relative ${isMobile ? 'gap-0 p-0' : 'gap-0 p-0'}`}>
                 <div className={`flex-1 min-h-0 overflow-hidden flex flex-col bg-[var(--surface-primary)] ${isMobile ? 'rounded-[18px] border border-[var(--border-default)] m-2 mb-0' : ''}`}>
                   <div className="flex-1 min-h-0 overflow-hidden">{renderPanel()}</div>
@@ -1458,8 +1427,8 @@ const App: React.FC = () => {
                     <div className="membership-dialog__name-row">
                       <div className="membership-dialog__name">{user?.name || 'User'}</div>
                       {isFounder
-                        ? <span className="membership-dialog__founder-chip">♛ Founder</span>
-                        : <span className="membership-card__status">{planLabel}</span>
+                        ? <span className="membership-dialog__founder-chip">♛ Founder Pass</span>
+                        : <span className="membership-card__status">{planLabel} Pass</span>
                       }
                     </div>
                     <div className="membership-dialog__email">{user?.email}</div>

@@ -6,6 +6,7 @@ import { Input } from './ui/Input';
 import { Button } from './ui/Button';
 import { toast } from './ui/use-toast';
 import { getBackendUrl } from '../utils/backendUrl';
+import { api } from '../utils/apiClient';
 import ActorPoolDialog from './ActorPoolDialog';
 import { getMe, listMemberships, updateMembership, type MembershipItem } from '../services/adminApi';
 import type { TenantPlan } from '../utils/themeAccess';
@@ -45,42 +46,32 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ section }) => {
   const [actorPoolOpen, setActorPoolOpen] = useState(false);
 
   const checkStatus = useCallback(async () => {
-    const url = getBackendUrl();
-    if (!url) return;
     setIsRefreshing(true);
     try {
       try {
-        const llmRes = await fetch(`${url}/api/llm/configs`);
-        if (llmRes.ok) {
-          const llmData = await llmRes.json();
-          const configs = Array.isArray(llmData) ? llmData : (llmData.configs || []);
-          const enabled = configs.filter((c: any) => c.enabled);
-          const withKey = enabled.filter((c: any) => {
-            if (c.provider === 'ollama') return true;
-            if (c.has_api_key !== undefined) return c.has_api_key === true;
-            return !!c.api_key;
-          });
-          const withoutKey = enabled.filter((c: any) => {
-            if (c.provider === 'ollama') return false;
-            if (c.has_api_key !== undefined) return c.has_api_key === false;
-            return !c.api_key;
-          });
-          setLlmKeyStatus({ total: configs.length, enabled: enabled.length, withKey: withKey.length, withoutKey: withoutKey.length });
-        }
+        const configs = await api.get<any[]>('/api/llm/configs');
+        const enabled = configs.filter((c: any) => c.enabled);
+        const withKey = enabled.filter((c: any) => {
+          if (c.provider === 'ollama') return true;
+          if (c.has_api_key !== undefined) return c.has_api_key === true;
+          return !!c.api_key;
+        });
+        const withoutKey = enabled.filter((c: any) => {
+          if (c.provider === 'ollama') return false;
+          if (c.has_api_key !== undefined) return c.has_api_key === false;
+          return !c.api_key;
+        });
+        setLlmKeyStatus({ total: configs.length, enabled: enabled.length, withKey: withKey.length, withoutKey: withoutKey.length });
       } catch (e) {
         console.error('[Settings] Failed to fetch LLM configs:', e);
       }
       try {
-        const topicRes = await fetch(`${url}/api/sessions`);
-        if (topicRes.ok) {
-          const topicData = await topicRes.json();
-          const topics = Array.isArray(topicData) ? topicData : (topicData.sessions || topicData.topics || []);
-          const activeTopics = topics.filter((t: any) => {
-            if (!t.last_message_at) return false;
-            return Date.now() - new Date(t.last_message_at).getTime() < 24 * 60 * 60 * 1000;
-          });
-          setTopicStatus({ total: topics.length, active: activeTopics.length });
-        }
+        const topics = await api.get<any[]>('/api/sessions');
+        const activeTopics = topics.filter((t: any) => {
+          if (!t.last_message_at) return false;
+          return Date.now() - new Date(t.last_message_at).getTime() < 24 * 60 * 60 * 1000;
+        });
+        setTopicStatus({ total: topics.length, active: activeTopics.length });
       } catch (e) {
         console.error('[Settings] Failed to fetch topics:', e);
       }

@@ -50,7 +50,7 @@ func NewRouter(hub *Hub, onWSMessage func(*Client, *WSMessage), convAccess func(
 	r.Use(middleware.RequestID)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"*"},
 		AllowCredentials: true,
 	}))
@@ -87,10 +87,10 @@ func NewRouter(hub *Hub, onWSMessage func(*Client, *WSMessage), convAccess func(
 		// First frame after connect: bind usersession id (WS connection identity on Gateway).
 		// Distinct from convid (topic) and agid; see usersession-agid-convid rule.
 		welcome, _ := json.Marshal(&WSMessage{
-			Type: "event",
+			Type:  "event",
 			Topic: "",
 			Payload: mustMarshal(map[string]any{
-				"type":            "usersession_ready",
+				"type":           "usersession_ready",
 				"usersession_id": client.ID,
 			}),
 		})

@@ -5,6 +5,8 @@
 
 import { getBackendUrl } from '../../utils/backendUrl';
 
+const TOKEN_KEY = 'chaya_token';
+
 // ============================================================================
 // 基础请求函数
 // ============================================================================
@@ -19,12 +21,14 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
   // 使用同步的 getBackendUrl，支持根据当前访问域名动态推断后端地址（支持局域网访问）
   const backendUrl = getBackendUrl();
   const url = `${backendUrl}${endpoint}`;
+  const token = typeof window !== 'undefined' ? localStorage.getItem(TOKEN_KEY) : null;
   
   const config: RequestInit = {
     method: options.method || 'GET',
     headers: {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
   };

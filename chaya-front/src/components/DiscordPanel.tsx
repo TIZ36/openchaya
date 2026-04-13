@@ -10,7 +10,6 @@ import {
   Play,
   Square,
   RefreshCw,
-  Settings2,
   Trash2,
   ChevronDown,
   ChevronRight,
@@ -30,7 +29,7 @@ import {
   DialogFooter,
 } from './ui/Dialog';
 import { toast } from './ui/use-toast';
-import { getBackendUrl } from '../utils/backendUrl';
+import { api } from '../utils/apiClient';
 import {
   getDiscordStatus,
   getDiscordChannels,
@@ -88,17 +87,20 @@ const DiscordPanel: React.FC<DiscordPanelProps> = ({ embedded = true, linkedAgen
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const base = getBackendUrl();
       const [s, c, cfg, llmRes] = await Promise.all([
         getDiscordStatus(),
         getDiscordChannels(false, linkedAgentId),
         getDiscordConfig().catch(() => ({ default_llm_config_id: '' })),
-        fetch(`${base}/api/llm/configs`).then((r) => r.json()).catch(() => ({ configs: [] })),
+        api.get<Array<{ config_id?: string; id?: string; name: string; model?: string }>>('/api/llm/configs').catch(() => []),
       ]);
       setStatus(s);
       setChannels(c);
       setDiscordConfig(cfg);
-      setLlmConfigs(llmRes?.configs || []);
+      setLlmConfigs((llmRes || []).map((item) => ({
+        config_id: item.config_id || item.id || '',
+        name: item.name,
+        model: item.model,
+      })));
     } catch (e) {
       toast({
         title: '加载失败',

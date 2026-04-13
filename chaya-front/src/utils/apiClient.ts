@@ -79,6 +79,10 @@ class ApiClient {
     return body as T;
   }
 
+  requestRaw<T = any>(path: string, options: RequestInit = {}): Promise<T> {
+    return this.request<T>(path, options);
+  }
+
   get<T = any>(path: string): Promise<T> {
     return this.request<T>(path);
   }

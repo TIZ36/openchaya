@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -116,6 +117,48 @@ func (a *TopologyAPI) rebuild(w http.ResponseWriter, r *http.Request) {
 	var rec topology.TopologyRecord
 	_ = a.db.Where("agent_id = ?", agentID).First(&rec).Error
 	OK(w, M{"status": "ok", "agent_id": agentID, "version": rec.Version, "built_at": rec.BuiltAt})
+}
+
+// AsyncRebuildTopology triggers a background topology consolidation for the given agent.
+// It is a no-op if reg is nil or the agent has no LLM config.
+func AsyncRebuildTopology(db *gorm.DB, reg *provider.Registry, agentID string) {
+	if reg == nil || agentID == "" {
+		return
+	}
+	go func() {
+		tmp := &TopologyAPI{db: db, reg: reg}
+		llm, model, err := tmp.resolveAgentLLM(agentID)
+		if err != nil {
+			slog.Warn("async topology rebuild: resolve LLM", "agent", agentID, "err", err)
+			return
+		}
+		mgr := topology.NewManager(db, agentID)
+		temp := 0.22
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+		err = mgr.Consolidate(func(prompt string) (string, error) {
+			resp, err := llm.Chat(ctx, provider.ChatRequest{
+				Messages: []provider.Message{
+					{Role: "system", Content: "You reply with a single JSON object only. No markdown fences."},
+					{Role: "user", Content: prompt},
+				},
+				Model:       model,
+				Temperature: &temp,
+			})
+			if err != nil {
+				return "", err
+			}
+			if resp == nil {
+				return "", fmt.Errorf("empty LLM response")
+			}
+			return resp.Content, nil
+		})
+		if err != nil {
+			slog.Warn("async topology rebuild: consolidate", "agent", agentID, "err", err)
+			return
+		}
+		slog.Info("async topology rebuild: done", "agent", agentID)
+	}()
 }
 
 func (a *TopologyAPI) resolveAgentLLM(agentID string) (provider.LLMProvider, string, error) {
