@@ -1,14 +1,19 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
+    './index.html',
+    './src/**/*.{js,ts,jsx,tsx}',
   ],
   darkMode: 'class',
   theme: {
     extend: {
+      fontFamily: {
+        display: ['"Young Serif"', '"LXGW WenKai"', 'ui-serif', 'Georgia', 'serif'],
+        sans: ['"Commissioner"', '"LXGW WenKai"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+      },
       colors: {
-        // shadcn/ui token colors (driven by CSS variables)
+        // shadcn/ui token passthroughs (driven by CSS variables in index.css)
         background: 'hsl(var(--background))',
         foreground: 'hsl(var(--foreground))',
         card: 'hsl(var(--card))',
@@ -38,202 +43,164 @@ export default {
         borderToken: 'hsl(var(--border))',
         inputToken: 'hsl(var(--input))',
         ringToken: 'hsl(var(--ring))',
-        // 深色主题色板 - 参考 GNOME/Ubuntu 风格
+
+        // Letterpress palette — named semantically, not by shade.
+        // Values live in index.css :root as OKLCH; Tailwind just references them.
+        paper: 'var(--paper)',
+        page: 'var(--page)',
+        ink: 'var(--ink)',
+        pencil: 'var(--pencil)',
+        rule: 'var(--rule)',
+        'rule-strong': 'var(--rule-strong)',
+        accent: 'var(--accent-ink)',
+        'accent-soft': 'var(--accent-soft)',
+        marginalia: 'var(--marginalia)',
+
+        // Ramps kept for backward compatibility with components still using `primary-500`, etc.
+        // All retuned toward letterpress hues — muted, paper-friendly, never neon.
+        // `/ <alpha-value>` enables Tailwind's `/40` opacity modifier on every shade.
         gray: {
-          50: '#fafafa',
-          100: '#f4f4f5',
-          200: '#e4e4e7',
-          300: '#d4d4d8',
-          400: '#a1a1aa',
-          500: '#71717a',
-          600: '#52525b',
-          700: '#3f3f46',
-          800: '#303030',
-          900: '#242424',
-          950: '#1a1a1a',
+          50:  'oklch(0.985 0.003 310 / <alpha-value>)',
+          100: 'oklch(0.965 0.004 310 / <alpha-value>)',
+          200: 'oklch(0.925 0.006 310 / <alpha-value>)',
+          300: 'oklch(0.870 0.008 310 / <alpha-value>)',
+          400: 'oklch(0.720 0.010 310 / <alpha-value>)',
+          500: 'oklch(0.570 0.012 310 / <alpha-value>)',
+          600: 'oklch(0.450 0.014 310 / <alpha-value>)',
+          700: 'oklch(0.330 0.016 310 / <alpha-value>)',
+          800: 'oklch(0.240 0.018 310 / <alpha-value>)',
+          900: 'oklch(0.180 0.018 310 / <alpha-value>)',
+          950: 'oklch(0.130 0.016 310 / <alpha-value>)',
         },
-        // 深色主题配色 - GNOME 风格
-        cursor: {
-          bg: '#1a1a1a',           // 主背景（更深）
-          surface: '#2d2d2d',       // 表面/面板背景
-          elevated: '#363636',      // 卡片/弹窗背景
-          hover: '#404040',         // 悬停背景
-          border: '#404040',        // 边框（低对比度）
-          input: '#363636',         // 输入框背景
-          text: '#ffffff',          // 主文本（白色）
-          'text-secondary': '#b0b0b0', // 次要文本
-          'text-muted': '#808080',  // 弱化文本
-          selected: '#7c3aed',      // 选中背景（紫色）
-          'selected-text': '#ffffff', // 选中文本
-          accent: '#7c3aed',        // 强调色（紫色）
-          'accent-hover': '#6d28d9', // 强调色悬停
-          switch: '#7c3aed',        // 开关颜色
-        },
+        // primary → aubergine ink (was indigo/purple neon)
         primary: {
-          50: '#eff6ff',
-          100: '#dbeafe',
-          200: '#bfdbfe',
-          300: '#93c5fd',
-          400: '#60a5fa',
-          500: '#3b82f6',
-          600: '#2563eb',
-          700: '#1d4ed8',
-          800: '#1e40af',
-          900: '#1e3a8a',
-          950: '#172554',
+          50:  'oklch(0.975 0.008 310 / <alpha-value>)',
+          100: 'oklch(0.955 0.016 310 / <alpha-value>)',
+          200: 'oklch(0.910 0.030 310 / <alpha-value>)',
+          300: 'oklch(0.820 0.055 310 / <alpha-value>)',
+          400: 'oklch(0.660 0.090 310 / <alpha-value>)',
+          500: 'oklch(0.500 0.115 310 / <alpha-value>)',
+          600: 'oklch(0.400 0.120 310 / <alpha-value>)',
+          700: 'oklch(0.330 0.120 310 / <alpha-value>)',
+          800: 'oklch(0.260 0.110 310 / <alpha-value>)',
+          900: 'oklch(0.200 0.090 310 / <alpha-value>)',
+          950: 'oklch(0.160 0.070 310 / <alpha-value>)',
         },
+        // success → muted sage (was kelly green)
         success: {
-          50: '#f0fdf4',
-          100: '#dcfce7',
-          200: '#bbf7d0',
-          300: '#86efac',
-          400: '#4ade80',
-          500: '#22c55e',
-          600: '#16a34a',
-          700: '#15803d',
-          800: '#166534',
-          900: '#14532d',
-          950: '#052e16',
+          50:  'oklch(0.975 0.015 155 / <alpha-value>)',
+          100: 'oklch(0.950 0.028 155 / <alpha-value>)',
+          200: 'oklch(0.900 0.045 155 / <alpha-value>)',
+          300: 'oklch(0.820 0.065 155 / <alpha-value>)',
+          400: 'oklch(0.700 0.080 155 / <alpha-value>)',
+          500: 'oklch(0.570 0.090 155 / <alpha-value>)',
+          600: 'oklch(0.480 0.085 155 / <alpha-value>)',
+          700: 'oklch(0.400 0.075 155 / <alpha-value>)',
+          800: 'oklch(0.320 0.060 155 / <alpha-value>)',
+          900: 'oklch(0.250 0.045 155 / <alpha-value>)',
+          950: 'oklch(0.180 0.030 155 / <alpha-value>)',
         },
+        // warning → ochre (was saturated amber)
         warning: {
-          50: '#fffbeb',
-          100: '#fef3c7',
-          200: '#fde68a',
-          300: '#fcd34d',
-          400: '#fbbf24',
-          500: '#f59e0b',
-          600: '#d97706',
-          700: '#b45309',
-          800: '#92400e',
-          900: '#78350f',
-          950: '#451a03',
+          50:  'oklch(0.980 0.015 75 / <alpha-value>)',
+          100: 'oklch(0.955 0.035 75 / <alpha-value>)',
+          200: 'oklch(0.910 0.065 75 / <alpha-value>)',
+          300: 'oklch(0.840 0.100 75 / <alpha-value>)',
+          400: 'oklch(0.740 0.120 75 / <alpha-value>)',
+          500: 'oklch(0.640 0.120 75 / <alpha-value>)',
+          600: 'oklch(0.540 0.110 75 / <alpha-value>)',
+          700: 'oklch(0.450 0.095 75 / <alpha-value>)',
+          800: 'oklch(0.360 0.075 75 / <alpha-value>)',
+          900: 'oklch(0.280 0.060 75 / <alpha-value>)',
+          950: 'oklch(0.200 0.040 75 / <alpha-value>)',
         },
+        // error → muted brick (was fire-engine red)
         error: {
-          50: '#fef2f2',
-          100: '#fee2e2',
-          200: '#fecaca',
-          300: '#fca5a5',
-          400: '#f87171',
-          500: '#ef4444',
-          600: '#dc2626',
-          700: '#b91c1c',
-          800: '#991b1b',
-          900: '#7f1d1d',
-          950: '#450a0a',
+          50:  'oklch(0.975 0.012 25 / <alpha-value>)',
+          100: 'oklch(0.950 0.028 25 / <alpha-value>)',
+          200: 'oklch(0.900 0.055 25 / <alpha-value>)',
+          300: 'oklch(0.820 0.090 25 / <alpha-value>)',
+          400: 'oklch(0.700 0.130 25 / <alpha-value>)',
+          500: 'oklch(0.580 0.150 25 / <alpha-value>)',
+          600: 'oklch(0.480 0.135 25 / <alpha-value>)',
+          700: 'oklch(0.400 0.115 25 / <alpha-value>)',
+          800: 'oklch(0.320 0.090 25 / <alpha-value>)',
+          900: 'oklch(0.250 0.070 25 / <alpha-value>)',
+          950: 'oklch(0.180 0.050 25 / <alpha-value>)',
         },
+        // info → pencil blue-gray (was sky)
         info: {
-          50: '#f0f9ff',
-          100: '#e0f2fe',
-          200: '#bae6fd',
-          300: '#7dd3fc',
-          400: '#38bdf8',
-          500: '#0ea5e9',
-          600: '#0284c7',
-          700: '#0369a1',
-          800: '#075985',
-          900: '#0c4a6e',
-          950: '#082f49',
+          50:  'oklch(0.975 0.010 245 / <alpha-value>)',
+          100: 'oklch(0.950 0.020 245 / <alpha-value>)',
+          200: 'oklch(0.905 0.035 245 / <alpha-value>)',
+          300: 'oklch(0.820 0.055 245 / <alpha-value>)',
+          400: 'oklch(0.700 0.075 245 / <alpha-value>)',
+          500: 'oklch(0.560 0.090 245 / <alpha-value>)',
+          600: 'oklch(0.470 0.085 245 / <alpha-value>)',
+          700: 'oklch(0.390 0.075 245 / <alpha-value>)',
+          800: 'oklch(0.310 0.060 245 / <alpha-value>)',
+          900: 'oklch(0.240 0.045 245 / <alpha-value>)',
+          950: 'oklch(0.170 0.030 245 / <alpha-value>)',
         },
-        // 萤绿色 - GMGN 主色调
+        // neon (legacy alias) — now quietly collapsed to the sage scale. Use sparingly.
         neon: {
-          50: '#f0fff4',
-          100: '#dcfce7',
-          200: '#bbf7d0',
-          300: '#86efac',
-          400: '#4ade80',
-          500: '#00ff88',  // 主萤绿色
-          600: '#00e67a',
-          700: '#00cc6d',
-          800: '#00994f',
-          900: '#006633',
-          950: '#003d1f',
+          50:  'oklch(0.975 0.015 155 / <alpha-value>)',
+          100: 'oklch(0.950 0.028 155 / <alpha-value>)',
+          200: 'oklch(0.900 0.045 155 / <alpha-value>)',
+          300: 'oklch(0.820 0.065 155 / <alpha-value>)',
+          400: 'oklch(0.700 0.080 155 / <alpha-value>)',
+          500: 'oklch(0.570 0.090 155 / <alpha-value>)',
+          600: 'oklch(0.480 0.085 155 / <alpha-value>)',
+          700: 'oklch(0.400 0.075 155 / <alpha-value>)',
+          800: 'oklch(0.320 0.060 155 / <alpha-value>)',
+          900: 'oklch(0.250 0.045 155 / <alpha-value>)',
+          950: 'oklch(0.180 0.030 155 / <alpha-value>)',
         },
       },
-      backgroundImage: {
-        'gradient-primary': 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        'gradient-success': 'linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%)',
-        'gradient-warning': 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
-        'gradient-info': 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
-        'gradient-purple': 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        'gradient-blue': 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        'gradient-rainbow': 'linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%)',
+      spacing: {
+        // 4pt scale, semantic sizes are set via CSS vars but these aliases help in Tailwind classes.
+        'gutter': 'var(--space-gutter)',
+        'column': 'var(--space-column)',
       },
-      animation: {
-        'fade-in': 'fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
-        'fade-in-up': 'fadeInUp 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
-        'fade-in-down': 'fadeInDown 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
-        'slide-in-right': 'slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
-        'slide-in-left': 'slideInLeft 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
-        'scale-in': 'scaleIn 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
-        'bounce-in': 'bounceIn 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55)',
-        'pulse-soft': 'pulseSoft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-        'shimmer': 'shimmer 2s infinite',
-        'rotate-in': 'rotateIn 0.5s cubic-bezier(0.16, 1, 0.3, 1)',
-        'skeleton': 'skeleton-loading 1.5s ease-in-out infinite',
-      },
-      keyframes: {
-        fadeIn: {
-          'from': { opacity: '0', transform: 'translateY(4px)' },
-          'to': { opacity: '1', transform: 'translateY(0)' },
-        },
-        fadeInUp: {
-          'from': { opacity: '0', transform: 'translateY(12px)' },
-          'to': { opacity: '1', transform: 'translateY(0)' },
-        },
-        fadeInDown: {
-          'from': { opacity: '0', transform: 'translateY(-12px)' },
-          'to': { opacity: '1', transform: 'translateY(0)' },
-        },
-        slideInRight: {
-          'from': { opacity: '0', transform: 'translateX(20px)' },
-          'to': { opacity: '1', transform: 'translateX(0)' },
-        },
-        slideInLeft: {
-          'from': { opacity: '0', transform: 'translateX(-20px)' },
-          'to': { opacity: '1', transform: 'translateX(0)' },
-        },
-        scaleIn: {
-          'from': { opacity: '0', transform: 'scale(0.95)' },
-          'to': { opacity: '1', transform: 'scale(1)' },
-        },
-        bounceIn: {
-          '0%': { opacity: '0', transform: 'scale(0.3)' },
-          '50%': { opacity: '1', transform: 'scale(1.05)' },
-          '70%': { transform: 'scale(0.9)' },
-          '100%': { transform: 'scale(1)' },
-        },
-        pulseSoft: {
-          '0%, 100%': { opacity: '1' },
-          '50%': { opacity: '0.7' },
-        },
-        shimmer: {
-          '0%': { backgroundPosition: '-200% 0' },
-          '100%': { backgroundPosition: '200% 0' },
-        },
-        rotateIn: {
-          'from': { opacity: '0', transform: 'rotate(-180deg) scale(0.8)' },
-          'to': { opacity: '1', transform: 'rotate(0) scale(1)' },
-        },
-        'skeleton-loading': {
-          '0%': { backgroundPosition: '200% 0' },
-          '100%': { backgroundPosition: '-200% 0' },
-        },
-      },
-      transitionTimingFunction: {
-        'smooth': 'cubic-bezier(0.16, 1, 0.3, 1)',
-        'bounce-out': 'cubic-bezier(0.68, -0.55, 0.265, 1.55)',
-        'ease-out-expo': 'cubic-bezier(0.16, 1, 0.3, 1)',
+      borderRadius: {
+        'nib': '2px',   // pen-nib corners — barely rounded
+        'leaf': '10px', // default rounded surface
+        'sheet': '18px',
       },
       boxShadow: {
-        'soft': '0 2px 8px rgba(0, 0, 0, 0.04)',
-        'medium': '0 4px 16px rgba(0, 0, 0, 0.08)',
-        'large': '0 8px 32px rgba(0, 0, 0, 0.12)',
-        'glow-primary': '0 0 20px rgba(37, 99, 235, 0.3)',
-        'glow-success': '0 0 20px rgba(34, 197, 94, 0.3)',
-        'glow-warning': '0 0 20px rgba(245, 158, 11, 0.3)',
-        'glow-error': '0 0 20px rgba(239, 68, 68, 0.3)',
-        'glow-neon': '0 0 20px rgba(0, 255, 136, 0.3)',
-        'glow-neon-lg': '0 0 30px rgba(0, 255, 136, 0.4)',
+        // Letterpress-style depth. No glows, no heavy drops.
+        'press': '0 1px 0 0 var(--rule) inset',
+        'sheet': '0 1px 2px oklch(0.18 0.02 310 / 0.06), 0 1px 0 0 var(--rule) inset',
+        'lift':  '0 2px 4px oklch(0.18 0.02 310 / 0.06), 0 8px 24px oklch(0.18 0.02 310 / 0.04)',
+      },
+      transitionTimingFunction: {
+        // Only ease-out curves. No bounce, no elastic.
+        'quart': 'cubic-bezier(0.22, 1, 0.36, 1)',
+        'quint': 'cubic-bezier(0.23, 1, 0.32, 1)',
+        'expo':  'cubic-bezier(0.19, 1, 0.22, 1)',
+      },
+      transitionDuration: {
+        'settle': '220ms',
+        'drift':  '360ms',
+      },
+      animation: {
+        'settle-in': 'settleIn 220ms cubic-bezier(0.22, 1, 0.36, 1) both',
+        'rise-in':   'riseIn 260ms cubic-bezier(0.22, 1, 0.36, 1) both',
+        'ink-pulse': 'inkPulse 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+      },
+      keyframes: {
+        settleIn: {
+          from: { opacity: '0', transform: 'translateY(3px)' },
+          to:   { opacity: '1', transform: 'translateY(0)' },
+        },
+        riseIn: {
+          from: { opacity: '0', transform: 'translateY(6px)' },
+          to:   { opacity: '1', transform: 'translateY(0)' },
+        },
+        inkPulse: {
+          '0%, 100%': { opacity: '1' },
+          '50%':      { opacity: '0.72' },
+        },
       },
     },
   },

@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Chaya · 我养的 · Agents</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Young+Serif&family=Commissioner:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/style.css" rel="stylesheet">
+<link rel="stylesheet" href="./_shared.css">
+<style>
+  .content { padding: 36px 48px 80px; }
+  .intro { max-width: 60ch; margin-bottom: 36px; }
+  .intro .overline { font-size: 11px; letter-spacing: 0.24em; color: var(--pencil); text-transform: uppercase; margin-bottom: 8px; }
+  .intro h2 { font-family: var(--display); font-size: 22px; color: var(--ink-strong); font-weight: 400; line-height: 1.35; }
+  .intro p { margin-top: 10px; color: var(--pencil); font-size: 13.5px; line-height: 1.7; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; }
+  .card { background: var(--page-elev); padding: 22px 22px 18px; position: relative; cursor: pointer; transition: background 180ms var(--ease); min-height: 180px; display: flex; flex-direction: column; }
+  .card:hover { background: color-mix(in oklch, var(--accent) 4%, var(--page-elev)); }
+  .card .num { position: absolute; top: 14px; right: 18px; font-family: var(--display); font-size: 11px; color: var(--pencil-soft); letter-spacing: 0.05em; }
+  .card .glyph {
+    width: 46px; height: 46px; display: flex; align-items: center; justify-content: center;
+    font-family: var(--display); font-size: 22px; color: var(--accent);
+    background: var(--paper); border: 1px solid var(--rule-strong);
+    box-shadow: inset 0 0 0 3px var(--page-elev), inset 0 0 0 4px var(--accent);
+    border-radius: 2px;
+    margin-bottom: 14px;
+  }
+  .card.primary .glyph { background: var(--accent); color: var(--paper); box-shadow: inset 0 0 0 3px var(--accent), inset 0 0 0 4px var(--paper); }
+  .card h3 { font-family: var(--display); font-size: 18px; color: var(--ink-strong); font-weight: 400; line-height: 1.2; }
+  .card .role { font-family: var(--display); font-style: italic; font-size: 12.5px; color: var(--pencil); margin-top: 4px; }
+  .card .blurb { margin-top: 12px; font-size: 13px; color: var(--pencil); line-height: 1.6; flex: 1; }
+  .card .meta-row { margin-top: 14px; padding-top: 12px; border-top: 1px dotted var(--rule-strong); display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--pencil-soft); font-family: var(--mono); letter-spacing: 0.04em; }
+  .card .meta-row .left { display: flex; gap: 8px; align-items: center; }
+  .card .last { font-style: italic; font-family: var(--display); color: var(--pencil); }
+  .card-primary-note { position: absolute; top: 14px; left: 18px; font-family: var(--display); font-style: italic; font-size: 11px; color: var(--marginalia-ink); }
+  /* new card */
+  .card.new-card { display: flex; align-items: center; justify-content: center; background: transparent; border: 2px dashed var(--rule-strong); color: var(--pencil); cursor: pointer; text-align: center; padding: 24px; min-height: 180px; }
+  .card.new-card:hover { border-color: var(--accent); color: var(--accent); background: transparent; }
+  .card.new-card .plus { font-family: var(--display); font-size: 26px; line-height: 1; color: var(--accent); margin-bottom: 8px; }
+  .card.new-card .t { font-family: var(--display); font-size: 14px; }
+  .card.new-card .s { font-size: 11px; color: var(--pencil-soft); margin-top: 4px; letter-spacing: 0.04em; font-family: var(--mono); }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="wordmark">Chaya<span>.</span></div>
+    <div class="tagline">手作 · 一个慢 AI</div>
+    <svg class="hand-rule" width="96" height="8" viewBox="0 0 96 8" fill="none"><path d="M1 4.2 C 16 2.6, 32 5.8, 48 3.8 S 80 2.2, 95 4.6" stroke="var(--accent)" stroke-width="1.2" stroke-linecap="round" stroke-opacity="0.7" fill="none"/></svg>
+
+    <div class="side-label">章节</div>
+    <div class="side-nav">
+      <a class="nav-item active"><span class="num">01</span><span class="name">我养的</span><span class="sub">4</span></a>
+      <a class="nav-item" href="./a-agent-detail.html"><span class="num">02</span><span class="name">人设</span><span class="sub">—</span></a>
+      <a class="nav-item" href="./a-llm-configs.html"><span class="num">03</span><span class="name">模型</span><span class="sub">3</span></a>
+      <a class="nav-item" href="./a-knowledge-base.html"><span class="num">04</span><span class="name">知识</span><span class="sub">12</span></a>
+      <a class="nav-item" href="./a-create.html"><span class="num">05</span><span class="name">创作</span><span class="sub">画</span></a>
+      <a class="nav-item" href="./a-gallery.html"><span class="num">06</span><span class="name">作品集</span><span class="sub">47</span></a>
+      <a class="nav-item" href="./a-settings.html"><span class="num">07</span><span class="name">设置</span><span class="sub">—</span></a>
+    </div>
+
+    <div class="side-label">最近的信</div>
+    <div class="side-nav">
+      <a class="nav-item"><span class="num">—</span><span class="name">一间小铺子</span><span class="sub">今</span></a>
+      <a class="nav-item"><span class="num">—</span><span class="name">明朝家具</span><span class="sub">昨</span></a>
+      <a class="nav-item"><span class="num">—</span><span class="name">东京本屋</span><span class="sub">3d</span></a>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <div class="crumb">Chapter One · Book of Companions</div>
+        <h1>我养的</h1>
+        <p class="subtitle">你给它名字、口气、记得的事。它就慢慢长成一个只给你用的伙伴。</p>
+      </div>
+      <div class="top-actions">
+        <span class="meta">04 / 共 04</span>
+        <button class="btn">+ 新养一只</button>
+      </div>
+    </header>
+
+    <section class="content">
+      <div class="grid">
+        <article class="card primary">
+          <div class="card-primary-note">本命</div>
+          <div class="num">01</div>
+          <div class="glyph">茶</div>
+          <h3>阿茶</h3>
+          <div class="role">陪你慢慢想事情</div>
+          <p class="blurb">有点像午后半醒半睡的朋友。不急着给答案，先问你真正在怕什么。</p>
+          <div class="meta-row">
+            <div class="left"><span class="dot ok"></span>在线 · GPT-4o</div>
+            <span class="last">刚刚</span>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="num">02</div>
+          <div class="glyph">史</div>
+          <h3>小史</h3>
+          <div class="role">替你读那些读不完的书</div>
+          <p class="blurb">吞 PDF、吐要点。专门处理你积着没看的长文档。</p>
+          <div class="meta-row">
+            <div class="left"><span class="dot"></span>闲着 · Claude 4.5</div>
+            <span class="last">12 分钟前</span>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="num">03</div>
+          <div class="glyph">L</div>
+          <h3>Ledger</h3>
+          <div class="role">记账小本子</div>
+          <p class="blurb">记每一笔小钱，月末提醒你看看自己到底把钱花在了什么上面。</p>
+          <div class="meta-row">
+            <div class="left"><span class="dot warn"></span>等你 · Gemini 2.0</div>
+            <span class="last">2 小时前</span>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="num">04</div>
+          <div class="glyph">燕</div>
+          <h3>燕归</h3>
+          <div class="role">找东西的</div>
+          <p class="blurb">你说一句"我前阵子不是写过一个关于……"，它就能翻出来那段话。</p>
+          <div class="meta-row">
+            <div class="left"><span class="dot"></span>闲着 · GPT-4o-mini</div>
+            <span class="last">昨天</span>
+          </div>
+        </article>
+
+        <article class="card new-card">
+          <div>
+            <div class="plus">＋</div>
+            <div class="t">再养一只</div>
+            <div class="s">NEW COMPANION</div>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+</div>
+</body>
+</html>

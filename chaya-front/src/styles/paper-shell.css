@@ -1,0 +1,288 @@
+/* ================================================================
+   Paper App Shell — new sidebar + main layout.
+   Matches mockups/a-*.html. Replaces .app-sidebar / .app-frame JSX.
+   ================================================================ */
+.pshell {
+  display: grid;
+  grid-template-columns: 248px 1fr;
+  height: 100vh;
+  width: 100vw;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Commissioner', 'LXGW WenKai', ui-sans-serif, system-ui, sans-serif;
+  overflow: hidden;
+}
+
+/* ---------- Sidebar ---------- */
+.pshell-side {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--rule);
+  padding: 26px 18px 12px;
+  gap: 6px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: color-mix(in oklch, var(--paper) 60%, var(--page));
+}
+
+.pshell-brand {
+  padding: 0 4px 6px;
+}
+.pshell-wordmark {
+  font-family: 'Young Serif', 'LXGW WenKai', ui-serif, Georgia, serif;
+  font-size: 28px;
+  line-height: 1;
+  color: var(--ink-strong);
+  letter-spacing: -0.01em;
+}
+.pshell-wordmark span { color: var(--accent-ink); }
+.pshell-tagline {
+  font-size: 10.5px;
+  color: var(--pencil);
+  margin-top: 6px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+.paper-hand-rule {
+  margin: 16px 0 18px;
+  display: block;
+}
+
+/* ---------- Section ---------- */
+.pshell-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 2px;
+}
+.pshell-section-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 4px;
+}
+.pshell-label {
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  color: var(--pencil-soft);
+  text-transform: uppercase;
+  margin: 20px 8px 8px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.pshell-plus {
+  background: transparent;
+  border: 0;
+  color: var(--accent-ink);
+  font-family: 'Young Serif', 'LXGW WenKai', ui-serif, serif;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: color 180ms cubic-bezier(0.22,1,0.36,1), background 180ms cubic-bezier(0.22,1,0.36,1);
+}
+.pshell-plus:hover:not(:disabled) {
+  color: var(--accent-ink-h);
+  background: color-mix(in oklch, var(--accent-ink) 10%, transparent);
+}
+.pshell-plus:disabled { opacity: 0.4; cursor: progress; }
+
+/* ---------- Chapters ---------- */
+.pshell-nav { display: flex; flex-direction: column; gap: 1px; }
+.pshell-nav-item {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--pencil);
+  font-family: 'Young Serif', 'LXGW WenKai', ui-serif, serif;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 3px;
+  align-items: baseline;
+  transition: background 180ms cubic-bezier(0.22,1,0.36,1), color 180ms cubic-bezier(0.22,1,0.36,1);
+}
+.pshell-nav-item:hover {
+  color: var(--ink);
+  background: color-mix(in oklch, var(--ink) 3%, transparent);
+}
+.pshell-nav-item.is-active {
+  color: var(--ink-strong);
+  background: color-mix(in oklch, var(--accent-ink) 8%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent-ink);
+  font-weight: 500;
+}
+.pshell-nav-item .n {
+  font-size: 11px;
+  color: var(--pencil-soft);
+  text-align: right;
+}
+.pshell-nav-item.is-active .n { color: var(--accent-ink); }
+.pshell-nav-item .name { font-size: 14px; letter-spacing: 0.01em; }
+.pshell-nav-item .sub {
+  font-size: 10.5px;
+  color: var(--pencil-soft);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  letter-spacing: 0.04em;
+}
+.pshell-nav-item.is-active .sub { color: var(--accent-ink); }
+
+/* ---------- Agents list under sidebar ---------- */
+.pshell-agents {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 2px;
+}
+.pshell-agent {
+  display: grid;
+  grid-template-columns: 24px 1fr auto auto;
+  gap: 10px;
+  padding: 7px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--pencil);
+  font-family: 'Young Serif', 'LXGW WenKai', ui-serif, serif;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 2px;
+  align-items: center;
+  position: relative;
+  transition: background 180ms cubic-bezier(0.22,1,0.36,1), color 180ms cubic-bezier(0.22,1,0.36,1);
+}
+.pshell-agent:hover {
+  color: var(--ink);
+  background: color-mix(in oklch, var(--ink) 3%, transparent);
+}
+.pshell-agent.is-active {
+  color: var(--ink-strong);
+  background: color-mix(in oklch, var(--accent-ink) 8%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent-ink);
+  font-weight: 500;
+}
+.pshell-agent-gly {
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'Young Serif', 'LXGW WenKai', ui-serif, serif;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--accent-ink);
+  background: var(--page-elev);
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 2px var(--page-elev), inset 0 0 0 2.5px var(--accent-ink);
+  flex-shrink: 0;
+}
+.pshell-agent.is-primary .pshell-agent-gly {
+  background: var(--accent-ink);
+  color: var(--paper);
+  box-shadow: inset 0 0 0 2px var(--accent-ink), inset 0 0 0 2.5px var(--paper);
+}
+.pshell-agent-gly--topic {
+  background: transparent;
+  color: var(--pencil-soft);
+  box-shadow: none;
+  border: 0;
+  font-size: 14px;
+}
+.pshell-agent-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.pshell-agent-sub {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--pencil-soft);
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+.pshell-agent.is-active .pshell-agent-sub { color: var(--accent-ink); }
+.pshell-agent-del {
+  background: transparent;
+  border: 0;
+  color: var(--pencil-soft);
+  padding: 0 4px;
+  cursor: pointer;
+  opacity: 0;
+  font-size: 14px;
+  line-height: 1;
+  transition: opacity 180ms cubic-bezier(0.22,1,0.36,1), color 180ms cubic-bezier(0.22,1,0.36,1);
+}
+.pshell-agent:hover .pshell-agent-del { opacity: 0.6; }
+.pshell-agent-del:hover { opacity: 1 !important; color: var(--status-error); }
+
+/* ---------- Footer ---------- */
+.pshell-foot {
+  margin-top: auto;
+  padding: 12px 8px 4px;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.pshell-foot-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+.pshell-foot-user-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent-ink);
+  flex-shrink: 0;
+}
+.pshell-foot-user-name {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px;
+  color: var(--pencil);
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pshell-foot-tools {
+  display: inline-flex;
+  gap: 2px;
+}
+.pshell-foot-btn {
+  background: transparent;
+  border: 0;
+  color: var(--pencil);
+  padding: 4px 6px;
+  cursor: pointer;
+  font-size: 13px;
+  border-radius: 2px;
+  transition: color 180ms cubic-bezier(0.22,1,0.36,1), background 180ms cubic-bezier(0.22,1,0.36,1);
+}
+.pshell-foot-btn:hover {
+  color: var(--accent-ink);
+  background: color-mix(in oklch, var(--accent-ink) 8%, transparent);
+}
+
+/* ---------- Main canvas ---------- */
+.pshell-main {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+}
+
+/* Dark mode adjustment (inherits from :root dark variant) */
+[data-theme-mode="dark"] .pshell,
+[data-skin="quiet"][data-theme-mode="dark"] .pshell {
+  background: var(--paper);
+}
