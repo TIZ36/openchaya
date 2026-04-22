@@ -1,15 +1,25 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { mediaApi, type MediaOutputItem, type ModelRegistryEntry } from '../services/mediaApi';
+import { mediaApi, type MediaOutputItem } from '../services/mediaApi';
 import { getLLMConfigs, type LLMConfigFromDB } from '../services/llmApi';
 import { toast } from './ui/use-toast';
 import { PaperPage, PaperTopbar, PaperContent } from './paper';
+import { loadBlurredSet, saveBlurredSet, BLURRED_IMG_CSS } from '../utils/blurred';
 
 /* ============================================================
    创作 / Atelier — aligned with mockups/a-create.html
    ============================================================ */
 
-const STYLES: { id: string; zh: string; en: string; suffix: string }[] = [
+interface StylePreset {
+  id: string;
+  zh: string;
+  en?: string;
+  suffix: string;
+  /** true = user-saved; false/undefined = built-in. */
+  custom?: boolean;
+}
+
+const BUILTIN_STYLES: StylePreset[] = [
   { id: 'ink',    zh: '水墨',   en: 'INK',    suffix: 'chinese ink painting, traditional brushwork, on rice paper' },
   { id: 'oil',    zh: '油画',   en: 'OIL',    suffix: 'oil painting, thick impasto, classical composition' },
   { id: 'photo',  zh: '照片',   en: 'PHOTO',  suffix: 'photorealistic, 35mm film, natural lighting' },
@@ -18,11 +28,43 @@ const STYLES: { id: string; zh: string; en: string; suffix: string }[] = [
   { id: 'jp',     zh: '日式',   en: 'JP',     suffix: 'Japanese woodblock print style, ukiyo-e influence' },
 ];
 
-const SIZES: { id: string; label: string; kind: 'square' | 'landscape' | 'portrait'; aspect: string }[] = [
-  { id: '1:1',  label: '1:1',  kind: 'square',    aspect: '1:1' },
-  { id: '3:2',  label: '3:2',  kind: 'landscape', aspect: '3:2' },
-  { id: '2:3',  label: '2:3',  kind: 'portrait',  aspect: '2:3' },
-  { id: '16:9', label: '16:9', kind: 'landscape', aspect: '16:9' },
+const LS_CUSTOM_STYLES = 'chaya_style_presets';
+
+function loadCustomStyles(): StylePreset[] {
+  try {
+    const raw = localStorage.getItem(LS_CUSTOM_STYLES);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((x) => x && typeof x.id === 'string' && typeof x.zh === 'string' && typeof x.suffix === 'string')
+      .map((x) => ({ ...x, custom: true as const }));
+  } catch { return []; }
+}
+
+function saveCustomStyles(list: StylePreset[]): void {
+  try {
+    const plain = list.map(({ id, zh, en, suffix }) => ({ id, zh, en, suffix }));
+    localStorage.setItem(LS_CUSTOM_STYLES, JSON.stringify(plain));
+  } catch { /* ignore */ }
+}
+
+
+/**
+ * Aspect ratios supported by Gemini image models (gemini-2.5-flash-image
+ * aka "nano-banana" and friends). Passed as-is to the REST
+ * `generationConfig.imageConfig.aspectRatio` field — the backend does no
+ * translation.
+ */
+const SIZES: { id: string; label: string; kind: 'square' | 'landscape' | 'portrait' }[] = [
+  { id: '1:1',  label: '1:1',  kind: 'square' },
+  { id: '4:3',  label: '4:3',  kind: 'landscape' },
+  { id: '3:4',  label: '3:4',  kind: 'portrait' },
+  { id: '16:9', label: '16:9', kind: 'landscape' },
+  { id: '9:16', label: '9:16', kind: 'portrait' },
+  { id: '3:2',  label: '3:2',  kind: 'landscape' },
+  { id: '2:3',  label: '2:3',  kind: 'portrait' },
+  { id: '21:9', label: '21:9', kind: 'landscape' },
 ];
 
 interface Batch {
@@ -43,6 +85,8 @@ interface RefImage {
   mimeType: string;
   name: string;
   source: 'upload' | 'paste' | 'gallery' | 'remix';
+  /** Per-image directive. E.g. "#1: 用它的脸" */
+  directive: string;
 }
 
 const MAX_REF_IMAGES = 6;
@@ -59,41 +103,58 @@ const readAsDataUrl = (file: File | Blob): Promise<string> =>
 const CreatePage: React.FC = () => {
   const [prompt, setPrompt] = useState('');
   const [negative, setNegative] = useState('');
-  const [styleId, setStyleId] = useState('ink');
+  const [styleId, setStyleId] = useState('');
+  /** Editable free-form style suffix. Starts synced with the preset,
+   *  but user can rewrite / extend. */
+  const [styleText, setStyleText] = useState<string>('');
+  const [customStyles, setCustomStyles] = useState<StylePreset[]>(() => loadCustomStyles());
+  const [blurredIds, setBlurredIds] = useState<Set<string>>(() => loadBlurredSet());
+  const toggleBlur = (outputId: string) => {
+    setBlurredIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(outputId)) next.delete(outputId);
+      else next.add(outputId);
+      saveBlurredSet(next);
+      return next;
+    });
+  };
+  const [styleSaveOpen, setStyleSaveOpen] = useState(false);
+  const [styleSaveName, setStyleSaveName] = useState('');
   const [sizeId, setSizeId] = useState('1:1');
   const [count, setCount] = useState(4);
-  const [seed, setSeed] = useState('');
-  const [modelId, setModelId] = useState<string>('');
-  const [providers, setProviders] = useState<ModelRegistryEntry[]>([]);
+  /** Selected config id (= llm_configs.id). Empty = none selected yet. */
+  const [selectedConfigId, setSelectedConfigId] = useState<string>('');
   const [configs, setConfigs] = useState<LLMConfigFromDB[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [recentOutputs, setRecentOutputs] = useState<MediaOutputItem[]>([]);
-  const [submitting, setSubmitting] = useState(false);
+  const [inflight, setInflight] = useState(0);
+  const submitting = inflight > 0;
 
   const [refImages, setRefImages] = useState<RefImage[]>([]);
-  const [refDirective, setRefDirective] = useState('');
+  const [lightbox, setLightbox] = useState<RefImage | null>(null);
+  /** Preview dialog for plates in the result grid. */
+  const [preview, setPreview] = useState<MediaOutputItem | null>(null);
   const refFileInput = useRef<HTMLInputElement>(null);
   const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const styleSectionRef = useRef<HTMLDivElement>(null);
+  const refsSectionRef = useRef<HTMLDivElement>(null);
 
   const location = useLocation();
   const navigate = useNavigate();
 
-  const loadProviders = useCallback(async () => {
-    try {
-      const data = await mediaApi.getProviders();
-      const models = (data.model_registry || []).filter((m) => m.image);
-      setProviders(models);
-      if (!modelId && models.length > 0) {
-        const rec = models.find((m) => m.recommended) || models[0];
-        setModelId(rec.label);
-      }
-    } catch {/* */}
-  }, [modelId]);
-
   const loadConfigs = useCallback(async () => {
     try {
       const list = await getLLMConfigs();
-      setConfigs(list.filter((c) => c.enabled && c.media_visible));
+      // Only Gemini providers support image gen right now, and only the ones
+      // marked "创作可见" in ModelsPage should show up here.
+      const usable = list.filter((c) => c.enabled && c.media_visible && c.provider === 'gemini');
+      setConfigs(usable);
+      // Auto-select first if nothing picked yet — or if the previously picked
+      // one no longer qualifies (user removed media_visible).
+      setSelectedConfigId((prev) => {
+        if (prev && usable.some((c) => c.config_id === prev)) return prev;
+        return usable[0]?.config_id || '';
+      });
     } catch {/* */}
   }, []);
 
@@ -105,6 +166,70 @@ const CreatePage: React.FC = () => {
   }, []);
 
   /* ---------- reference images ---------- */
+
+  /* ---------- style presets: custom + builtin ---------- */
+
+  const allStyles: StylePreset[] = useMemo(
+    () => [...BUILTIN_STYLES, ...customStyles],
+    [customStyles],
+  );
+
+  const styleAlreadySaved = useMemo(() => {
+    const t = styleText.trim();
+    if (!t) return false;
+    return allStyles.some((s) => s.suffix.trim() === t);
+  }, [styleText, allStyles]);
+
+  /** Short label for the style chip shown next to the prompt:
+   *  prefer the saved preset's zh name, else first few English words, else "自定义"。 */
+  const currentStyleLabel: string = useMemo(() => {
+    const t = styleText.trim();
+    if (!t) return '';
+    const match = allStyles.find((s) => s.suffix.trim() === t);
+    if (match) return match.zh;
+    const firstWords = t.split(/[,，.。]/)[0].trim();
+    return firstWords.length > 14 ? firstWords.slice(0, 14) + '…' : (firstWords || '自定义');
+  }, [styleText, allStyles]);
+
+  const openSaveStyle = () => {
+    if (!styleText.trim()) {
+      toast({ title: '写点风格先', description: '上面的 textarea 空着，存什么？', variant: 'destructive' });
+      return;
+    }
+    if (styleAlreadySaved) {
+      toast({ title: '这个已经存过了' });
+      return;
+    }
+    setStyleSaveName('');
+    setStyleSaveOpen(true);
+  };
+
+  const saveStyle = () => {
+    const name = styleSaveName.trim();
+    if (!name) { toast({ title: '给它起个名字', variant: 'destructive' }); return; }
+    const suffix = styleText.trim();
+    if (!suffix) { setStyleSaveOpen(false); return; }
+    const id = `u-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const next: StylePreset = { id, zh: name, suffix, custom: true };
+    const list = [...customStyles, next];
+    setCustomStyles(list);
+    saveCustomStyles(list);
+    setStyleId(id);
+    setStyleSaveOpen(false);
+    setStyleSaveName('');
+    toast({ title: `存好了「${name}」`, variant: 'success' });
+  };
+
+  const removeCustomStyle = (id: string) => {
+    const target = customStyles.find((s) => s.id === id);
+    if (!target) return;
+    if (!confirm(`删掉「${target.zh}」？`)) return;
+    const list = customStyles.filter((s) => s.id !== id);
+    setCustomStyles(list);
+    saveCustomStyles(list);
+    if (styleId === id) setStyleId('');
+    toast({ title: '删了' });
+  };
 
   const addRefBlob = useCallback(async (
     blob: Blob,
@@ -130,6 +255,7 @@ const CreatePage: React.FC = () => {
         mimeType: mime,
         name,
         source,
+        directive: '',
       }]);
       return true;
     } catch {
@@ -151,6 +277,9 @@ const CreatePage: React.FC = () => {
   };
 
   const removeRef = (id: string) => setRefImages((prev) => prev.filter((r) => r.id !== id));
+
+  const setRefDirective = (id: string, directive: string) =>
+    setRefImages((prev) => prev.map((r) => (r.id === id ? { ...r, directive } : r)));
 
   const moveRef = (id: string, dir: -1 | 1) => {
     setRefImages((prev) => {
@@ -224,81 +353,216 @@ const CreatePage: React.FC = () => {
   }, [location.state]);
 
   useEffect(() => {
-    void loadProviders();
     void loadConfigs();
     void loadRecent();
-  }, [loadProviders, loadConfigs, loadRecent]);
+  }, [loadConfigs, loadRecent]);
 
-  const selectedModel = providers.find((m) => m.label === modelId);
+  /** The picked LLM config — real DB row, not a registry entry. */
+  const selectedConfig = configs.find((c) => c.config_id === selectedConfigId) || null;
+  /** Display label for meta (falls back to registry match if config not picked). */
+  const selectedModelLabel = selectedConfig
+    ? (selectedConfig.shortname || selectedConfig.model || selectedConfig.name)
+    : '';
 
   const costEstimate = count * 0.2;
 
-  /** Compose the final prompt: user text + style suffix + ref directive + ref-numbering hint. */
+  /** Compose the final prompt: user text + style suffix + per-ref directives. */
   const finalPromptForSubmit = useMemo(() => {
     const base = prompt.trim();
     if (!base) return '';
     const parts: string[] = [base];
-    const style = STYLES.find((s) => s.id === styleId);
-    if (style) parts.push(style.suffix);
+    const style = styleText.trim();
+    if (style) parts.push(style);
     if (negative.trim()) parts.push(`(avoid: ${negative.trim()})`);
     if (refImages.length > 0) {
       const labels = refImages.map((_, i) => `#${i + 1}`).join(' / ');
       parts.push(`(refs: ${labels})`);
-      if (refDirective.trim()) parts.push(`(how to use refs: ${refDirective.trim()})`);
+      const perRef = refImages
+        .map((r, i) => {
+          const d = r.directive.trim();
+          return d ? `#${i + 1}: ${d}` : '';
+        })
+        .filter(Boolean);
+      if (perRef.length > 0) parts.push(`(refs usage — ${perRef.join('; ')})`);
     }
     return parts.join('. ');
-  }, [prompt, styleId, negative, refImages, refDirective]);
+  }, [prompt, styleText, negative, refImages]);
+
+  const handleDelete = async (outputId: string) => {
+    if (!outputId) return;
+    if (!window.confirm('这张作品要撕掉吗？撕了就找不回来了。')) return;
+    try {
+      await mediaApi.deleteOutput(outputId);
+      setRecentOutputs((prev) => prev.filter((o) => o.output_id !== outputId));
+      setBlurredIds((prev) => {
+        if (!prev.has(outputId)) return prev;
+        const next = new Set(prev);
+        next.delete(outputId);
+        saveBlurredSet(next);
+        return next;
+      });
+      setBatches((prev) =>
+        prev
+          .map((b) => ({
+            ...b,
+            items: b.items.map((it) => (it && it.output_id === outputId ? null : it)),
+          }))
+          .filter((b) => b.pending || b.items.some((it) => it !== null)),
+      );
+      toast({ title: '已撕掉', variant: 'success' });
+    } catch (e: any) {
+      toast({ title: '撕不掉', description: e?.message || String(e), variant: 'destructive' });
+    }
+  };
 
   const handleSubmit = async () => {
     if (!prompt.trim()) {
       toast({ title: '写点东西', description: '左上"你想画什么"先写几句', variant: 'default' });
       return;
     }
-    const config = configs[0]; // first media-capable config
-    if (!config && !selectedModel) {
-      toast({ title: '还没配 provider', description: '去「模型」里开启一个支持图像的 provider', variant: 'destructive' });
+    // Use the user's picked config (or auto-first gemini).
+    const config = selectedConfig || configs[0];
+    if (!config) {
+      toast({
+        title: '还没有创作可用的模型',
+        description: '去「模型」里接一个 Gemini 配置，勾选「创作可见」。',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (config.provider !== 'gemini') {
+      toast({
+        title: `"${config.provider}" 还不支持`,
+        description: '目前只接了 Gemini 生图。',
+        variant: 'destructive',
+      });
       return;
     }
 
+    const modelForSubmit = config.model || config.shortname || undefined;
     const isEdit = refImages.length > 0;
-    const promptForSubmit = finalPromptForSubmit;
+    const userPromptForSubmit = finalPromptForSubmit;
     const batchId = `b-${Date.now()}`;
     const newBatch: Batch = {
       id: batchId,
-      prompt: promptForSubmit,
+      prompt: userPromptForSubmit,
       style: styleId,
-      model: modelId || selectedModel?.label || 'gemini-image',
+      model: modelForSubmit || 'gemini-image',
       aspect: sizeId,
       items: new Array(count).fill(null),
       createdAt: Date.now(),
       pending: true,
     };
     setBatches((prev) => [newBatch, ...prev]);
-    setSubmitting(true);
+    setInflight((n) => n + 1);
+
+    // Auto-rewrite the user's short idea into a nano-banana-friendly paragraph
+    // via gemini-2.5-flash (Google's recommended pattern). Racing against a
+    // short timeout keeps this invisible: if the rewrite is slow, broken, or
+    // refused, we silently fall back to the original prompt. Skip on edits,
+    // because the user's directive is relative to the ref images and rewriting
+    // it would change meaning.
+    let promptForSubmit = userPromptForSubmit;
+    if (!isEdit) {
+      try {
+        const REWRITE_TIMEOUT_MS = 6000;
+        const timeout = new Promise<null>((resolve) =>
+          setTimeout(() => resolve(null), REWRITE_TIMEOUT_MS),
+        );
+        const rewrite = mediaApi
+          .geminiRewritePrompt({
+            prompt: userPromptForSubmit,
+            aspect_ratio: sizeId,
+            config_id: config.config_id,
+          })
+          .then((r) => (r.error ? null : (r.prompt || '').trim() || null))
+          .catch(() => null);
+        const rewritten = await Promise.race([rewrite, timeout]);
+        if (rewritten && rewritten.length > 20) {
+          promptForSubmit = rewritten;
+        }
+      } catch { /* fall back to user prompt */ }
+    }
 
     try {
-      const res = isEdit
-        ? await mediaApi.geminiImageEdit({
+      // Gemini endpoints return media INLINE ({media: [{mimeType, data}], content})
+      // but do NOT persist, and the backend ignores `count` — it always calls
+      // Gemini once. To honor the user's count, we fire N parallel calls and
+      // take the first media item from each response (Gemini sometimes returns
+      // multiple candidates; taking just the first prevents count=1 → 2 images).
+      type InlineMedia = { mimeType?: string; data?: string };
+      const callOnce = () =>
+        isEdit
+          ? mediaApi.geminiImageEdit({
+              prompt: promptForSubmit,
+              images_b64: refImages.map((r) => r.data),
+              config_id: config.config_id,
+              model: modelForSubmit,
+              aspect_ratio: sizeId,
+              count: 1,
+            })
+          : mediaApi.geminiImageGenerate({
+              prompt: promptForSubmit,
+              config_id: config.config_id,
+              model: modelForSubmit,
+              aspect_ratio: sizeId,
+              count: 1,
+            });
+
+      const results = await Promise.all(Array.from({ length: count }, callOnce));
+      const inline: InlineMedia[] = [];
+      for (const res of results) {
+        if (res.error) throw new Error(res.error);
+        const media = Array.isArray(res.media) ? (res.media as InlineMedia[]) : [];
+        if (media[0]?.data) inline.push(media[0]);
+      }
+      if (inline.length === 0) {
+        throw new Error('后端没返回图像（可能 provider 没配或模型不对）');
+      }
+
+      const savedItems: MediaOutputItem[] = [];
+      const modelUsed = modelForSubmit || 'gemini-image';
+      for (const m of inline) {
+        if (!m.data) continue;
+        try {
+          const saved = await mediaApi.saveOutput({
+            data: m.data,
+            media_type: 'image',
+            mime_type: m.mimeType || 'image/png',
             prompt: promptForSubmit,
-            images_b64: refImages.map((r) => r.data),
-            config_id: config?.config_id,
-            model: modelId || undefined,
-            aspect_ratio: sizeId,
-            count,
-          })
-        : await mediaApi.geminiImageGenerate({
-            prompt: promptForSubmit,
-            config_id: config?.config_id,
-            model: modelId || undefined,
-            aspect_ratio: sizeId,
-            count,
+            model: modelUsed,
+            provider: 'gemini',
+            source: isEdit ? 'edit' : 'generate',
+            metadata: {
+              aspect_ratio: sizeId,
+              style_preset: styleId,
+              style_text: styleText,
+              ref_count: refImages.length,
+            },
           });
-      if (res.error) throw new Error(res.error);
+          savedItems.push(saved);
+        } catch (persistErr: any) {
+          console.warn('[CreatePage] saveOutput failed:', persistErr?.message || persistErr);
+        }
+      }
+
       await loadRecent();
       setBatches((prev) =>
-        prev.map((b) => (b.id === batchId ? { ...b, pending: false } : b)),
+        prev.map((b) =>
+          b.id === batchId
+            ? {
+                ...b,
+                pending: false,
+                items: savedItems.length > 0 ? savedItems : new Array(inline.length).fill(null),
+              }
+            : b,
+        ),
       );
-      toast({ title: isEdit ? '改完了' : '画完了', variant: 'success' });
+      toast({
+        title: isEdit ? '改完了' : '画完了',
+        description: `${savedItems.length} 张已入库`,
+        variant: 'success',
+      });
     } catch (e: any) {
       setBatches((prev) =>
         prev.map((b) => (b.id === batchId ? { ...b, pending: false, items: [] } : b)),
@@ -309,14 +573,21 @@ const CreatePage: React.FC = () => {
         variant: 'destructive',
       });
     } finally {
-      setSubmitting(false);
+      setInflight((n) => Math.max(0, n - 1));
     }
   };
 
   // Group recent outputs into "done" batches by prompt similarity + timestamp window.
+  // Exclude items already shown in the live `batches` list to prevent the just-
+  // generated frames from appearing twice after loadRecent() refreshes.
   const doneBatches = useMemo<Batch[]>(() => {
+    const liveIds = new Set<string>();
+    for (const b of batches) {
+      for (const it of b.items) if (it?.output_id) liveIds.add(it.output_id);
+    }
     const groups: Record<string, MediaOutputItem[]> = {};
     for (const o of recentOutputs) {
+      if (liveIds.has(o.output_id)) continue;
       const key = `${(o.prompt || '').slice(0, 30)}|${o.model || ''}`;
       if (!groups[key]) groups[key] = [];
       groups[key].push(o);
@@ -331,7 +602,7 @@ const CreatePage: React.FC = () => {
       createdAt: items[0]?.created_at ? new Date(items[0].created_at).getTime() : 0,
       pending: false,
     }));
-  }, [recentOutputs]);
+  }, [recentOutputs, batches]);
 
   const allBatches = [...batches, ...doneBatches];
 
@@ -341,7 +612,22 @@ const CreatePage: React.FC = () => {
         crumb="Chapter Five · Atelier"
         title="创作"
         subtitle="写几句你想要的画面，按下寄出。画完的会自动收进作品集。"
-        meta={selectedModel ? `${selectedModel.label} · ${sizeId}` : '未选模型'}
+        meta={selectedConfig ? `${selectedModelLabel} · ${sizeId}` : '未选模型'}
+        actions={
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={!prompt.trim()}
+            style={{
+              ...s.topSendBtn,
+              ...(!prompt.trim() ? s.topSendBtnDisabled : null),
+            }}
+          >
+            {refImages.length > 0
+              ? `按 ${refImages.length} 张参考改${submitting ? `（画中 ${inflight}）` : ''} →`
+              : `寄出 · ¥${costEstimate.toFixed(2)}${submitting ? `（画中 ${inflight}）` : ''} →`}
+          </button>
+        }
       />
 
       <PaperContent noPad>
@@ -366,38 +652,98 @@ const CreatePage: React.FC = () => {
                 }
                 style={s.draftTextarea}
               />
+
+              {/* Merge preview — show what's being auto-appended to the final prompt */}
+              {(currentStyleLabel || refImages.length > 0) && (
+                <div style={s.mergeRow}>
+                  <span style={s.mergeLabel}>寄出时会带上</span>
+                  {currentStyleLabel && (
+                    <button
+                      type="button"
+                      style={s.mergeChipStyle}
+                      onClick={() => styleSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                      title={styleText}
+                    >
+                      风格 · {currentStyleLabel}
+                    </button>
+                  )}
+                  {refImages.length > 0 && (
+                    <button
+                      type="button"
+                      style={s.mergeChipRefs}
+                      onClick={() => refsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                      title={refImages.map((r, i) => `#${i + 1}${r.directive ? ': ' + r.directive : ''}`).join('\n')}
+                    >
+                      参考图 ·
+                      {refImages.map((r, i) => (
+                        <span key={r.id} style={s.mergeRefChipInner} title={r.directive || '（无指示语）'}>
+                          <img src={r.dataUrl} alt="" style={s.mergeRefThumb} />
+                          <span style={s.mergeRefHash}>#{i + 1}</span>
+                          {r.directive && <span style={s.mergeRefTick}>·</span>}
+                        </span>
+                      ))}
+                    </button>
+                  )}
+                </div>
+              )}
             </Block>
 
-            {/* 参考图 */}
-            <Block>
+            {/* 参考图 — 每张一行：小缩略 + 各自的指示语 */}
+            <Block refNode={refsSectionRef}>
               <Label
-                title={refImages.length > 0 ? `参考图 · #1 到 #${refImages.length}` : '参考图'}
-                hint={refImages.length === 0 ? '粘贴 / 上传 / 从作品集挑' : '可拖移调整顺序'}
+                title={refImages.length > 0 ? `参考图 · ${refImages.length} 张` : '参考图'}
+                hint={refImages.length === 0 ? '粘贴 / 上传 / 从作品集挑' : '点图看大图 · 每张旁边写用法'}
               />
-              <div style={s.refGrid}>
+              <div style={s.refList}>
                 {refImages.map((r, i) => (
-                  <div key={r.id} style={s.refCard} title={r.name}>
-                    <img src={r.dataUrl} alt="" style={s.refThumb} />
-                    <span style={s.refBadge}>#{i + 1}</span>
-                    <div style={s.refCardOverlay}>
-                      {i > 0 && (
-                        <button type="button" style={s.refOverlayBtn} onClick={() => moveRef(r.id, -1)} title="往前">‹</button>
-                      )}
-                      {i < refImages.length - 1 && (
-                        <button type="button" style={s.refOverlayBtn} onClick={() => moveRef(r.id, 1)} title="往后">›</button>
-                      )}
-                      <button type="button" style={{ ...s.refOverlayBtn, ...s.refOverlayBtnDanger }} onClick={() => removeRef(r.id)} title="移除">×</button>
+                  <div key={r.id} style={s.refRow}>
+                    <button
+                      type="button"
+                      style={s.refThumbBtn}
+                      onClick={() => setLightbox(r)}
+                      title={`${r.name}（点开看大图）`}
+                    >
+                      <img src={r.dataUrl} alt="" style={s.refThumbImg} />
+                      <span style={s.refRowBadge}>#{i + 1}</span>
+                    </button>
+                    <div style={s.refRowBody}>
+                      <textarea
+                        value={r.directive}
+                        onChange={(e) => setRefDirective(r.id, e.target.value)}
+                        placeholder={`#${i + 1} 怎么用：例「用它的脸」「只取背景」「参考色调」`}
+                        rows={2}
+                        style={s.refRowInput}
+                      />
+                      <div style={s.refRowFoot}>
+                        <span style={s.refRowSource}>
+                          {r.source === 'gallery' ? '作品集'
+                           : r.source === 'paste' ? '粘贴'
+                           : r.source === 'remix' ? '二创'
+                           : '本地'}
+                        </span>
+                        <div style={s.refRowActions}>
+                          {i > 0 && (
+                            <button type="button" style={s.refRowBtn} onClick={() => moveRef(r.id, -1)} title="往前">‹</button>
+                          )}
+                          {i < refImages.length - 1 && (
+                            <button type="button" style={s.refRowBtn} onClick={() => moveRef(r.id, 1)} title="往后">›</button>
+                          )}
+                          <button
+                            type="button"
+                            style={{ ...s.refRowBtn, ...s.refRowBtnDanger }}
+                            onClick={() => removeRef(r.id)}
+                            title="移除"
+                          >×</button>
+                        </div>
+                      </div>
                     </div>
-                    <span style={s.refSource}>
-                      {r.source === 'gallery' ? '作品集' : r.source === 'paste' ? '粘贴' : r.source === 'remix' ? '二创' : '本地'}
-                    </span>
                   </div>
                 ))}
                 {refImages.length < MAX_REF_IMAGES && (
-                  <button type="button" style={s.refAddCard} onClick={pickRefFiles}>
+                  <button type="button" style={s.refAddRow} onClick={pickRefFiles}>
                     <span style={s.refAddPlus}>＋</span>
-                    <span style={s.refAddT}>加一张</span>
-                    <span style={s.refAddS}>本地 · 或粘贴到上面</span>
+                    <span style={s.refAddT}>加参考图</span>
+                    <span style={s.refAddS}>本地 · 粘贴 · 从作品集</span>
                   </button>
                 )}
               </div>
@@ -409,18 +755,6 @@ const CreatePage: React.FC = () => {
                 style={{ display: 'none' }}
                 onChange={handleRefFilesPicked}
               />
-              {refImages.length > 0 && (
-                <div style={{ marginTop: 12 }}>
-                  <div style={s.refDirectiveLabel}>怎么用这些参考</div>
-                  <textarea
-                    value={refDirective}
-                    onChange={(e) => setRefDirective(e.target.value)}
-                    rows={2}
-                    placeholder="例：主体用 #1 的人物，但换成 #2 的服装。背景参考 #3 的光线。"
-                    style={s.negTextarea}
-                  />
-                </div>
-              )}
             </Block>
 
             <Block>
@@ -434,21 +768,110 @@ const CreatePage: React.FC = () => {
               />
             </Block>
 
-            <Block>
-              <Label title="风格 · 笔触" />
-              <div style={s.styleGrid}>
-                {STYLES.map((st) => (
-                  <button
-                    key={st.id}
-                    type="button"
-                    onClick={() => setStyleId(st.id)}
-                    style={{ ...s.styleChip, ...(st.id === styleId ? s.styleChipSel : null) }}
-                  >
-                    <div style={s.styleT}>{st.zh}</div>
-                    <div style={{ ...s.styleS, ...(st.id === styleId ? s.styleSSel : null) }}>{st.en}</div>
-                  </button>
-                ))}
+            <Block refNode={styleSectionRef}>
+              <Label
+                title="风格 · 笔触"
+                hint="点预设当起点；随便改；满意了存下来下次用"
+              />
+              <div style={s.styleRow}>
+                <textarea
+                  value={styleText}
+                  onChange={(e) => { setStyleText(e.target.value); setStyleId(''); }}
+                  rows={3}
+                  placeholder="描述你想要的风格，例：watercolor, soft edges, muted palette"
+                  style={s.styleTextarea}
+                />
+                <button
+                  type="button"
+                  onClick={openSaveStyle}
+                  style={{
+                    ...s.styleSaveBtn,
+                    ...(!styleText.trim() || styleAlreadySaved ? s.styleSaveBtnDisabled : null),
+                  }}
+                  disabled={!styleText.trim() || styleAlreadySaved}
+                  title={
+                    !styleText.trim() ? '还没写风格'
+                    : styleAlreadySaved ? '这个已经存过了'
+                    : '存为预设，下次还能用'
+                  }
+                >
+                  {styleAlreadySaved ? '已存' : '存'}
+                </button>
               </div>
+
+              {styleSaveOpen && (
+                <div style={s.styleSaveForm}>
+                  <input
+                    type="text"
+                    value={styleSaveName}
+                    onChange={(e) => setStyleSaveName(e.target.value)}
+                    placeholder="给它起个名字，例：我的水彩 / 80s 海报"
+                    style={s.styleSaveInput}
+                    autoFocus
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveStyle(); } }}
+                  />
+                  <button type="button" onClick={saveStyle} style={s.styleSaveOK}>存</button>
+                  <button type="button" onClick={() => setStyleSaveOpen(false)} style={s.styleSaveCancel}>取消</button>
+                </div>
+              )}
+
+              <div style={s.stylePresets}>
+                <span style={s.stylePresetsLabel}>内置</span>
+                {BUILTIN_STYLES.map((st) => {
+                  const active = st.id === styleId;
+                  return (
+                    <button
+                      key={st.id}
+                      type="button"
+                      onClick={() => { setStyleId(st.id); setStyleText(st.suffix); }}
+                      style={{ ...s.stylePresetChip, ...(active ? s.stylePresetChipOn : null) }}
+                      title={st.suffix}
+                    >
+                      <span>{st.zh}</span>
+                      {st.en && <span style={{ ...s.stylePresetChipTag, ...(active ? s.stylePresetChipTagOn : null) }}>{st.en}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {customStyles.length > 0 && (
+                <div style={{ ...s.stylePresets, marginTop: 6 }}>
+                  <span style={s.stylePresetsLabel}>我的</span>
+                  {customStyles.map((st) => {
+                    const active = st.id === styleId;
+                    return (
+                      <div key={st.id} style={{ ...s.stylePresetChip, ...s.stylePresetCustom, ...(active ? s.stylePresetChipOn : null) }}>
+                        <button
+                          type="button"
+                          onClick={() => { setStyleId(st.id); setStyleText(st.suffix); }}
+                          style={s.stylePresetCustomPick}
+                          title={st.suffix}
+                        >
+                          {st.zh}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeCustomStyle(st.id)}
+                          style={{ ...s.stylePresetCustomDel, ...(active ? { color: 'color-mix(in oklch, var(--paper) 70%, transparent)' } : null) }}
+                          title="删"
+                          aria-label="删掉这个预设"
+                        >×</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {(styleText || styleId) && (
+                <div style={{ marginTop: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => { setStyleId(''); setStyleText(''); }}
+                    style={{ ...s.stylePresetChip, ...s.stylePresetClear }}
+                    title="清空风格"
+                  >清空</button>
+                </div>
+              )}
             </Block>
 
             <Block>
@@ -473,69 +896,80 @@ const CreatePage: React.FC = () => {
             </Block>
 
             <Block>
-              <Label title="参数" />
-              <ParamRow
+              <Label
                 title="模型"
-                desc="画什么样的画用什么笔"
-                control={
-                  <select value={modelId} onChange={(e) => setModelId(e.target.value)} style={s.paramSelect}>
-                    {providers.length === 0 && <option value="">(无可用)</option>}
-                    {providers.map((m) => (
-                      <option key={m.label} value={m.label}>{m.label}{m.recommended ? ' ★' : ''}</option>
-                    ))}
-                  </select>
+                hint={
+                  configs.length === 0
+                    ? <span style={{ color: 'var(--status-error)' }}>没有「创作可见」的 Gemini 配置</span>
+                    : `${configs.length} 个可选`
                 }
               />
-              <ParamRow
-                title="每次画几张"
-                desc="1 张最快 · 4 张最稳"
-                control={
-                  <select value={count} onChange={(e) => setCount(Number(e.target.value))} style={s.paramSelect}>
-                    <option value={1}>1</option>
-                    <option value={2}>2</option>
-                    <option value={4}>4</option>
-                    <option value={8}>8</option>
-                  </select>
-                }
-              />
-              <ParamRow
-                title="种子"
-                desc="给同一个 seed 会画出相似的"
-                control={
-                  <input
-                    type="text"
-                    value={seed}
-                    onChange={(e) => setSeed(e.target.value)}
-                    placeholder="留空 · 随机"
-                    style={s.paramInput}
-                  />
-                }
-                last
-              />
+              {configs.length === 0 ? (
+                <div style={s.configEmpty}>
+                  <p style={s.configEmptyText}>
+                    还没有配置可用模型。去 <em style={s.configEmptyEm}>模型</em> 章节：
+                  </p>
+                  <ol style={s.configEmptySteps}>
+                    <li>"+ 接一家" 接入 Gemini provider 并拉取可用模型</li>
+                    <li>在要用的模型上勾选 "✓ 创作" 让它创作可见</li>
+                    <li>回这里选它</li>
+                  </ol>
+                  <div style={{ marginTop: 10 }}>
+                    <button type="button" style={s.gotoModelsBtn} onClick={() => navigate('/models')}>
+                      去模型 →
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div style={s.modelChipRow}>
+                  {configs.map((c) => {
+                    const active = c.config_id === selectedConfigId;
+                    const label = c.shortname || c.model || c.name;
+                    return (
+                      <button
+                        key={c.config_id}
+                        type="button"
+                        onClick={() => setSelectedConfigId(c.config_id)}
+                        style={{ ...s.modelChip, ...(active ? s.modelChipOn : null) }}
+                        title={`${c.name} · ${c.provider}${c.model ? ' · ' + c.model : ''}`}
+                      >
+                        <span>{label}</span>
+                        <span style={{ ...s.modelChipSub, ...(active ? s.modelChipSubOn : null) }}>
+                          {c.provider}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </Block>
-          </aside>
 
-          {/* LEFT FOOT sticky — submit */}
-          <div style={s.draftFoot}>
-            <span style={s.costNote}>
-              {refImages.length > 0
-                ? (<><span>{refImages.length} 参考 · {count} 张</span><br /><span>¥ {costEstimate.toFixed(2)}</span></>)
-                : (<>{count} × ¥0.20<br />= ¥{costEstimate.toFixed(2)}</>)}
-            </span>
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={submitting || !prompt.trim()}
-              style={{
-                ...s.inkBtn,
-                ...(submitting || !prompt.trim() ? s.inkBtnDisabled : null),
-              }}
-            >
-              {submitting
-                ? (refImages.length > 0 ? '正在改…' : '正在画…')
-                : (refImages.length > 0 ? '按参考改 →' : '寄出 →')}
-            </button>
-          </div>
+            <Block>
+              <Label title="每次画几张" hint="1 张最快 · 4 张最稳" />
+              <div style={s.countRow}>
+                {[1, 2, 4, 8].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setCount(n)}
+                    style={{ ...s.countChip, ...(count === n ? s.countChipOn : null) }}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </Block>
+
+            {/* Cost + hint at the bottom — submit button itself moved to topbar */}
+            <div style={s.draftBottomHint}>
+              {refImages.length > 0 ? (
+                <><span>{refImages.length} 张参考</span><span> · </span></>
+              ) : null}
+              <span>{count} × ¥0.20 = </span>
+              <strong style={s.draftBottomCost}>¥{costEstimate.toFixed(2)}</strong>
+              <span style={s.draftBottomKbd}>右上角寄出 →</span>
+            </div>
+          </aside>
 
           {/* RIGHT — RESULTS */}
           <section style={s.results}>
@@ -554,19 +988,141 @@ const CreatePage: React.FC = () => {
                 </p>
               </div>
             ) : allBatches.map((b) => (
-              <BatchView key={b.id} batch={b} />
+              <BatchView
+                key={b.id}
+                batch={b}
+                onOpen={(item) => setPreview(item)}
+                onDelete={handleDelete}
+                blurredIds={blurredIds}
+                onToggleBlur={toggleBlur}
+              />
             ))}
           </section>
         </div>
       </PaperContent>
+
+      {lightbox && (
+        <RefLightbox
+          item={lightbox}
+          index={refImages.findIndex((r) => r.id === lightbox.id) + 1}
+          total={refImages.length}
+          onClose={() => setLightbox(null)}
+        />
+      )}
+
+      {preview && (
+        <ResultPreview
+          item={preview}
+          onClose={() => setPreview(null)}
+          onRemix={async () => {
+            const item = preview;
+            setPreview(null);
+            const ok = await addRefFromGallery(item);
+            if (ok && item.prompt) setPrompt(item.prompt);
+            if (ok) toast({ title: '已带入参考图', description: '改几句再寄出' });
+          }}
+        />
+      )}
     </PaperPage>
+  );
+};
+
+const ResultPreview: React.FC<{
+  item: MediaOutputItem;
+  onClose: () => void;
+  onRemix: () => void | Promise<void>;
+}> = ({ item, onClose, onRemix }) => {
+  const url = mediaApi.getOutputFileUrl(item.output_id);
+  const [downloading, setDownloading] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const download = async () => {
+    setDownloading(true);
+    try {
+      const token = localStorage.getItem('chaya_token') || '';
+      const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      const href = URL.createObjectURL(blob);
+      const ext = (item.mime_type?.split('/')[1] || 'png').replace(/\W/g, '');
+      a.href = href;
+      a.download = `chaya-${item.output_id.slice(0, 8)}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(href);
+    } catch (e: any) {
+      toast({ title: '下载失败', description: e?.message || '', variant: 'destructive' });
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <div style={s.lightboxOverlay} onClick={onClose}>
+      <div style={s.lightboxHead} onClick={(e) => e.stopPropagation()}>
+        <span>
+          原图 · {item.model || item.provider || '—'}
+          {(item.metadata as any)?.aspect_ratio ? ` · ${(item.metadata as any).aspect_ratio}` : ''}
+          {item.file_size ? ` · ${Math.round(item.file_size / 1024)} KB` : ''}
+        </span>
+        <button type="button" style={s.lightboxClose} onClick={onClose} aria-label="关闭">×</button>
+      </div>
+      <img src={url} alt={item.prompt || 'output'} style={s.lightboxImg} onClick={(e) => e.stopPropagation()} />
+      {item.prompt && (
+        <div style={s.lightboxPrompt} onClick={(e) => e.stopPropagation()}>
+          「{item.prompt.length > 200 ? item.prompt.slice(0, 200) + '…' : item.prompt}」
+        </div>
+      )}
+      <div style={s.previewActions} onClick={(e) => e.stopPropagation()}>
+        <button type="button" style={s.previewBtn} onClick={download} disabled={downloading}>
+          {downloading ? '下载…' : '下载'}
+        </button>
+        <button type="button" style={{ ...s.previewBtn, ...s.previewBtnPrimary }} onClick={() => void onRemix()}>
+          二创 →
+        </button>
+      </div>
+    </div>
+  );
+};
+
+const RefLightbox: React.FC<{
+  item: RefImage;
+  index: number;
+  total: number;
+  onClose: () => void;
+}> = ({ item, index, total, onClose }) => {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div style={s.lightboxOverlay} onClick={onClose}>
+      <div style={s.lightboxHead}>
+        <span>参考图 {index} / {total} · {item.name}</span>
+        <button type="button" style={s.lightboxClose} onClick={onClose} aria-label="关闭">×</button>
+      </div>
+      <img src={item.dataUrl} alt="" style={s.lightboxImg} onClick={(e) => e.stopPropagation()} />
+      {item.directive && (
+        <div style={s.lightboxDirective} onClick={(e) => e.stopPropagation()}>
+          #{index}: {item.directive}
+        </div>
+      )}
+    </div>
   );
 };
 
 /* ---------- pieces ---------- */
 
-const Block: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div style={{ marginBottom: 24 }}>{children}</div>
+const Block: React.FC<{ children: React.ReactNode; refNode?: React.RefObject<HTMLDivElement | null> }> = ({ children, refNode }) => (
+  <div ref={refNode} style={{ marginBottom: 18 }}>{children}</div>
 );
 
 const Label: React.FC<{ title: React.ReactNode; hint?: React.ReactNode }> = ({ title, hint }) => (
@@ -576,18 +1132,14 @@ const Label: React.FC<{ title: React.ReactNode; hint?: React.ReactNode }> = ({ t
   </div>
 );
 
-const ParamRow: React.FC<{ title: string; desc: string; control: React.ReactNode; last?: boolean }> = ({ title, desc, control, last }) => (
-  <div style={{ ...s.paramRow, ...(last ? { borderBottom: 0 } : null) }}>
-    <div>
-      <div style={s.paramTitle}>{title}</div>
-      <div style={s.paramDesc}>{desc}</div>
-    </div>
-    <div style={s.paramCtrl}>{control}</div>
-  </div>
-);
-
-const BatchView: React.FC<{ batch: Batch }> = ({ batch }) => (
-  <div style={{ marginBottom: 40 }}>
+const BatchView: React.FC<{
+  batch: Batch;
+  onOpen: (item: MediaOutputItem) => void;
+  onDelete: (outputId: string) => void | Promise<void>;
+  blurredIds: Set<string>;
+  onToggleBlur: (outputId: string) => void;
+}> = ({ batch, onOpen, onDelete, blurredIds, onToggleBlur }) => (
+  <div style={{ marginBottom: 18 }}>
     <div style={s.batchMeta}>
       <span style={s.batchPromptSnip}>
         {batch.prompt.length > 56 ? batch.prompt.slice(0, 56) + '…' : batch.prompt || '（未标）'}
@@ -596,29 +1148,93 @@ const BatchView: React.FC<{ batch: Batch }> = ({ batch }) => (
     </div>
     <div style={s.imgGrid}>
       {batch.items.map((item, i) => (
-        <Plate key={item?.output_id || `p-${i}`} item={item} seed={`${batch.id.slice(-4)}·${String(i + 1).padStart(2, '0')}`} />
+        <Plate
+          key={item?.output_id || `p-${i}`}
+          item={item}
+          seed={`${batch.id.slice(-4)}·${String(i + 1).padStart(2, '0')}`}
+          onOpen={item ? () => onOpen(item) : undefined}
+          onDelete={item ? () => onDelete(item.output_id) : undefined}
+          blurred={item ? blurredIds.has(item.output_id) : false}
+          onToggleBlur={item ? () => onToggleBlur(item.output_id) : undefined}
+        />
       ))}
     </div>
   </div>
 );
 
-const Plate: React.FC<{ item: MediaOutputItem | null; seed: string }> = ({ item, seed }) => {
+const Plate: React.FC<{
+  item: MediaOutputItem | null;
+  seed: string;
+  onOpen?: () => void;
+  onDelete?: () => void;
+  blurred?: boolean;
+  onToggleBlur?: () => void;
+}> = ({ item, seed, onOpen, onDelete, blurred, onToggleBlur }) => {
   const [broken, setBroken] = useState(false);
+  const [hover, setHover] = useState(false);
   const url = item ? mediaApi.getOutputFileUrl(item.output_id) : null;
+  const clickable = !!item && !!onOpen && !broken && !blurred;
   return (
-    <div style={s.plate}>
+    <div
+      style={{ ...s.plate, ...(clickable ? s.plateClickable : null) }}
+      onClick={clickable ? onOpen : undefined}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen!(); } } : undefined}
+    >
       <div style={{ ...s.plateImg, ...(item && !broken ? {} : s.plateImgPending) }}>
         {item && url && !broken ? (
           <img
             src={url}
             alt={item.prompt || 'output'}
             onError={() => setBroken(true)}
-            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              display: 'block',
+              ...(blurred
+                ? BLURRED_IMG_CSS
+                : { filter: 'none', transform: 'none', transition: 'filter 200ms ease, transform 200ms ease' }),
+            }}
           />
         ) : (
           <span style={s.plateProgressText}>{item && broken ? '找不到文件' : '正在画…'}</span>
         )}
+        {blurred && item && url && !broken && (
+          <span style={s.plateBlurBadge}>遮</span>
+        )}
       </div>
+      {item && (onDelete || onToggleBlur) && (
+        <div style={{ ...s.plateActions, opacity: hover ? 1 : 0 }} onClick={(e) => e.stopPropagation()}>
+          {onToggleBlur && (
+            <button
+              type="button"
+              aria-label={blurred ? '揭开' : '遮起来'}
+              title={blurred ? '揭开' : '遮起来'}
+              style={s.plateAction}
+              onClick={(e) => { e.stopPropagation(); onToggleBlur(); }}
+              onKeyDown={(e) => e.stopPropagation()}
+            >
+              {blurred ? '○' : '●'}
+            </button>
+          )}
+          {onDelete && (
+            <button
+              type="button"
+              aria-label="撕掉"
+              title="撕掉"
+              style={s.plateAction}
+              onClick={(e) => { e.stopPropagation(); onDelete(); }}
+              onKeyDown={(e) => e.stopPropagation()}
+            >
+              ×
+            </button>
+          )}
+        </div>
+      )}
       <div style={s.plateCaption}>
         <span style={s.plateSeed}>#{seed}</span>
         <span style={s.plateTagF}>{item?.provider || '—'}</span>
@@ -649,31 +1265,68 @@ const timeAgo = (t: number): string => {
 const s: Record<string, React.CSSProperties> = {
   layout: {
     display: 'grid',
-    gridTemplateColumns: '360px 1fr',
-    gridTemplateRows: '1fr auto',
-    gridTemplateAreas: `"draft results" "foot results"`,
+    /* Give the creation controls plenty of room; thumbnails on the right
+       stay compact so they don't fight the draft panel. Submit is in the
+       topbar, so the left column just holds controls top-to-bottom. */
+    gridTemplateColumns: 'minmax(420px, 1.2fr) minmax(280px, 1fr)',
+    gridTemplateRows: '1fr',
     height: '100%',
     minHeight: 0,
     overflow: 'hidden',
   },
   draft: {
-    gridArea: 'draft',
     borderRight: '1px solid var(--rule)',
     overflowY: 'auto',
-    padding: '28px 28px 8px',
+    padding: '20px 22px 18px',
     background: 'color-mix(in oklch, var(--paper) 50%, var(--page))',
     display: 'flex',
     flexDirection: 'column',
   },
-  draftFoot: {
-    gridArea: 'foot',
-    borderRight: '1px solid var(--rule)',
-    borderTop: '1px solid var(--rule)',
-    padding: '14px 28px 18px',
-    background: 'color-mix(in oklch, var(--paper) 50%, var(--page))',
+  draftBottomHint: {
+    marginTop: 'auto',
+    paddingTop: 16,
+    borderTop: '1px dotted var(--rule)',
     display: 'flex',
-    gap: 12,
-    alignItems: 'center',
+    alignItems: 'baseline',
+    gap: 4,
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    color: 'var(--pencil)',
+    letterSpacing: '0.04em',
+    flexWrap: 'wrap',
+  },
+  draftBottomCost: {
+    fontFamily: "'Young Serif', serif",
+    fontStyle: 'italic',
+    fontSize: 13,
+    color: 'var(--ink-strong)',
+    marginRight: 8,
+  },
+  draftBottomKbd: {
+    marginLeft: 'auto',
+    fontSize: 10,
+    color: 'var(--pencil-soft)',
+    letterSpacing: '0.08em',
+  },
+  /* Topbar submit button */
+  topSendBtn: {
+    fontFamily: "'Young Serif', 'LXGW WenKai', serif",
+    fontSize: 13,
+    padding: '8px 18px',
+    background: 'var(--accent-ink)',
+    color: 'var(--paper)',
+    border: 0,
+    borderRadius: 2,
+    cursor: 'pointer',
+    letterSpacing: '0.04em',
+    boxShadow:
+      '0 1px 0 color-mix(in oklch, var(--ink) 25%, transparent), 0 2px 6px oklch(0.18 0.02 310 / 0.12)',
+    transition: 'background 180ms cubic-bezier(0.22,1,0.36,1)',
+  },
+  topSendBtnDisabled: {
+    opacity: 0.45,
+    cursor: 'not-allowed',
+    boxShadow: 'none',
   },
   costNote: {
     fontFamily: "'JetBrains Mono', monospace",
@@ -706,7 +1359,7 @@ const s: Record<string, React.CSSProperties> = {
     letterSpacing: '0.22em',
     color: 'var(--pencil)',
     textTransform: 'uppercase',
-    marginBottom: 8,
+    marginBottom: 6,
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'baseline',
@@ -749,142 +1402,438 @@ const s: Record<string, React.CSSProperties> = {
     resize: 'vertical',
     outline: 'none',
   },
-  /* Reference images */
-  refGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(3, 1fr)',
+  /* Reference images — per-row layout */
+  refList: {
+    display: 'flex',
+    flexDirection: 'column',
     gap: 8,
   },
-  refCard: {
+  refRow: {
+    display: 'grid',
+    gridTemplateColumns: '56px 1fr',
+    gap: 10,
+    padding: 6,
+    background: 'var(--page-elev)',
+    border: '1px solid var(--rule-strong)',
+    borderRadius: 2,
+    alignItems: 'stretch',
+  },
+  refThumbBtn: {
     position: 'relative',
-    aspectRatio: '1 / 1',
+    width: 56,
+    height: 56,
+    padding: 0,
     background: 'color-mix(in oklch, var(--ink) 5%, var(--page-elev))',
     border: '1px solid var(--rule-strong)',
     borderRadius: 2,
     overflow: 'hidden',
+    cursor: 'zoom-in',
   },
-  refThumb: {
+  refThumbImg: {
     width: '100%',
     height: '100%',
     objectFit: 'cover',
     display: 'block',
   },
-  refBadge: {
+  refRowBadge: {
     position: 'absolute',
-    top: 4,
-    left: 4,
+    top: 2, left: 2,
     fontFamily: "'Young Serif', 'LXGW WenKai', ui-serif, serif",
-    fontSize: 12,
+    fontSize: 10,
     color: 'var(--paper)',
     background: 'var(--accent-ink)',
-    padding: '1px 7px',
+    padding: '0 5px',
     borderRadius: 1,
-    letterSpacing: '0.05em',
-    boxShadow: '0 1px 2px oklch(0 0 0 / 0.25)',
+    letterSpacing: '0.04em',
+    lineHeight: '14px',
   },
-  refSource: {
-    position: 'absolute',
-    bottom: 4,
-    left: 4,
+  refRowBody: {
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+  },
+  refRowInput: {
+    width: '100%',
+    background: 'transparent',
+    border: 0,
+    padding: '4px 6px',
+    fontFamily: "'Commissioner', 'LXGW WenKai', sans-serif",
+    fontSize: 12.5,
+    color: 'var(--ink)',
+    lineHeight: 1.5,
+    outline: 'none',
+    resize: 'vertical',
+    minHeight: 32,
+  },
+  refRowFoot: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+    padding: '0 6px 2px',
+  },
+  refRowSource: {
     fontFamily: "'JetBrains Mono', monospace",
     fontSize: 9.5,
-    color: 'var(--paper)',
-    background: 'color-mix(in oklch, var(--ink) 75%, transparent)',
-    padding: '1px 6px',
-    borderRadius: 1,
+    color: 'var(--pencil-soft)',
     letterSpacing: '0.06em',
   },
-  refCardOverlay: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    padding: 4,
+  refRowActions: {
     display: 'flex',
     gap: 2,
-    opacity: 0.9,
-    background: 'linear-gradient(220deg, oklch(0 0 0 / 0.35), transparent 60%)',
-    pointerEvents: 'auto',
   },
-  refOverlayBtn: {
-    width: 22, height: 22,
-    background: 'var(--paper)',
+  refRowBtn: {
+    width: 20, height: 20,
+    background: 'transparent',
     border: '1px solid var(--rule-strong)',
     borderRadius: 2,
-    fontSize: 12,
-    cursor: 'pointer',
     padding: 0,
+    fontSize: 11,
     lineHeight: 1,
-    color: 'var(--ink)',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
+    cursor: 'pointer',
+    color: 'var(--pencil)',
   },
-  refOverlayBtnDanger: {
+  refRowBtnDanger: {
     color: 'var(--status-error)',
   },
-  refAddCard: {
-    aspectRatio: '1 / 1',
+  refAddRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '8px 10px',
     background: 'transparent',
     border: '1.5px dashed var(--rule-strong)',
     borderRadius: 2,
     cursor: 'pointer',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    padding: 6,
-    transition: 'border-color 180ms cubic-bezier(0.22,1,0.36,1), color 180ms',
     color: 'var(--pencil)',
+    fontFamily: 'inherit',
+    textAlign: 'left',
   },
   refAddPlus: {
     fontFamily: "'Young Serif', 'LXGW WenKai', ui-serif, serif",
-    fontSize: 22,
+    fontSize: 18,
     color: 'var(--accent-ink)',
     lineHeight: 1,
+    minWidth: 18,
   },
   refAddT: {
     fontFamily: "'Young Serif', serif",
-    fontSize: 12,
+    fontSize: 13,
     color: 'var(--ink)',
   },
   refAddS: {
     fontFamily: "'JetBrains Mono', monospace",
-    fontSize: 9,
+    fontSize: 10,
     color: 'var(--pencil-soft)',
     letterSpacing: '0.06em',
-    textAlign: 'center',
+    marginLeft: 'auto',
   },
-  refDirectiveLabel: {
-    fontSize: 10.5,
-    letterSpacing: '0.22em',
-    color: 'var(--pencil)',
-    textTransform: 'uppercase',
-    marginBottom: 6,
+  /* Lightbox for clicking a thumbnail */
+  lightboxOverlay: {
+    position: 'fixed',
+    inset: 0,
+    background: 'color-mix(in oklch, var(--ink) 75%, transparent)',
+    backdropFilter: 'blur(6px)',
+    WebkitBackdropFilter: 'blur(6px)',
+    zIndex: 60,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 40,
+    gap: 12,
   },
-  styleGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 },
-  styleChip: {
-    padding: '10px 8px',
-    border: '1px solid var(--rule-strong)',
+  lightboxHead: {
+    position: 'absolute',
+    top: 20, left: 0, right: 0,
+    padding: '0 24px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: 'var(--paper)',
+    letterSpacing: '0.08em',
+  },
+  lightboxClose: {
+    background: 'transparent',
+    border: '1px solid color-mix(in oklch, var(--paper) 40%, transparent)',
+    color: 'var(--paper)',
+    fontSize: 18,
+    width: 32,
+    height: 32,
     borderRadius: 2,
-    textAlign: 'center',
     cursor: 'pointer',
-    background: 'var(--page-elev)',
-    transition: 'all 180ms cubic-bezier(0.22,1,0.36,1)',
+    lineHeight: 1,
   },
-  styleChipSel: {
+  lightboxImg: {
+    maxWidth: '88vw',
+    maxHeight: '78vh',
+    objectFit: 'contain',
+    display: 'block',
+    borderRadius: 2,
+    boxShadow: '0 20px 60px oklch(0 0 0 / 0.5)',
+    cursor: 'default',
+  },
+  lightboxDirective: {
+    maxWidth: '60ch',
+    padding: '10px 16px',
+    background: 'color-mix(in oklch, var(--marginalia) 35%, transparent)',
+    borderLeft: '3px solid var(--marginalia-ink)',
+    fontFamily: "'Young Serif', 'LXGW WenKai', serif",
+    fontStyle: 'italic',
+    fontSize: 14,
+    color: 'var(--paper)',
+    lineHeight: 1.6,
+  },
+  lightboxPrompt: {
+    maxWidth: '72ch',
+    padding: '10px 18px',
+    background: 'color-mix(in oklch, var(--paper) 12%, transparent)',
+    borderLeft: '2px solid color-mix(in oklch, var(--paper) 40%, transparent)',
+    fontFamily: "'Young Serif', 'LXGW WenKai', serif",
+    fontStyle: 'italic',
+    fontSize: 13,
+    color: 'color-mix(in oklch, var(--paper) 85%, transparent)',
+    lineHeight: 1.7,
+    borderRadius: 2,
+  },
+  previewActions: {
+    display: 'flex',
+    gap: 10,
+    alignItems: 'center',
+  },
+  previewBtn: {
+    padding: '8px 18px',
+    background: 'transparent',
+    color: 'var(--paper)',
+    border: '1px solid color-mix(in oklch, var(--paper) 40%, transparent)',
+    borderRadius: 2,
+    fontFamily: "'Young Serif', 'LXGW WenKai', serif",
+    fontSize: 13,
+    cursor: 'pointer',
+    letterSpacing: '0.04em',
+  },
+  previewBtnPrimary: {
+    background: 'var(--accent-ink)',
     borderColor: 'var(--accent-ink)',
-    background: 'var(--accent-soft)',
+    color: 'var(--paper)',
+    boxShadow: '0 2px 8px oklch(0 0 0 / 0.35)',
   },
-  styleT: { fontFamily: "'Young Serif', 'LXGW WenKai', serif", fontSize: 12.5, color: 'var(--ink)' },
-  styleS: {
+  plateClickable: {
+    cursor: 'zoom-in',
+  },
+  /* Merge preview chips next to the prompt */
+  mergeRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 6,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  mergeLabel: {
+    fontSize: 10,
+    letterSpacing: '0.22em',
+    color: 'var(--pencil-soft)',
+    textTransform: 'uppercase',
+    marginRight: 2,
+    fontFamily: "'JetBrains Mono', monospace",
+  },
+  mergeChipStyle: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: '3px 10px',
+    background: 'var(--accent-soft)',
+    border: '1px solid color-mix(in oklch, var(--accent-ink) 25%, transparent)',
+    borderRadius: 2,
+    cursor: 'pointer',
+    color: 'var(--accent-ink)',
+    fontFamily: "'Young Serif', 'LXGW WenKai', serif",
+    fontSize: 11.5,
+    letterSpacing: '0.02em',
+  },
+  mergeChipRefs: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: '3px 6px 3px 10px',
+    background: 'color-mix(in oklch, var(--marginalia) 30%, transparent)',
+    border: '1px solid color-mix(in oklch, var(--marginalia-ink) 25%, transparent)',
+    borderRadius: 2,
+    cursor: 'pointer',
+    color: 'var(--marginalia-ink)',
+    fontFamily: "'Young Serif', 'LXGW WenKai', serif",
+    fontSize: 11.5,
+  },
+  mergeRefChipInner: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 2,
+    marginLeft: 4,
+  },
+  mergeRefThumb: {
+    width: 14,
+    height: 14,
+    objectFit: 'cover',
+    borderRadius: 1,
+    border: '1px solid color-mix(in oklch, var(--marginalia-ink) 25%, transparent)',
+    display: 'inline-block',
+  },
+  mergeRefHash: {
     fontFamily: "'JetBrains Mono', monospace",
     fontSize: 9.5,
-    color: 'var(--pencil)',
-    letterSpacing: '0.08em',
-    marginTop: 2,
+    letterSpacing: '0.04em',
   },
-  styleSSel: { color: 'var(--accent-ink)' },
+  mergeRefTick: {
+    fontSize: 10,
+    opacity: 0.7,
+  },
+  styleRow: {
+    display: 'flex',
+    gap: 8,
+    alignItems: 'stretch',
+    marginBottom: 8,
+  },
+  styleTextarea: {
+    flex: 1,
+    background: 'var(--page-elev)',
+    border: '1px solid var(--rule-strong)',
+    borderRadius: 2,
+    padding: '8px 12px',
+    fontFamily: "'Commissioner', 'LXGW WenKai', sans-serif",
+    fontSize: 13,
+    color: 'var(--ink)',
+    lineHeight: 1.6,
+    resize: 'vertical',
+    outline: 'none',
+    minHeight: 60,
+  },
+  styleSaveBtn: {
+    flexShrink: 0,
+    padding: '0 12px',
+    background: 'transparent',
+    color: 'var(--accent-ink)',
+    border: '1px solid var(--accent-ink)',
+    borderRadius: 2,
+    fontFamily: "'Young Serif', serif",
+    fontSize: 12,
+    cursor: 'pointer',
+    minWidth: 44,
+  },
+  styleSaveBtnDisabled: {
+    color: 'var(--pencil-soft)',
+    borderColor: 'var(--rule-strong)',
+    cursor: 'not-allowed',
+  },
+  styleSaveForm: {
+    display: 'flex',
+    gap: 6,
+    marginBottom: 8,
+    padding: '8px 10px',
+    background: 'var(--accent-soft)',
+    border: '1px solid color-mix(in oklch, var(--accent-ink) 20%, transparent)',
+    borderRadius: 2,
+  },
+  styleSaveInput: {
+    flex: 1,
+    background: 'transparent',
+    border: 0,
+    borderBottom: '1px solid color-mix(in oklch, var(--accent-ink) 30%, transparent)',
+    padding: '4px 0',
+    fontFamily: "'Young Serif', 'LXGW WenKai', serif",
+    fontSize: 13,
+    color: 'var(--ink)',
+    outline: 'none',
+  },
+  styleSaveOK: {
+    padding: '4px 12px',
+    background: 'var(--accent-ink)',
+    color: 'var(--paper)',
+    border: 0,
+    borderRadius: 2,
+    fontFamily: "'Young Serif', serif",
+    fontSize: 12,
+    cursor: 'pointer',
+  },
+  styleSaveCancel: {
+    padding: '4px 10px',
+    background: 'transparent',
+    color: 'var(--pencil)',
+    border: 0,
+    fontFamily: "'Young Serif', serif",
+    fontSize: 12,
+    cursor: 'pointer',
+  },
+  stylePresets: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 6,
+    alignItems: 'center',
+  },
+  stylePresetsLabel: {
+    fontSize: 10,
+    letterSpacing: '0.22em',
+    color: 'var(--pencil-soft)',
+    textTransform: 'uppercase',
+    marginRight: 4,
+    fontFamily: "'JetBrains Mono', monospace",
+  },
+  stylePresetChip: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: '4px 10px',
+    background: 'transparent',
+    border: '1px solid var(--rule-strong)',
+    borderRadius: 2,
+    cursor: 'pointer',
+    color: 'var(--pencil)',
+    fontFamily: "'Young Serif', 'LXGW WenKai', serif",
+    fontSize: 12,
+  },
+  stylePresetChipOn: {
+    background: 'var(--accent-ink)',
+    borderColor: 'var(--accent-ink)',
+    color: 'var(--paper)',
+  },
+  stylePresetChipTag: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9,
+    color: 'var(--pencil-soft)',
+    letterSpacing: '0.08em',
+  },
+  stylePresetChipTagOn: {
+    color: 'color-mix(in oklch, var(--paper) 75%, transparent)',
+  },
+  stylePresetCustom: {
+    padding: 0,
+    overflow: 'hidden',
+  },
+  stylePresetCustomPick: {
+    background: 'transparent',
+    border: 0,
+    color: 'inherit',
+    padding: '4px 4px 4px 10px',
+    fontFamily: 'inherit',
+    fontSize: 12,
+    cursor: 'pointer',
+  },
+  stylePresetCustomDel: {
+    background: 'transparent',
+    border: 0,
+    borderLeft: '1px solid color-mix(in oklch, var(--pencil) 20%, transparent)',
+    color: 'var(--pencil-soft)',
+    padding: '2px 8px',
+    fontSize: 13,
+    lineHeight: 1,
+    cursor: 'pointer',
+  },
+  stylePresetClear: {
+    color: 'var(--pencil-soft)',
+    borderStyle: 'dashed',
+  },
   sizeGrid: { display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-start' },
   sizeChip: {
     display: 'inline-flex',
@@ -909,6 +1858,103 @@ const s: Record<string, React.CSSProperties> = {
     display: 'inline-block',
     background: 'var(--pencil-soft)',
     borderRadius: 1,
+  },
+  /* Model picker chips */
+  modelChipRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  modelChip: {
+    display: 'inline-flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: 1,
+    padding: '6px 12px',
+    background: 'var(--page-elev)',
+    border: '1px solid var(--rule-strong)',
+    borderRadius: 2,
+    cursor: 'pointer',
+    color: 'var(--ink)',
+    fontFamily: "'Young Serif', 'LXGW WenKai', serif",
+    fontSize: 13,
+    letterSpacing: '0.01em',
+    textAlign: 'left',
+  },
+  modelChipOn: {
+    background: 'var(--accent-ink)',
+    borderColor: 'var(--accent-ink)',
+    color: 'var(--paper)',
+    boxShadow: '0 1px 0 color-mix(in oklch, var(--ink) 25%, transparent)',
+  },
+  modelChipSub: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9.5,
+    color: 'var(--pencil-soft)',
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase',
+  },
+  modelChipSubOn: {
+    color: 'color-mix(in oklch, var(--paper) 70%, transparent)',
+  },
+  /* Count chips */
+  countRow: {
+    display: 'flex',
+    gap: 6,
+  },
+  countChip: {
+    minWidth: 40,
+    padding: '6px 12px',
+    background: 'var(--page-elev)',
+    border: '1px solid var(--rule-strong)',
+    borderRadius: 2,
+    cursor: 'pointer',
+    color: 'var(--ink)',
+    fontFamily: "'Young Serif', 'LXGW WenKai', serif",
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  countChipOn: {
+    background: 'var(--accent-ink)',
+    borderColor: 'var(--accent-ink)',
+    color: 'var(--paper)',
+  },
+  /* Empty config state */
+  configEmpty: {
+    padding: '14px 16px',
+    background: 'var(--status-error-bg)',
+    border: '1px dashed color-mix(in oklch, var(--status-error) 25%, transparent)',
+    borderRadius: 2,
+  },
+  configEmptyText: {
+    fontFamily: "'Young Serif', serif",
+    fontSize: 13,
+    color: 'oklch(0.40 0.100 25)',
+    margin: 0,
+    lineHeight: 1.6,
+  },
+  configEmptyEm: {
+    color: 'var(--accent-ink)',
+    fontStyle: 'italic',
+  },
+  configEmptySteps: {
+    margin: '8px 0 0 18px',
+    padding: 0,
+    fontFamily: "'Young Serif', serif",
+    fontSize: 12.5,
+    color: 'var(--pencil)',
+    lineHeight: 1.8,
+  },
+  gotoModelsBtn: {
+    padding: '6px 14px',
+    background: 'var(--accent-ink)',
+    color: 'var(--paper)',
+    border: 0,
+    borderRadius: 2,
+    cursor: 'pointer',
+    fontFamily: "'Young Serif', serif",
+    fontSize: 12.5,
+    letterSpacing: '0.02em',
   },
   paramRow: {
     display: 'grid',
@@ -947,25 +1993,27 @@ const s: Record<string, React.CSSProperties> = {
     outline: 'none',
   },
   results: {
-    gridArea: 'results',
     overflowY: 'auto',
-    padding: '28px 40px 60px',
-    gridRow: '1 / span 2',
+    padding: '22px 24px 40px',
+    borderLeft: '1px solid var(--rule)',
+    background: 'color-mix(in oklch, var(--paper) 70%, var(--page))',
+    minHeight: 0,
   },
   resultsHead: {
     display: 'flex',
     alignItems: 'baseline',
-    gap: 14,
-    marginBottom: 18,
-    paddingBottom: 10,
+    gap: 10,
+    marginBottom: 14,
+    paddingBottom: 8,
     borderBottom: '1px solid var(--rule)',
   },
   resultsH2: {
     fontFamily: "'Young Serif', serif",
-    fontSize: 20,
+    fontSize: 15,
     color: 'var(--ink-strong)',
     fontWeight: 400,
     margin: 0,
+    letterSpacing: '0.01em',
   },
   resultsCap: {
     fontSize: 10.5,
@@ -1001,27 +2049,31 @@ const s: Record<string, React.CSSProperties> = {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'baseline',
+    gap: 8,
     fontFamily: "'JetBrains Mono', monospace",
-    fontSize: 10.5,
+    fontSize: 10,
     color: 'var(--pencil)',
-    marginBottom: 10,
+    marginBottom: 8,
     letterSpacing: '0.06em',
   },
   batchPromptSnip: {
     fontFamily: "'Young Serif', serif",
     fontStyle: 'italic',
     color: 'var(--ink)',
-    fontSize: 12.5,
-    maxWidth: '56ch',
+    fontSize: 11.5,
+    maxWidth: '34ch',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
     letterSpacing: 0,
+    flex: 1,
+    minWidth: 0,
   },
   imgGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-    gap: 14,
+    /* Compact contact-sheet layout — small tiles, tight gutters. */
+    gridTemplateColumns: 'repeat(auto-fill, minmax(92px, 1fr))',
+    gap: 4,
   },
   plate: {
     position: 'relative',
@@ -1045,33 +2097,76 @@ const s: Record<string, React.CSSProperties> = {
   plateImgPending: {
     background: 'repeating-linear-gradient(90deg, var(--page-elev) 0, var(--page-elev) 8px, var(--rule) 8px, var(--rule) 9px)',
   },
+  plateActions: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    display: 'flex',
+    gap: 3,
+    transition: 'opacity 160ms ease',
+  },
+  plateAction: {
+    width: 18,
+    height: 18,
+    padding: 0,
+    lineHeight: '16px',
+    textAlign: 'center',
+    fontSize: 11,
+    fontFamily: "'JetBrains Mono', monospace",
+    color: 'var(--ink)',
+    background: 'color-mix(in oklch, var(--page-elev) 90%, transparent)',
+    border: '1px solid var(--rule-strong)',
+    borderRadius: 2,
+    cursor: 'pointer',
+    boxShadow: '0 1px 2px oklch(0.18 0.02 310 / 0.12)',
+  },
+  plateBlurBadge: {
+    position: 'absolute',
+    left: 4,
+    top: 4,
+    fontFamily: "'Young Serif', serif",
+    fontSize: 10,
+    letterSpacing: '0.08em',
+    color: 'var(--ink)',
+    background: 'color-mix(in oklch, var(--page-elev) 85%, transparent)',
+    border: '1px solid var(--rule-strong)',
+    borderRadius: 2,
+    padding: '1px 5px',
+    pointerEvents: 'none',
+  },
   plateProgressText: {
     fontFamily: "'Young Serif', serif",
     fontStyle: 'italic',
-    fontSize: 13,
+    fontSize: 11,
     color: 'var(--pencil)',
     background: 'var(--page-elev)',
-    padding: '4px 10px',
+    padding: '2px 7px',
     border: '1px solid var(--rule-strong)',
     borderRadius: 2,
   },
   plateCaption: {
-    padding: '8px 10px',
+    padding: '5px 7px',
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'baseline',
+    gap: 4,
     fontFamily: "'JetBrains Mono', monospace",
-    fontSize: 10,
+    fontSize: 9,
     color: 'var(--pencil)',
-    letterSpacing: '0.06em',
+    letterSpacing: '0.04em',
   },
-  plateSeed: {},
+  plateSeed: {
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
   plateTagF: {
     fontFamily: "'Young Serif', serif",
     fontStyle: 'italic',
-    fontSize: 11,
+    fontSize: 10,
     color: 'var(--accent-ink)',
     letterSpacing: 0,
+    whiteSpace: 'nowrap',
   },
 };
 

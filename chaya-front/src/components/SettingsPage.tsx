@@ -1,6 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CurrentUser, TenantPlan, ThemeMode } from '../utils/themeAccess';
-import { api } from '../utils/apiClient';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import type { CurrentUser, TenantPlan } from '../utils/themeAccess';
 import { getBackendUrl } from '../utils/backendUrl';
 import {
   getSmartnoteBaseUrl, setSmartnoteBaseUrl,
@@ -10,7 +9,7 @@ import { getMe, listMemberships, updateMembership, type MembershipItem } from '.
 import { getLLMConfigs, type LLMConfigFromDB } from '../services/llmApi';
 import { toast } from './ui/use-toast';
 import {
-  PaperPage, PaperTopbar, PaperContent, PaperSplit, PaperTOC, PaperPages,
+  PaperPage, PaperTopbar, PaperContent, PaperSplit, PaperTOC,
   PaperButton, PaperInput, PaperSwitch, PaperDanger,
 } from './paper';
 
@@ -31,13 +30,12 @@ export interface ClientSettings {
   autoTTS?: boolean;
   ragEnabled?: boolean;
   ragTopK?: number;
+  ragScope?: 'auto' | 'agent' | 'workspace';
+  defaultLLMConfigId?: string;
 }
 
 interface SettingsPageProps {
   user: CurrentUser | null;
-  themeMode: ThemeMode;
-  onToggleTheme: () => void;
-  onSetThemeMode: (m: ThemeMode) => void;
   settings: ClientSettings;
   onUpdateSettings: (s: Partial<ClientSettings>) => void;
   onLogout: () => void;
@@ -60,8 +58,7 @@ const TOC: Array<{ id: SectionId; label: string; founderOnly?: boolean }> = [
 ];
 
 const SettingsPage: React.FC<SettingsPageProps> = ({
-  user, themeMode, onSetThemeMode,
-  settings, onUpdateSettings, onLogout,
+  user, settings, onUpdateSettings, onLogout,
 }) => {
   const [active, setActive] = useState<SectionId>('account');
   const pagesRef = useRef<HTMLDivElement>(null);
@@ -211,12 +208,17 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     sectionRefs.current[id] = el;
   };
 
-  const defaultModelLabel = useMemo(() => {
-    const enabled = configs.filter((c) => c.enabled);
-    const openai = enabled.find((c) => c.provider === 'openai');
-    if (openai) return `${openai.shortname || openai.name} · OpenAI`;
-    return enabled[0] ? `${enabled[0].shortname || enabled[0].name} · ${enabled[0].provider}` : '未配置';
-  }, [configs]);
+  const enabledConfigs = useMemo(() => configs.filter((c) => c.enabled), [configs]);
+  const currentDefaultId = useMemo(() => {
+    if (settings.defaultLLMConfigId &&
+        enabledConfigs.some((c) => c.config_id === settings.defaultLLMConfigId)) {
+      return settings.defaultLLMConfigId;
+    }
+    // Fallback preference when nothing picked yet.
+    return enabledConfigs.find((c) => c.provider === 'openai')?.config_id
+      || enabledConfigs[0]?.config_id
+      || '';
+  }, [enabledConfigs, settings.defaultLLMConfigId]);
 
   return (
     <PaperPage>
@@ -271,13 +273,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             {/* 02 APPEARANCE */}
             <section className="paper-sect" ref={sectRef('appearance')}>
               <Head n="02" title="长相" cap="Appearance" />
-              <Lead>你想它像白纸黑字，还是深夜墨水。</Lead>
-              <Row title="主题" desc="浅色是纸与墨，深色是深夜写字。自动跟着系统走。">
-                <div style={sx.themes}>
-                  <ThemeSwatch kind="paper" label="纸" sel={themeMode === 'light'} onClick={() => onSetThemeMode('light')} />
-                  <ThemeSwatch kind="dark" label="墨" sel={themeMode === 'dark'} onClick={() => onSetThemeMode('dark')} />
-                </div>
-              </Row>
+              <Lead>纸与墨，一套就够。</Lead>
               <Row title="手绘装饰线" desc="就是侧栏 wordmark 下面那根不太直的线。">
                 <PaperSwitch
                   checked={settings.handRule !== false}
@@ -319,10 +315,40 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             <section className="paper-sect" ref={sectRef('defaults')}>
               <Head n="04" title="默认模型" cap="Defaults" />
               <Lead>新 agent 开局用哪款模型。</Lead>
-              <Row title="新 agent 默认用" desc={configs.length === 0 ? '先去「模型」里接一个 provider。' : '下次创建 agent 会自动选这个。'}>
-                <span style={{ fontFamily: "'Young Serif', serif", fontSize: 14, color: 'var(--ink-strong)' }}>
-                  {defaultModelLabel}
-                </span>
+              <Row
+                title="新 agent 默认用"
+                desc={
+                  enabledConfigs.length === 0
+                    ? '一个可用模型都没有。先去「模型」里接一个 provider 并启用。'
+                    : '下次创建 agent 会自动选这个。现有 agent 不受影响——要改单只的模型去「人设」那页。'
+                }
+              >
+                <select
+                  value={currentDefaultId}
+                  disabled={enabledConfigs.length === 0}
+                  onChange={(e) => onUpdateSettings({ defaultLLMConfigId: e.target.value })}
+                  style={{
+                    background: 'transparent', border: 0,
+                    borderBottom: '1px solid var(--rule-strong)',
+                    padding: '5px 2px',
+                    fontFamily: "'Commissioner', sans-serif",
+                    fontSize: 14, color: 'var(--ink)',
+                    outline: 'none',
+                    cursor: enabledConfigs.length === 0 ? 'not-allowed' : 'pointer',
+                    minWidth: 220, textAlign: 'right',
+                    opacity: enabledConfigs.length === 0 ? 0.5 : 1,
+                  }}
+                >
+                  {enabledConfigs.length === 0 ? (
+                    <option value="">— 没有可用模型 —</option>
+                  ) : (
+                    enabledConfigs.map((c) => (
+                      <option key={c.config_id} value={c.config_id}>
+                        {(c.shortname || c.name)} · {c.provider}
+                      </option>
+                    ))
+                  )}
+                </select>
               </Row>
               <Row title="管理模型" desc="在「模型」那章配置每个 provider 的 API key。">
                 <PaperButton
@@ -378,18 +404,44 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                 />
               </Row>
               {settings.ragEnabled && (
-                <Row title="RAG 取几条" desc="每轮取几条最相关的。默认 5。">
-                  <select
-                    value={settings.ragTopK ?? 5}
-                    onChange={(e) => onUpdateSettings({ ragTopK: Number(e.target.value) })}
-                    style={{ background: 'transparent', border: 0, borderBottom: '1px solid var(--rule-strong)', padding: '5px 2px', fontFamily: "'Commissioner', sans-serif", fontSize: 14, color: 'var(--ink)', outline: 'none', cursor: 'pointer', minWidth: 100, textAlign: 'right' }}
+                <>
+                  <Row title="RAG 取几条" desc="每轮取几条最相关的。默认 5。">
+                    <select
+                      value={settings.ragTopK ?? 5}
+                      onChange={(e) => onUpdateSettings({ ragTopK: Number(e.target.value) })}
+                      style={{ background: 'transparent', border: 0, borderBottom: '1px solid var(--rule-strong)', padding: '5px 2px', fontFamily: "'Commissioner', sans-serif", fontSize: 14, color: 'var(--ink)', outline: 'none', cursor: 'pointer', minWidth: 100, textAlign: 'right' }}
+                    >
+                      <option value={3}>3 条</option>
+                      <option value={5}>5 条</option>
+                      <option value={8}>8 条</option>
+                      <option value={12}>12 条</option>
+                    </select>
+                  </Row>
+                  <Row
+                    title="检索范围"
+                    desc={
+                      <>
+                        Smartnote 按 API key 隔离 workspace——同一把 key = 同一个人 / 同一组织的共享空间。
+                        <br />
+                        <b>智能</b>（推荐）：同时查"此 agent"和"整个 workspace"，让检索分数自己选——该私房话时走 agent，该调组织共识时走 workspace，不用手动拨。
+                        <br />
+                        <b>只此 agent</b>：硬隔离。scope=agent:&lt;id&gt;，别的 agent 存的东西碰不到。
+                        <br />
+                        <b>整个 workspace</b>：不加过滤，直接全库检索。
+                      </>
+                    }
                   >
-                    <option value={3}>3 条</option>
-                    <option value={5}>5 条</option>
-                    <option value={8}>8 条</option>
-                    <option value={12}>12 条</option>
-                  </select>
-                </Row>
+                    <select
+                      value={settings.ragScope ?? 'auto'}
+                      onChange={(e) => onUpdateSettings({ ragScope: e.target.value as 'auto' | 'agent' | 'workspace' })}
+                      style={{ background: 'transparent', border: 0, borderBottom: '1px solid var(--rule-strong)', padding: '5px 2px', fontFamily: "'Commissioner', sans-serif", fontSize: 14, color: 'var(--ink)', outline: 'none', cursor: 'pointer', minWidth: 180, textAlign: 'right' }}
+                    >
+                      <option value="auto">智能（让 AI 自己选）</option>
+                      <option value="agent">只此 agent</option>
+                      <option value="workspace">整个 workspace</option>
+                    </select>
+                  </Row>
+                </>
               )}
             </section>
 
@@ -590,24 +642,6 @@ const Row: React.FC<{ title: React.ReactNode; desc?: React.ReactNode; children: 
   </div>
 );
 
-const ThemeSwatch: React.FC<{ kind: 'paper' | 'dark' | 'auto'; label: string; sel: boolean; onClick: () => void }> = ({ kind, label, sel, onClick }) => (
-  <button
-    type="button"
-    aria-pressed={sel}
-    onClick={onClick}
-    style={{
-      ...sx.themeS,
-      ...(sel ? sx.themeSSel : null),
-      ...(kind === 'paper' ? sx.themePaper
-          : kind === 'dark' ? sx.themeDark
-          : sx.themeAuto),
-    }}
-    title={label}
-  >
-    <span style={sx.themeLabel}>{label}</span>
-  </button>
-);
-
 const FontOpt: React.FC<{
   sel: boolean;
   sample: string;
@@ -665,32 +699,6 @@ const sx: Record<string, React.CSSProperties> = {
     fontFamily: "'Young Serif', serif",
     fontStyle: 'italic',
     maxWidth: '56ch',
-  },
-  themes: { display: 'flex', gap: 22, paddingRight: 6 },
-  themeS: {
-    position: 'relative',
-    width: 44, height: 30, borderRadius: 2,
-    border: '2px solid transparent',
-    cursor: 'pointer',
-    padding: 0,
-  },
-  themeSSel: { borderColor: 'var(--accent-ink)' },
-  themePaper: {
-    background: 'var(--paper)',
-    boxShadow: 'inset 0 0 0 1px var(--rule-strong)',
-  },
-  themeDark: {
-    background: 'oklch(0.18 0.018 310)',
-    boxShadow: 'inset 0 0 0 1px oklch(0.28 0.015 310)',
-  },
-  themeAuto: {
-    background: 'linear-gradient(90deg, var(--paper) 50%, oklch(0.18 0.018 310) 50%)',
-  },
-  themeLabel: {
-    position: 'absolute', bottom: -20, left: '50%', transform: 'translateX(-50%)',
-    fontSize: 10.5, color: 'var(--pencil)',
-    fontFamily: "'JetBrains Mono', monospace",
-    letterSpacing: '0.08em',
   },
   fontOpts: { display: 'flex', flexDirection: 'column', gap: 0, marginTop: 16 },
   fontOpt: {

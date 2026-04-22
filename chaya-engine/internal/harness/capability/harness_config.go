@@ -19,8 +19,13 @@ func DefaultHarnessRuntimeConfig() HarnessRuntimeConfig {
 		PromptRAGEstTokens:        3200,
 		PromptSkillSOPEstTokens:   6000,
 		PromptMemoryEstTokens:     4000,
-		ToolSelectMaxPerServer:    8,
-		ToolSelectMinKeywordScore: 1,
+		// Tight by default: show only the top-few tools per server that actually
+		// match the user's query. Model accuracy degrades as the menu grows;
+		// with 18+ tools collected it was silently falling back to "all" half
+		// the time. Raise the threshold so only genuinely relevant matches get
+		// through, and cap per-server count lower.
+		ToolSelectMaxPerServer:    4,
+		ToolSelectMinKeywordScore: 2,
 		MetricsVerbose:            false,
 	}
 }

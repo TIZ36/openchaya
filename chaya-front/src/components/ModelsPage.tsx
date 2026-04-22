@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  getLLMConfigs, deleteLLMConfig, updateLLMConfig, getLLMConfigApiKey,
-  type LLMConfigFromDB,
+  getLLMConfigs, createLLMConfig, deleteLLMConfig, updateLLMConfig,
+  getLLMConfigApiKey, listAvailableModels,
+  type LLMConfigFromDB, type AvailableModel,
 } from '../services/llmApi';
 import { toast } from './ui/use-toast';
 import {
@@ -31,6 +32,14 @@ interface ProviderGroup {
   hasKey: boolean;
 }
 
+/** Provider-level default API URLs (used by auto-discover panel). */
+const DEFAULT_API_URLS: Partial<Record<Provider, string>> = {
+  openai:    'https://api.openai.com/v1',
+  gemini:    'https://generativelanguage.googleapis.com',
+  deepseek:  'https://api.deepseek.com/v1',
+  ollama:    'http://localhost:11434',
+};
+
 const ModelsPage: React.FC = () => {
   const [configs, setConfigs] = useState<LLMConfigFromDB[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,6 +48,16 @@ const ModelsPage: React.FC = () => {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [revealKey, setRevealKey] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Auto-discover flow
+  const [discoverOpen, setDiscoverOpen] = useState(false);
+  const [discoverProvider, setDiscoverProvider] = useState<Provider>('gemini');
+  const [discoverApiKey, setDiscoverApiKey] = useState('');
+  const [discoverApiUrl, setDiscoverApiUrl] = useState<string>(DEFAULT_API_URLS.gemini || '');
+  const [discoverFetching, setDiscoverFetching] = useState(false);
+  const [discoveredModels, setDiscoveredModels] = useState<AvailableModel[]>([]);
+  const [modelFlags, setModelFlags] = useState<Record<string, { enabled: boolean; media: boolean }>>({});
+  const [discoverSaving, setDiscoverSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -94,6 +113,148 @@ const ModelsPage: React.FC = () => {
     }
   };
 
+  const toggleMediaVisible = async (cfg: LLMConfigFromDB) => {
+    setSaving(true);
+    try {
+      await updateLLMConfig(cfg.config_id, { media_visible: !cfg.media_visible } as any);
+      await load();
+    } catch (e: any) {
+      toast({ title: '切换失败', description: e?.message || '', variant: 'destructive' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /* ---------- auto-discover ---------- */
+
+  const openDiscover = (provider?: Provider) => {
+    const p = provider || selectedProvider || 'gemini';
+    setDiscoverProvider(p);
+    setDiscoverApiUrl(DEFAULT_API_URLS[p] || '');
+    setDiscoverApiKey('');
+    setDiscoveredModels([]);
+    setModelFlags({});
+    setDiscoverOpen(true);
+  };
+
+  const fetchModels = async () => {
+    if (!discoverApiKey.trim()) {
+      toast({ title: '先填 API key', variant: 'destructive' });
+      return;
+    }
+    setDiscoverFetching(true);
+    try {
+      const list = await listAvailableModels(
+        discoverProvider,
+        discoverApiKey.trim(),
+        discoverApiUrl.trim() || undefined,
+      );
+      setDiscoveredModels(list);
+      // Seed checkboxes from existing configs for this provider so re-imports
+      // show the current enabled / media_visible state. Any model not yet in
+      // DB falls back to heuristic defaults (image models → 创作可见).
+      const priorByModel = new Map<string, LLMConfigFromDB>();
+      for (const c of configs) {
+        if (c.provider !== discoverProvider) continue;
+        const key = (c.model || c.name || '').toLowerCase();
+        if (key) priorByModel.set(key, c);
+      }
+      const flags: Record<string, { enabled: boolean; media: boolean }> = {};
+      for (const m of list) {
+        const prior = priorByModel.get(m.id.toLowerCase());
+        if (prior) {
+          flags[m.id] = { enabled: !!prior.enabled, media: !!prior.media_visible };
+        } else {
+          const isImage = /image|nano-banana|imagen/i.test(m.id);
+          flags[m.id] = {
+            enabled: list.length <= 5,
+            media: isImage,
+          };
+        }
+      }
+      setModelFlags(flags);
+      toast({
+        title: `拿到 ${list.length} 个模型`,
+        description: '勾选需要启用的 · 图像模型自动标记为「创作可见」',
+        variant: 'success',
+      });
+    } catch (e: any) {
+      toast({ title: '拉不到', description: e?.message || '', variant: 'destructive' });
+    } finally {
+      setDiscoverFetching(false);
+    }
+  };
+
+  const toggleModelFlag = (id: string, field: 'enabled' | 'media') => {
+    setModelFlags((prev) => ({
+      ...prev,
+      [id]: {
+        enabled: field === 'enabled' ? !(prev[id]?.enabled) : !!prev[id]?.enabled,
+        media: field === 'media' ? !(prev[id]?.media) : !!prev[id]?.media,
+      },
+    }));
+  };
+
+  const bulkSave = async () => {
+    const enabledModels = discoveredModels.filter((m) => modelFlags[m.id]?.enabled);
+    if (enabledModels.length === 0) {
+      toast({ title: '没勾选任何模型', variant: 'destructive' });
+      return;
+    }
+    setDiscoverSaving(true);
+    let ok = 0, fail = 0, updated = 0;
+    // Index existing configs for this provider by model id so we can UPDATE
+    // instead of silently skipping when the user re-imports to toggle
+    // "创作可见" on a model they'd already added.
+    const existingByModel = new Map<string, LLMConfigFromDB>();
+    for (const c of configs) {
+      if (c.provider !== discoverProvider) continue;
+      const key = (c.model || c.name || '').toLowerCase();
+      if (key) existingByModel.set(key, c);
+    }
+    for (const m of enabledModels) {
+      try {
+        const hit = existingByModel.get(m.id.toLowerCase());
+        const wantMedia = !!modelFlags[m.id]?.media;
+        if (hit) {
+          // Re-import path: push the toggles through so the row's
+          // enabled/media_visible actually reflect the modal's checkboxes.
+          const patch: Record<string, unknown> = {};
+          if (!hit.enabled) patch.enabled = true;
+          if (!!hit.media_visible !== wantMedia) patch.media_visible = wantMedia;
+          if (Object.keys(patch).length > 0) {
+            await updateLLMConfig(hit.config_id, patch as any);
+            updated += 1;
+          }
+          ok += 1;
+          continue;
+        }
+        await createLLMConfig({
+          name: m.name || m.id,
+          shortname: m.id,
+          provider: discoverProvider,
+          api_key: discoverApiKey.trim(),
+          api_url: discoverApiUrl.trim() || undefined,
+          model: m.id,
+          enabled: true,
+          media_visible: wantMedia,
+        });
+        ok += 1;
+      } catch (e: any) {
+        console.warn('[ModelsPage] save config failed for', m.id, e?.message);
+        fail += 1;
+      }
+    }
+    setDiscoverSaving(false);
+    setDiscoverOpen(false);
+    await load();
+    setSelectedProvider(discoverProvider);
+    toast({
+      title: `存了 ${ok} 个${updated > 0 ? `（更新 ${updated}）` : ''}${fail > 0 ? `，${fail} 个失败` : ''}`,
+      variant: fail > 0 ? 'destructive' : 'success',
+    });
+  };
+
   const removeConfig = async (cfg: LLMConfigFromDB) => {
     if (!confirm(`真的要删掉「${cfg.shortname || cfg.name}」吗？`)) return;
     setSaving(true);
@@ -115,7 +276,7 @@ const ModelsPage: React.FC = () => {
         title="模型"
         subtitle="你接的每个 provider 都是一家笔墨店。你的 agents 从这里挑笔写字。"
         meta={loading ? '正在取…' : `${groups.length} 家 · ${configs.length} 款`}
-        actions={<PaperButton>+ 接一家</PaperButton>}
+        actions={<PaperButton onClick={() => openDiscover()}>+ 接一家</PaperButton>}
       />
 
       <PaperContent>
@@ -220,12 +381,21 @@ const ModelsPage: React.FC = () => {
 
                   <hr style={s.hr} />
 
-                  <div style={s.fieldLabel}>可用模型</div>
+                  <div style={{ ...s.fieldLabel, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                    <span>可用模型</span>
+                    <PaperButton variant="ghost" size="small" onClick={() => openDiscover(selectedGroup.provider)}>
+                      + 加更多
+                    </PaperButton>
+                  </div>
                   <div style={s.modelList}>
                     {selectedGroup.configs.map((c) => (
                       <div key={c.config_id} style={s.modelRow}>
                         <div style={s.mInfo}>
-                          <div style={s.mName}>{c.shortname || c.model || c.name}</div>
+                          <div style={s.mName}>
+                            {c.shortname || c.model || c.name}
+                            {!c.enabled && <span style={s.mDisabled}> · 关</span>}
+                            {c.media_visible && <span style={s.mMediaTag}>· 创作可见</span>}
+                          </div>
                           {c.max_tokens && (
                             <div style={s.mMeta}>{Math.round(c.max_tokens / 1000)}k ctx</div>
                           )}
@@ -236,8 +406,18 @@ const ModelsPage: React.FC = () => {
                             size="small"
                             disabled={saving}
                             onClick={() => void toggleEnabled(c)}
+                            title={c.enabled ? '关闭这个模型（对话和创作都用不了）' : '启用这个模型'}
                           >
                             {c.enabled ? '关' : '开'}
+                          </PaperButton>
+                          <PaperButton
+                            variant="ghost"
+                            size="small"
+                            disabled={saving || !c.enabled}
+                            onClick={() => void toggleMediaVisible(c)}
+                            title={c.media_visible ? '取消创作可见（创作页不再显示）' : '让这个模型出现在「创作」里'}
+                          >
+                            {c.media_visible ? '✓ 创作' : '创作'}
                           </PaperButton>
                           <PaperButton
                             variant="link"
@@ -252,11 +432,6 @@ const ModelsPage: React.FC = () => {
                       </div>
                     ))}
                   </div>
-
-                  <div style={{ marginTop: 20, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                    <PaperButton variant="ghost" size="small">测一下</PaperButton>
-                    <PaperButton size="small">改</PaperButton>
-                  </div>
                 </>
               ) : (
                 <p style={s.dEmpty}>选一家 provider 看详情。</p>
@@ -265,6 +440,140 @@ const ModelsPage: React.FC = () => {
           </div>
         )}
       </PaperContent>
+
+      {discoverOpen && (
+        <div style={s.discoverOverlay} onClick={() => setDiscoverOpen(false)}>
+          <div style={s.discoverPanel} onClick={(e) => e.stopPropagation()}>
+            <div style={s.discoverHead}>
+              <span>接一家 provider · 自动拉模型</span>
+              <button type="button" style={s.discoverClose} onClick={() => setDiscoverOpen(false)}>×</button>
+            </div>
+
+            <div style={s.discoverBody}>
+              <div style={s.dFieldRow}>
+                <div style={s.dFieldLabel}>Provider</div>
+                <select
+                  value={discoverProvider}
+                  onChange={(e) => {
+                    const p = e.target.value as Provider;
+                    setDiscoverProvider(p);
+                    setDiscoverApiUrl(DEFAULT_API_URLS[p] || '');
+                    setDiscoveredModels([]);
+                    setModelFlags({});
+                  }}
+                  style={s.dFieldInput}
+                >
+                  <option value="gemini">Gemini (Google)</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="ollama">Ollama (本地)</option>
+                </select>
+              </div>
+
+              <div style={s.dFieldRow}>
+                <div style={s.dFieldLabel}>API URL</div>
+                <input
+                  type="text"
+                  value={discoverApiUrl}
+                  onChange={(e) => setDiscoverApiUrl(e.target.value)}
+                  placeholder={DEFAULT_API_URLS[discoverProvider] || 'https://...'}
+                  style={s.dFieldInput}
+                />
+              </div>
+
+              <div style={s.dFieldRow}>
+                <div style={s.dFieldLabel}>API Key</div>
+                <input
+                  type="password"
+                  value={discoverApiKey}
+                  onChange={(e) => setDiscoverApiKey(e.target.value)}
+                  placeholder={discoverProvider === 'ollama' ? '（本地不需要 key）' : 'sk-...'}
+                  style={s.dFieldInput}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4, marginBottom: 14 }}>
+                <PaperButton
+                  size="small"
+                  onClick={fetchModels}
+                  disabled={discoverFetching || (!discoverApiKey.trim() && discoverProvider !== 'ollama')}
+                >
+                  {discoverFetching ? '正在拉…' : (discoveredModels.length > 0 ? '重拉' : '拉取可用模型')}
+                </PaperButton>
+              </div>
+
+              {discoveredModels.length > 0 && (
+                <>
+                  <div style={s.discoverListHead}>
+                    <span>共 {discoveredModels.length} 个 · 勾选要启用的</span>
+                    <span>
+                      <button
+                        type="button"
+                        style={s.bulkLink}
+                        onClick={() => {
+                          const next: typeof modelFlags = {};
+                          for (const m of discoveredModels) {
+                            next[m.id] = { enabled: true, media: modelFlags[m.id]?.media || false };
+                          }
+                          setModelFlags(next);
+                        }}
+                      >全选</button>
+                      <span style={{ color: 'var(--rule-strong)', margin: '0 6px' }}>/</span>
+                      <button
+                        type="button"
+                        style={s.bulkLink}
+                        onClick={() => setModelFlags({})}
+                      >全清</button>
+                    </span>
+                  </div>
+                  <div style={s.discoverList}>
+                    {discoveredModels.map((m) => {
+                      const flags = modelFlags[m.id] || { enabled: false, media: false };
+                      return (
+                        <div key={m.id} style={s.discoverRow}>
+                          <label style={s.discoverCheckLabel}>
+                            <input
+                              type="checkbox"
+                              checked={flags.enabled}
+                              onChange={() => toggleModelFlag(m.id, 'enabled')}
+                            />
+                            <span style={s.discoverModelName}>{m.name || m.id}</span>
+                          </label>
+                          <label style={{ ...s.discoverCheckLabel, opacity: flags.enabled ? 1 : 0.4 }}>
+                            <input
+                              type="checkbox"
+                              checked={flags.media}
+                              disabled={!flags.enabled}
+                              onChange={() => toggleModelFlag(m.id, 'media')}
+                            />
+                            <span style={s.discoverModelMedia}>创作可见</span>
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div style={s.discoverFoot}>
+              <span style={s.discoverFootHint}>
+                Key 会存到后端并跟每个模型的 config 一起。
+              </span>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <PaperButton variant="ghost" size="small" onClick={() => setDiscoverOpen(false)}>取消</PaperButton>
+                <PaperButton
+                  size="small"
+                  onClick={bulkSave}
+                  disabled={discoverSaving || discoveredModels.length === 0}
+                >
+                  {discoverSaving ? '存…' : `存 ${Object.values(modelFlags).filter((f) => f.enabled).length} 个`}
+                </PaperButton>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </PaperPage>
   );
 };
@@ -482,7 +791,144 @@ const s: Record<string, React.CSSProperties> = {
     letterSpacing: '0.04em',
     marginTop: 2,
   },
-  mActions: { display: 'flex', gap: 8, alignItems: 'center' },
+  mActions: { display: 'flex', gap: 6, alignItems: 'center' },
+  mDisabled: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    color: 'var(--pencil-soft)',
+    letterSpacing: '0.08em',
+  },
+  mMediaTag: {
+    fontFamily: "'Young Serif', serif",
+    fontStyle: 'italic',
+    fontSize: 11,
+    color: 'var(--marginalia-ink)',
+    marginLeft: 6,
+  },
+  /* Discover modal */
+  discoverOverlay: {
+    position: 'fixed', inset: 0,
+    background: 'color-mix(in oklch, var(--ink) 55%, transparent)',
+    backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    zIndex: 50, padding: 40,
+  },
+  discoverPanel: {
+    background: 'var(--page-elev)',
+    border: '1px solid var(--rule-strong)',
+    borderRadius: 3,
+    boxShadow: '0 20px 60px oklch(0 0 0 / 0.35)',
+    display: 'flex', flexDirection: 'column',
+    width: '100%', maxWidth: 640, maxHeight: '85vh',
+    overflow: 'hidden',
+  },
+  discoverHead: {
+    padding: '16px 22px',
+    borderBottom: '1px solid var(--rule)',
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    fontFamily: "'Young Serif', serif",
+    fontSize: 14,
+    color: 'var(--ink-strong)',
+  },
+  discoverClose: {
+    background: 'transparent', border: 0,
+    color: 'var(--pencil)', fontSize: 22, lineHeight: 1,
+    cursor: 'pointer', padding: 0,
+  },
+  discoverBody: {
+    padding: '18px 22px',
+    overflowY: 'auto',
+    flex: 1,
+  },
+  dFieldRow: {
+    display: 'grid',
+    gridTemplateColumns: '100px 1fr',
+    gap: 12,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  dFieldLabel: {
+    fontSize: 10.5,
+    letterSpacing: '0.22em',
+    color: 'var(--pencil)',
+    textTransform: 'uppercase',
+  },
+  dFieldInput: {
+    background: 'transparent',
+    border: 0,
+    borderBottom: '1px solid var(--rule-strong)',
+    padding: '6px 2px',
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12.5,
+    color: 'var(--ink)',
+    outline: 'none',
+    width: '100%',
+  },
+  discoverListHead: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    fontSize: 11,
+    color: 'var(--pencil)',
+    fontFamily: "'Young Serif', serif",
+    fontStyle: 'italic',
+    marginTop: 8,
+    marginBottom: 6,
+    paddingBottom: 6,
+    borderBottom: '1px dotted var(--rule)',
+  },
+  bulkLink: {
+    background: 'transparent',
+    border: 0,
+    color: 'var(--accent-ink)',
+    cursor: 'pointer',
+    fontFamily: "'Young Serif', serif",
+    fontSize: 11.5,
+    textDecoration: 'underline',
+    textUnderlineOffset: 2,
+    padding: 0,
+    fontStyle: 'normal',
+  },
+  discoverList: {
+    display: 'flex', flexDirection: 'column',
+    maxHeight: 340, overflowY: 'auto',
+  },
+  discoverRow: {
+    display: 'grid',
+    gridTemplateColumns: '1fr auto',
+    gap: 12,
+    padding: '7px 4px',
+    borderBottom: '1px dotted var(--rule)',
+    alignItems: 'center',
+  },
+  discoverCheckLabel: {
+    display: 'flex', alignItems: 'center', gap: 8,
+    cursor: 'pointer',
+    fontFamily: "'Young Serif', serif",
+    fontSize: 13,
+  },
+  discoverModelName: {
+    color: 'var(--ink)',
+  },
+  discoverModelMedia: {
+    color: 'var(--marginalia-ink)',
+    fontStyle: 'italic',
+    fontSize: 12,
+  },
+  discoverFoot: {
+    padding: '12px 22px',
+    borderTop: '1px solid var(--rule)',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    background: 'color-mix(in oklch, var(--paper) 60%, var(--page-elev))',
+  },
+  discoverFootHint: {
+    fontFamily: "'Young Serif', serif",
+    fontStyle: 'italic',
+    fontSize: 11.5,
+    color: 'var(--pencil)',
+  },
   loading: { padding: '48px 20px', textAlign: 'center' },
   empty: {
     padding: '64px 32px',

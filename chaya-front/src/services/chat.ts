@@ -121,36 +121,6 @@ export interface Summary {
   created_at?: string;
 }
 
-export interface MessageExecution {
-  execution_id: string;
-  message_id: string;
-  component_type: 'mcp' | 'workflow';
-  component_id: string;
-  component_name?: string;
-  llm_config_id?: string;
-  input?: string;
-  result?: string;
-  // 执行过程日志（后端以 JSON 数组返回；兼容旧数据可能为 string）
-  logs?: any;
-  // 原始结构化结果（用于展示 MCP 多媒体 content[]）
-  raw_result?: any;
-  status: 'pending' | 'running' | 'completed' | 'error';
-  error_message?: string;
-  created_at?: string;
-  updated_at?: string;
-}
-
-export interface SessionExecutionItem {
-  execution_id: string;
-  message_id: string;
-  component_type: 'mcp' | 'workflow';
-  component_id?: string;
-  component_name?: string;
-  status: 'pending' | 'running' | 'completed' | 'error';
-  error_message?: string;
-  created_at?: string;
-  updated_at?: string;
-}
 
 import { getBackendUrl } from '../utils/backendUrl';
 import { ensureDataUrlFromMaybeBase64 } from '../utils/dataUrl';
@@ -303,28 +273,6 @@ export async function getMemories(): Promise<Session[]> {
 /**
  * 创建新会话
  */
-export async function createSession(
-  llm_config_id?: string,
-  title?: string,
-  session_type?: 'temporary' | 'memory' | 'agent' | 'research' | 'topic_general'
-): Promise<Session> {
-  const response = await authFetch(`${API_BASE}/sessions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      llm_config_id,
-      title,
-      session_type: session_type || 'memory',
-    }),
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to create session: ${response.statusText}`);
-  }
-  const data = await response.json();
-  return normalizeSessionAvatar(data as Session);
-}
 
 /**
  * 获取会话详情
@@ -344,48 +292,7 @@ export async function getSession(session_id: string): Promise<Session> {
  * 若无法解析为 Agent，回退为 getSession（仅会话壳数据）。
  */
 /** 铭牌：MCP / Skill / 知识库 绑定与在线状态（GET /api/agents/:id/harness-status） */
-export interface AgentHarnessStatus {
-  mcp_servers_bound: number;
-  mcp_tool_count: number;
-  skills_bound: number;
-  kb_docs_ready: number;
-  kb_docs_processing: number;
-}
 
-export async function getAgentHarnessStatus(agentId: string): Promise<AgentHarnessStatus> {
-  const id = agentId?.trim();
-  if (!id) {
-    throw new Error('agent id required');
-  }
-  const response = await authFetch(`${API_BASE}/agents/${encodeURIComponent(id)}/harness-status`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch harness status: ${response.statusText}`);
-  }
-  return unwrapJson<AgentHarnessStatus>(response);
-}
-
-export async function getAgentProfileForNameplate(
-  conversationId: string,
-  agentAgidHint?: string | null,
-): Promise<Session> {
-  let agentId = (agentAgidHint && String(agentAgidHint).trim()) || '';
-  if (!agentId) {
-    const agents = await getAgents();
-    const match =
-      agents.find((a) => a.session_id === conversationId) ||
-      agents.find((a) => a.id === conversationId);
-    if (match) agentId = agentApiId(match);
-  }
-  if (agentId) {
-    const response = await authFetch(`${API_BASE}/agents/${agentId}`);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch agent: ${response.statusText}`);
-    }
-    const data = await unwrapJson<Session>(response);
-    return normalizeSessionAvatar(data as Session);
-  }
-  return getSession(conversationId);
-}
 
 /** 按 Agent 实体 id（agid）拉取详情，含头像；用于消息列表按 sender_id 解析头像 */
 export async function getAgentById(agentId: string): Promise<Session | null> {
@@ -452,45 +359,6 @@ export async function getSessionMessages(
  * @param limit 获取数量
  * @param lightweight 轻量级模式
  */
-export async function getSessionMessagesCursor(
-  session_id: string,
-  before_id: string | null = null,
-  limit: number = 20,
-  lightweight: boolean = false
-): Promise<{
-  messages: Message[];
-  has_more: boolean;
-  next_cursor: string | null;
-}> {
-  try {
-    const url = new URL(`${API_BASE}/sessions/${session_id}/messages`);
-    if (before_id) {
-      url.searchParams.set('before_id', before_id);
-    }
-    url.searchParams.set('limit', limit.toString());
-    if (lightweight) {
-      url.searchParams.set('lightweight', 'true');
-    }
-    
-    const response = await authFetch(url.toString());
-    if (!response.ok) {
-      console.warn(`Failed to fetch messages: ${response.statusText}`);
-      return { messages: [], has_more: false, next_cursor: null };
-    }
-    const raw = await response.json();
-    const data = (raw && raw.code === 0 && raw.data) ? raw.data : raw;
-    const msgs = Array.isArray(data) ? data : (data.messages || []);
-    const normalized = msgs.map((m: any) => ({
-      ...m,
-      message_id: m.message_id || m.id,
-      session_id: m.session_id || m.conv_id || session_id,
-    }));
-    return { messages: normalized, has_more: data.has_more || false, next_cursor: data.next_cursor || null };
-  } catch (error) {
-    console.warn('Error fetching messages:', error);
-    return { messages: [], has_more: false, next_cursor: null };
-  }
-}
 
 /**
  * 获取单个消息（基于message_id），用于增量加载
@@ -515,72 +383,10 @@ export async function getMessage(message_id: string): Promise<Message | null> {
 /**
  * 保存消息到会话
  */
-export async function saveMessage(
-  session_id: string,
-    message: {
-      message_id?: string;
-      role: 'user' | 'assistant' | 'system' | 'tool';
-      content: string;
-      thinking?: string;
-      tool_calls?: any;
-      model?: string;
-      toolType?: 'workflow' | 'mcp'; // 感知组件类型（当 role === 'tool' 时使用）
-      workflowId?: string;
-      workflowName?: string;
-      workflowStatus?: 'pending' | 'running' | 'completed' | 'error';
-      acc_token?: number; // 可选：手动指定累积 token（用于总结消息等特殊情况）
-      mentions?: string[]; // 提及的用户或智能体 ID 列表
-      ext?: MessageExt; // 扩展数据（如 Gemini 的 thoughtSignature, 或选中的工具ID）
-    }
-): Promise<{ message_id: string; token_count: number }> {
-  // 如果是工具消息（感知组件），将工作流信息存储在 tool_calls 中
-  if (message.role === 'tool' && (message.workflowId || message.toolType)) {
-    message.tool_calls = {
-      ...message.tool_calls,
-      toolType: message.toolType, // 使用 toolType 而不是 workflowType
-      workflowId: message.workflowId,
-      workflowName: message.workflowName,
-      workflowStatus: message.workflowStatus,
-      // 兼容旧数据：同时保存 workflowType
-      workflowType: message.toolType,
-    };
-  }
-  const response = await authFetch(`${API_BASE}/sessions/${session_id}/messages`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(message),
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to save message: ${response.statusText}`);
-  }
-  return await response.json();
-}
 
 /**
  * 总结会话内容
  */
-export async function summarizeSession(
-  session_id: string,
-  params: {
-    llm_config_id: string;
-    model: string;
-    messages: Array<{ message_id?: string; role: string; content: string; token_count?: number }>;
-  }
-): Promise<Summary> {
-  const response = await authFetch(`${API_BASE}/sessions/${session_id}/summarize`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(params),
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to summarize session: ${response.statusText}`);
-  }
-  return await response.json();
-}
 
 /**
  * 获取会话的所有总结
@@ -650,94 +456,18 @@ export async function deleteMessage(session_id: string, message_id: string): Pro
  * 助手消息点赞/点踩（写入 messages.ext，并记录拓扑轨迹 assistant_feedback）
  * @param rating null 表示清除评价
  */
-export async function patchAssistantMessageFeedback(
-  session_id: string,
-  message_id: string,
-  rating: 'up' | 'down' | null,
-): Promise<Message> {
-  const raw = await unwrapJson<any>(
-    await authFetch(
-      `${API_BASE}/sessions/${encodeURIComponent(session_id)}/messages/${encodeURIComponent(message_id)}/feedback`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ rating: rating == null ? '' : rating }),
-      },
-    ),
-  );
-  return {
-    ...raw,
-    message_id: raw.message_id || raw.id,
-    session_id: raw.session_id || raw.conv_id || session_id,
-  } as Message;
-}
 
 /**
  * 执行消息关联的感知组件
  */
-export async function executeMessageComponent(
-  message_id: string,
-  llm_config_id: string,
-  input: string
-): Promise<MessageExecution> {
-  const response = await authFetch(`${API_BASE}/messages/${message_id}/execute`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      llm_config_id,
-      input,
-    }),
-  });
-  
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || error.message || `Failed to execute message component: ${response.statusText}`);
-  }
-  
-  return await response.json();
-}
 
 /**
  * 获取消息的执行记录
  */
-export async function getMessageExecution(message_id: string): Promise<MessageExecution | null> {
-  const response = await authFetch(`${API_BASE}/messages/${message_id}/execution`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-  });
-  
-  if (!response.ok) {
-    if (response.status === 404) {
-      return null;
-    }
-    const error = await response.json();
-    throw new Error(error.error || error.message || `Failed to get message execution: ${response.statusText}`);
-  }
-  
-  return await response.json();
-}
 
 /**
  * 列出会话内所有执行记录（用于时间线视图）
  */
-export async function listSessionExecutions(session_id: string): Promise<SessionExecutionItem[]> {
-  const response = await authFetch(`${API_BASE}/sessions/${session_id}/executions`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-  });
-  
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || error.message || `Failed to list session executions: ${response.statusText}`);
-  }
-  
-  return await response.json();
-}
 
 /**
  * 更新会话的机器人头像
@@ -866,219 +596,39 @@ export async function updateSessionLLMConfig(session_id: string, llm_config_id: 
 /**
  * 升级记忆体为智能体
  */
-export async function upgradeToAgent(session_id: string, name: string, avatar: string, system_prompt: string, llm_config_id: string): Promise<Session> {
-  const response = await authFetch(`${API_BASE}/sessions/${session_id}/upgrade-to-agent`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ name, avatar, system_prompt, llm_config_id }),
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to upgrade to agent: ${response.statusText}`);
-  }
-  const data = await response.json();
-  return normalizeSessionAvatar(data as Session);
-}
 
 // ==================== 智能体导入导出 ====================
 
-export interface AgentExportData {
-  version: string;
-  export_type: 'agent';
-  exported_at: string;
-  agent: {
-    name: string;
-    avatar?: string;
-    system_prompt?: string;
-  };
-  llm_config?: {
-    config_id: string;
-    name: string;
-    provider: string;
-    api_key?: string;
-    api_url?: string;
-    model?: string;
-    tags?: string[];
-    enabled: boolean;
-    description?: string;
-    metadata?: Record<string, any>;
-  };
-}
 
 /**
  * 导出智能体配置（包含LLM配置和密钥）
  */
-export async function exportAgent(session_id: string): Promise<AgentExportData> {
-  const response = await authFetch(`${API_BASE}/agents/${session_id}/export`);
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error || `Failed to export agent: ${response.statusText}`);
-  }
-  return await response.json();
-}
 
 /**
  * 导入智能体配置
  * @param data 导出的智能体数据
  * @param llmMode 当LLM配置名称已存在时的处理方式: 'use_existing' | 'create_new'
  */
-export async function importAgent(
-  data: AgentExportData,
-  llmMode: 'use_existing' | 'create_new' = 'use_existing'
-): Promise<{ session_id: string; name: string; llm_config_id?: string }> {
-  const response = await authFetch(`${API_BASE}/agents/import?llm_mode=${llmMode}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error || `Failed to import agent: ${response.statusText}`);
-  }
-  return await response.json();
-}
 
 /**
  * 下载智能体配置为JSON文件
  */
-export async function downloadAgentAsJson(session_id: string, agentName: string): Promise<void> {
-  const data = await exportAgent(session_id);
-  
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${agentName.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_')}_agent.json`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
 
 /**
  * 从JSON文件导入智能体
  */
-export function importAgentFromFile(): Promise<AgentExportData> {
-  return new Promise((resolve, reject) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) {
-        reject(new Error('No file selected'));
-        return;
-      }
-      
-      try {
-        const text = await file.text();
-        const data = JSON.parse(text) as AgentExportData;
-        
-        // 验证数据格式
-        if (data.export_type !== 'agent') {
-          reject(new Error('无效的导入文件：不是智能体配置文件'));
-          return;
-        }
-        
-        if (!data.agent) {
-          reject(new Error('无效的导入文件：缺少智能体数据'));
-          return;
-        }
-        
-        resolve(data);
-      } catch (error) {
-        reject(new Error('无法解析文件：请确保是有效的JSON格式'));
-      }
-    };
-    
-    input.click();
-  });
-}
 
 // ==================== 参与者管理 API ====================
 
-export interface Participant {
-  participant_id: string;
-  participant_type: 'user' | 'agent';
-  role: string;
-  name?: string;
-  avatar?: string;
-  system_prompt?: string;
-  joined_at?: string;
-}
 
 /**
  * 获取会话参与者列表
  */
-export async function getParticipants(session_id: string): Promise<Participant[]> {
-  try {
-    const response = await authFetch(`${API_BASE}/sessions/${session_id}/participants`);
-    if (!response.ok) {
-      console.warn(`Failed to fetch participants: ${response.statusText}`);
-      return [];
-    }
-    const data = await response.json();
-    return data || [];
-  } catch (error) {
-    console.warn('Error fetching participants:', error);
-    return [];
-  }
-}
 
 /**
  * 添加参与者到会话
  */
-export async function addParticipant(
-  session_id: string,
-  participant_id: string,
-  participant_type: 'user' | 'agent' = 'agent',
-  role: string = 'member'
-): Promise<boolean> {
-  try {
-    const response = await authFetch(`${API_BASE}/sessions/${session_id}/participants`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        participant_id,
-        participant_type,
-        role,
-      }),
-    });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.error || `Failed to add participant: ${response.statusText}`);
-    }
-    return true;
-  } catch (error) {
-    console.error('Error adding participant:', error);
-    throw error;
-  }
-}
 
 /**
  * 从会话移除参与者
  */
-export async function removeParticipant(
-  session_id: string,
-  participant_id: string
-): Promise<boolean> {
-  try {
-    const response = await authFetch(`${API_BASE}/sessions/${session_id}/participants/${participant_id}`, {
-      method: 'DELETE',
-    });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.error || `Failed to remove participant: ${response.statusText}`);
-    }
-    return true;
-  } catch (error) {
-    console.error('Error removing participant:', error);
-    throw error;
-  }
-}

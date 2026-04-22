@@ -12,13 +12,12 @@ import GalleryPage from './components/GalleryPage';
 import SettingsPage from './components/SettingsPage';
 import PaperAppShell from './components/paper/AppShell';
 import {
-  getAgents, getSessions, createAgent, deleteSession, deleteAgent, type Session,
+  getAgents, getSessions, createAgent, deleteSession, deleteAgent, updateSessionLLMConfig, type Session,
 } from './services/chat';
 import { toast } from './components/ui/use-toast';
-import { ConfirmDialog } from './components/ui/ConfirmDialog';
 import { SESSIONS_CHANGED_EVENT, emitSessionsChanged } from './utils/sessionEvents';
 import { getMe } from './services/adminApi';
-import type { CurrentUser, ThemeMode } from './utils/themeAccess';
+import type { CurrentUser } from './utils/themeAccess';
 
 /* ============================================================
    Chaya App — Paper & Press only.
@@ -41,6 +40,15 @@ interface ClientSettings {
   ragEnabled?: boolean;
   /** 检索 topk，默认 5。 */
   ragTopK?: number;
+  /**
+   * RAG 检索范围：
+   *  - 'auto'     同时查 agent 和 workspace、并起来按检索分排——让 AI 自己决定。默认。
+   *  - 'agent'    硬隔离，只看当前 agent 记下的（scope=agent:<id>）
+   *  - 'workspace' 整个 workspace（不加 scope 过滤）—— 组织共享大脑全量
+   */
+  ragScope?: 'auto' | 'agent' | 'workspace';
+  /** Selected in 设置 · 默认模型; used to initialise new agents' LLM config. */
+  defaultLLMConfigId?: string;
 }
 
 const DEFAULT_SETTINGS: ClientSettings = {
@@ -52,10 +60,10 @@ const DEFAULT_SETTINGS: ClientSettings = {
   autoTTS: false,
   ragEnabled: false,
   ragTopK: 5,
+  ragScope: 'auto',
 };
 
 const LS_SETTINGS = 'settings';
-const LS_THEME = 'chatee_theme_mode';
 const LS_SESSION = 'chatee_last_open_chat';
 
 const chapterFromPath = (p: string): Chapter => {
@@ -106,26 +114,6 @@ const App: React.FC = () => {
   }, [settings]);
   const updateSettings = useCallback((patch: Partial<ClientSettings>) => {
     setSettings((prev) => ({ ...prev, ...patch }));
-  }, []);
-
-  // ── Theme ──
-  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
-    try {
-      const raw = localStorage.getItem(LS_THEME);
-      if (raw === 'light' || raw === 'dark') return raw;
-    } catch {/* */}
-    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  });
-  useEffect(() => {
-    const root = document.documentElement;
-    root.setAttribute('data-theme-mode', themeMode);
-    root.setAttribute('data-skin', 'quiet');
-    if (themeMode === 'dark') root.classList.add('dark');
-    else root.classList.remove('dark');
-    try { localStorage.setItem(LS_THEME, themeMode); } catch {/* */}
-  }, [themeMode]);
-  const handleThemeModeToggle = useCallback(() => {
-    setThemeMode((p) => (p === 'dark' ? 'light' : 'dark'));
   }, []);
 
   // ── Enrich user (founder flag etc.) after auth ──
@@ -186,6 +174,16 @@ const App: React.FC = () => {
     try {
       setIsCreatingAgent(true);
       const created = await createAgent();
+      // If the user picked a default model in Settings · 默认模型, apply it
+      // to the fresh agent right away. Best-effort — don't block or surface
+      // the wiring error; the agent is already usable with the backend default.
+      if (settings.defaultLLMConfigId) {
+        try {
+          await updateSessionLLMConfig(created.session_id, settings.defaultLLMConfigId);
+        } catch (e) {
+          console.warn('[App] apply default LLM failed:', e);
+        }
+      }
       handleSelectAgentSession(created.session_id);
       await loadSwitcherData();
       emitSessionsChanged();
@@ -199,17 +197,13 @@ const App: React.FC = () => {
     } finally {
       setIsCreatingAgent(false);
     }
-  }, [handleSelectAgentSession, loadSwitcherData]);
+  }, [handleSelectAgentSession, loadSwitcherData, settings.defaultLLMConfigId]);
 
   // ── Agent delete ──
-  const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
-  const handleDeleteAgent = (s: Session, e: React.MouseEvent) => {
+  const handleDeleteAgent = async (s: Session, e: React.MouseEvent) => {
     e.stopPropagation();
-    setDeleteTarget(s);
-  };
-  const confirmDelete = async () => {
-    if (!deleteTarget) return;
-    const { session_id, name, title, id, is_primary } = deleteTarget;
+    const { session_id, name, title, id, is_primary } = s;
+    if (!window.confirm(`确定要删除「${name || title || '这只 agent'}」吗？它的所有记忆也会一起消失。`)) return;
     try {
       const isAgentEntity = !!(id && session_id && id !== session_id);
       if (isAgentEntity && !is_primary) await deleteAgent(id!);
@@ -224,8 +218,6 @@ const App: React.FC = () => {
         description: error instanceof Error ? error.message : String(error),
         variant: 'destructive',
       });
-    } finally {
-      setDeleteTarget(null);
     }
   };
 
@@ -263,6 +255,7 @@ const App: React.FC = () => {
             cmdEnterToSend={settings.cmdEnterToSend}
             ragEnabled={settings.ragEnabled}
             ragTopK={settings.ragTopK}
+            ragScope={settings.ragScope}
           />
         );
       }
@@ -294,9 +287,6 @@ const App: React.FC = () => {
         return (
           <SettingsPage
             user={user}
-            themeMode={themeMode}
-            onToggleTheme={handleThemeModeToggle}
-            onSetThemeMode={setThemeMode}
             settings={settings}
             onUpdateSettings={updateSettings}
             onLogout={handleLogout}
@@ -323,22 +313,9 @@ const App: React.FC = () => {
         onDeleteAgent={handleDeleteAgent}
         userLabel={user?.email || user?.name || '未登入'}
         onLogout={handleLogout}
-        themeMode={themeMode}
-        onToggleTheme={handleThemeModeToggle}
       >
         {renderChapter()}
       </PaperAppShell>
-
-      <ConfirmDialog
-        open={!!deleteTarget}
-        onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}
-        title="删除确认"
-        description={`确定要删除「${deleteTarget?.name || deleteTarget?.title || '这只 agent'}」吗？它的所有记忆也会一起消失。`}
-        confirmText="删"
-        cancelText="算了"
-        variant="destructive"
-        onConfirm={confirmDelete}
-      />
     </div>
   );
 };

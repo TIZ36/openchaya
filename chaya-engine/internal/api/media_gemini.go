@@ -17,6 +17,7 @@ func RegisterGeminiMediaRoutes(r chi.Router, db *gorm.DB) {
 	a := &geminiMediaAPI{db: db}
 	r.Post("/api/media/gemini/image/generate", a.imageGenerate)
 	r.Post("/api/media/gemini/image/edit", a.imageEdit)
+	r.Post("/api/media/gemini/rewrite-prompt", a.rewritePrompt)
 	r.Post("/api/media/gemini/video/submit", a.videoSubmit)
 	r.Get("/api/media/gemini/video/status/{taskName}", a.videoStatus)
 	r.Post("/api/media/gemini/video/download", a.videoDownload)
@@ -79,6 +80,37 @@ func (a *geminiMediaAPI) imageGenerate(w http.ResponseWriter, r *http.Request) {
 		out = append(out, M{"mimeType": m.MIMEType, "data": m.Data})
 	}
 	OK(w, M{"media": out, "content": content})
+}
+
+type geminiRewriteReq struct {
+	Prompt      string `json:"prompt"`
+	AspectRatio string `json:"aspect_ratio"`
+	ConfigID    string `json:"config_id"`
+	// Optional — override rewrite model. Defaults to "gemini-2.5-flash".
+	Model string `json:"model"`
+}
+
+func (a *geminiMediaAPI) rewritePrompt(w http.ResponseWriter, r *http.Request) {
+	var req geminiRewriteReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		Fail(w, CodeBadRequest, "invalid request body")
+		return
+	}
+	if req.Prompt == "" {
+		Fail(w, CodeBadRequest, "prompt is required")
+		return
+	}
+	c, err := a.clientForRequest(r, req.ConfigID)
+	if err != nil {
+		Fail(w, CodeBadRequest, err.Error())
+		return
+	}
+	text, err := gemini.RewritePrompt(r.Context(), c, req.Model, req.Prompt, req.AspectRatio)
+	if err != nil {
+		Fail(w, CodeInternal, err.Error())
+		return
+	}
+	OK(w, M{"prompt": text})
 }
 
 type geminiImageEditReq struct {

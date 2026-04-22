@@ -1,14 +1,7 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
-import { Button } from './ui/Button';
 
-interface Props {
-  children: ReactNode;
-}
-
-interface State {
-  hasError: boolean;
-  error?: Error;
-}
+interface Props { children: ReactNode; }
+interface State { hasError: boolean; error?: Error; }
 
 class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
@@ -25,33 +18,43 @@ class ErrorBoundary extends Component<Props, State> {
   }
 
   render() {
-    if (this.state.hasError) {
-      return (
-        <div className="flex items-center justify-center h-screen bg-gray-50 dark:bg-gray-950">
-          <div className="text-center p-8">
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-4">
-              出现错误
-            </h1>
-            <p className="text-gray-600 dark:text-gray-400 mb-4">
-              {this.state.error?.message || '未知错误'}
-            </p>
-            <Button
-              onClick={() => {
-                this.setState({ hasError: false, error: undefined });
-                window.location.reload();
-              }}
-              variant="primary"
-            >
-              重新加载
-            </Button>
-          </div>
+    if (!this.state.hasError) return this.props.children;
+    return (
+      <div style={wrap}>
+        <div style={card}>
+          <h1 style={title}>出现错误</h1>
+          <p style={msg}>{this.state.error?.message || '未知错误'}</p>
+          <button
+            type="button"
+            style={btn}
+            onClick={() => {
+              this.setState({ hasError: false, error: undefined });
+              window.location.reload();
+            }}
+          >
+            重新加载
+          </button>
         </div>
-      );
-    }
-
-    return this.props.children;
+      </div>
+    );
   }
 }
 
-export default ErrorBoundary;
+const wrap: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  height: '100vh', background: 'var(--paper)', color: 'var(--ink)',
+  fontFamily: 'var(--font-sans)',
+};
+const card: React.CSSProperties = { textAlign: 'center', padding: 32, maxWidth: 520 };
+const title: React.CSSProperties = {
+  fontFamily: 'var(--font-display)', fontSize: 28, margin: '0 0 12px',
+  color: 'var(--ink-strong)',
+};
+const msg: React.CSSProperties = { color: 'var(--pencil)', margin: '0 0 20px' };
+const btn: React.CSSProperties = {
+  padding: '10px 20px', fontFamily: 'var(--font-mono)', fontSize: 13,
+  color: 'var(--paper)', background: 'var(--accent-ink)',
+  border: '1px solid var(--accent-ink)', borderRadius: 2, cursor: 'pointer',
+};
 
+export default ErrorBoundary;

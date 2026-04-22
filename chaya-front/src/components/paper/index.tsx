@@ -72,47 +72,6 @@ export const PaperTOC: React.FC<PaperTOCProps> = ({ label = '目录', items, act
   </aside>
 );
 
-export const PaperPages: React.FC<React.PropsWithChildren> = ({ children }) => (
-  <div className="paper-pages">{children}</div>
-);
-
-export interface PaperSectProps {
-  n?: React.ReactNode;
-  title: React.ReactNode;
-  after?: React.ReactNode;
-  lead?: React.ReactNode;
-  id?: string;
-  children?: React.ReactNode;
-}
-
-export const PaperSect: React.FC<PaperSectProps> = ({ n, title, after, lead, id, children }) => (
-  <section className="paper-sect" id={id}>
-    <div className="paper-sect-head">
-      {n !== undefined && <span className="n">{n}</span>}
-      <h2>{title}</h2>
-      {after && <span className="after">{after}</span>}
-    </div>
-    {lead && <p className="paper-sect-lead">{lead}</p>}
-    {children}
-  </section>
-);
-
-export interface PaperRowProps {
-  title: React.ReactNode;
-  desc?: React.ReactNode;
-  children: React.ReactNode;
-}
-
-export const PaperRow: React.FC<PaperRowProps> = ({ title, desc, children }) => (
-  <div className="paper-row">
-    <div className="lab">
-      <div className="lab-title">{title}</div>
-      {desc && <div className="lab-desc">{desc}</div>}
-    </div>
-    <div className="ctrl">{children}</div>
-  </div>
-);
-
 export interface PaperSwitchProps {
   checked: boolean;
   onChange: (v: boolean) => void;
@@ -258,12 +217,6 @@ export const PaperInput: React.FC<React.InputHTMLAttributes<HTMLInputElement> & 
     className={`paper-input ${align === 'right' ? 'right' : ''} ${mono ? 'mono' : ''} ${className || ''}`}
     {...rest}
   />
-);
-
-export const PaperSelect: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = ({ className, children, ...rest }) => (
-  <select className={`paper-select ${className || ''}`} {...rest}>
-    {children}
-  </select>
 );
 
 export const PaperTextarea: React.FC<React.TextareaHTMLAttributes<HTMLTextAreaElement>> = ({ className, ...rest }) => (

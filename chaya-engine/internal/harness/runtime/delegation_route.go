@@ -23,13 +23,30 @@ type HarnessRoutePhaseA struct {
 	Kind HarnessRouteKind
 }
 
+// stripRAGPrefix removes the "[知识 · ...]\n...\n---\n" context block that
+// the frontend prepends when RAG is enabled. Routing / classification should
+// key off the user's real message, NOT the retrieved knowledge — otherwise
+// URLs living in retrieved documents cause false-positive link_fast routing
+// and short messages like "hi" look like 3000-rune complex requests.
+func stripRAGPrefix(body string) string {
+	trimmed := strings.TrimLeft(body, " \t\n")
+	if !strings.HasPrefix(trimmed, "[知识") {
+		return body
+	}
+	// Frontend uses "\n\n---\n<user text>" as the separator.
+	if idx := strings.Index(trimmed, "\n---\n"); idx >= 0 {
+		return strings.TrimSpace(trimmed[idx+len("\n---\n"):])
+	}
+	return body
+}
+
 // ResolveHarnessRoutePhaseA returns the first matching branch in priority order (FSM).
 // Does not call LLM; precise/hint paths require classifyIntent in a second step.
 func ResolveHarnessRoutePhaseA(env *envelope.Envelope) HarnessRoutePhaseA {
 	if env == nil {
 		return HarnessRoutePhaseA{Kind: HarnessRouteDirectChat}
 	}
-	body := env.Body
+	body := stripRAGPrefix(env.Body)
 	if isCapabilitySetupIntent(body) {
 		return HarnessRoutePhaseA{Kind: HarnessRouteCapabilitySingle}
 	}
@@ -62,6 +79,11 @@ func ResolveHarnessRoutePhaseA(env *envelope.Envelope) HarnessRoutePhaseA {
 
 // BuildDelegationTaskSpecs builds task specs from user message (mirrors delegateAndSummarize branches).
 func BuildDelegationTaskSpecs(ctx context.Context, p *PrimaryActor, convID, userBody string) []delegationTaskSpec {
+	// Classify against the user's real text, not the RAG-injected knowledge
+	// block. Same reasoning as ResolveHarnessRoutePhaseA: knowledge-base
+	// documents mentioning URLs shouldn't trick us into "fetch this URL"
+	// routing when the user never asked.
+	userBody = stripRAGPrefix(userBody)
 	if isCapabilitySetupIntent(userBody) {
 		return []delegationTaskSpec{{
 			ID:             "capability_1",

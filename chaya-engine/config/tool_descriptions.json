@@ -1,0 +1,31 @@
+{
+  "_doc": [
+    "Override MCP tool descriptions with user-intent phrasing so the model",
+    "picks them more accurately. Key format: '<server name>:<tool name>'.",
+    "If a key is present, its value replaces the upstream description.",
+    "",
+    "Why this matters: MCP servers ship dev-facing descriptions ('Execute",
+    "SQL query against configured database') which are terse and focused",
+    "on HOW. The model picks tools based on 'when should I use this'.",
+    "Rewriting descriptions in user-intent form (what problem does this",
+    "solve?) typically improves tool-selection accuracy by 20-30 points",
+    "and shortens the prompt budget at the same time.",
+    "",
+    "Examples below are starter suggestions — rewrite them for YOUR mix.",
+    "Anything not in this file passes through unchanged."
+  ],
+  "overrides": {
+    "smartnote:search_knowledge": "When the user asks about something they've discussed or saved before — notes, memories, past decisions, their preferences. Hybrid retrieval over their SmartNote knowledge base.",
+    "smartnote:ingest_notes": "When the user wants to remember something new, save a finding, or add a note to their knowledge base.",
+    "smartnote:list_tags": "When the user asks 'what topics do I have notes on' or wants to see the taxonomy of their knowledge.",
+    "smartnote:get_dashboard": "When the user asks 'what's new', 'what's been happening', or wants an overview of recent knowledge activity.",
+    "smartnote:read_source": "When the user references a specific note / document / source by name and wants to see its full content.",
+
+    "sql-gateway:execute_sql": "When the user asks to query, count, aggregate, join, or inspect rows in a database. Use ONLY when the user explicitly mentions a database, a table name, or asks for numbers/reports that clearly live in SQL.",
+    "sql-gateway:inspect_table": "When the user wants to know what columns a table has, or the schema of a database.",
+
+    "feishu:im_v1_message_list": "When the user asks about recent messages / conversations in Feishu (飞书).",
+    "feishu:wiki_v1_node_search": "When the user asks to find a specific Feishu wiki page or document by topic.",
+    "feishu:docx_v1_document_rawContent": "When the user wants the full text of a specific Feishu doc they've identified by URL or title."
+  }
+}

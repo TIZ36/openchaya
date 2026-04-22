@@ -63,8 +63,19 @@ type Registry struct {
 	oauthServers map[string]*oauthServerMeta // serverID → config (OAuth servers)
 	oauthClients map[string]*oauthCachedClient // "serverID:userID" → ephemeral client
 	cache        map[string]*cachedTools      // serverID → cached tools (shared for both types)
-	mu           sync.RWMutex
+	// Cooldown for servers whose auth / listing failed recently. Key is
+	// "serverID" for static-auth failures and "serverID:userID" for OAuth
+	// failures. While `time.Now() < cooldown[key]` we skip collection and
+	// suppress the per-turn warn spam. Expires on its own (no explicit GC).
+	cooldown map[string]time.Time
+	mu       sync.RWMutex
 }
+
+// oauthCooldown is how long we'll leave a failing server alone before trying
+// it again. Short enough that after the user finishes re-authorising in the
+// UI, the next chat turn picks it up without needing an explicit invalidate
+// call threaded through the OAuth callback.
+const oauthCooldown = 90 * time.Second
 
 type ToolsProgress struct {
 	ServerName string
@@ -82,6 +93,43 @@ func NewRegistry(db *gorm.DB, rdb *redis.Client) *Registry {
 		oauthServers: make(map[string]*oauthServerMeta),
 		oauthClients: make(map[string]*oauthCachedClient),
 		cache:        make(map[string]*cachedTools),
+		cooldown:     make(map[string]time.Time),
+	}
+}
+
+// markCooldown records that `key` failed. Caller also decides whether to warn;
+// we only warn when transitioning into cooldown, not for repeat offences.
+func (r *Registry) markCooldown(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	if t, ok := r.cooldown[key]; ok && now.Before(t) {
+		return false // already cooling down
+	}
+	r.cooldown[key] = now.Add(oauthCooldown)
+	return true
+}
+
+// inCooldown reports whether `key` is currently suppressed.
+func (r *Registry) inCooldown(key string) bool {
+	r.mu.RLock()
+	t, ok := r.cooldown[key]
+	r.mu.RUnlock()
+	return ok && time.Now().Before(t)
+}
+
+// ClearAuthCooldown is called by the OAuth completion handler so a server
+// that just got a fresh token tries immediately instead of waiting out the
+// 5-minute penalty from its previous failure.
+func (r *Registry) ClearAuthCooldown(serverID, userID string) {
+	if serverID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.cooldown, serverID)
+	if userID != "" {
+		delete(r.cooldown, serverID+":"+userID)
 	}
 }
 
@@ -403,18 +451,32 @@ func (r *Registry) listToolsWithProgress(ctx context.Context, timeout time.Durat
 		}
 		r.mu.RUnlock()
 
+		// Skip if we tried and failed recently. Avoids the per-turn "尚未完成
+		// OAuth 授权" spam: we log once on transition and again after the
+		// cooldown window lapses. User-visible error surfaces via the proxy
+		// layer's explicit "authorize" UI, not via chat tool-collection noise.
+		cooldownKey := meta.ID + ":" + userID
+		if r.inCooldown(cooldownKey) {
+			reportProgress(ToolsProgress{ServerName: meta.Name, Err: errors.New("cooldown")})
+			continue
+		}
+
 		wg.Add(1)
-		go func(m *oauthServerMeta) {
+		go func(m *oauthServerMeta, cdKey string) {
 			defer wg.Done()
 			client, headers, err := r.getOAuthClient(ctx, m, userID, tenantID)
 			if err != nil {
-				slog.Warn("mcp oauth client failed", "server", m.Name, "err", err)
+				if r.markCooldown(cdKey) {
+					slog.Warn("mcp oauth client failed — cooldown 5m", "server", m.Name, "err", err)
+				}
 				reportProgress(ToolsProgress{ServerName: m.Name, Err: err})
 				return
 			}
 			rawTools, err := client.ListToolsWithHeaders(ctx, headers)
 			if err != nil {
-				slog.Warn("mcp oauth list tools failed", "server", m.Name, "err", err)
+				if r.markCooldown(cdKey) {
+					slog.Warn("mcp oauth list tools failed — cooldown 5m", "server", m.Name, "err", err)
+				}
 				reportProgress(ToolsProgress{ServerName: m.Name, Err: err})
 				return
 			}
@@ -424,7 +486,7 @@ func (r *Registry) listToolsWithProgress(ctx context.Context, timeout time.Durat
 			r.mu.Unlock()
 			reportProgress(ToolsProgress{ServerName: m.Name})
 			resultCh <- tools
-		}(meta)
+		}(meta, cooldownKey)
 	}
 
 	go func() { wg.Wait(); close(resultCh) }()
@@ -588,9 +650,15 @@ func (r *Registry) parseRawTools(rawTools []json.RawMessage, serverID, serverNam
 		if len(params) == 0 {
 			params = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
+		desc := def.Description
+		if override := descriptionFor(serverName, def.Name); override != "" {
+			// User-intent override wins — the original dev-facing description
+			// typically hurts model selection accuracy and wastes prompt tokens.
+			desc = override
+		}
 		tools = append(tools, pkg.Tool{
 			Name:        def.Name,
-			Description: "[" + serverName + "] " + def.Description,
+			Description: "[" + serverName + "] " + desc,
 			Parameters:  params,
 			ServerID:    serverID,
 			Source:      "mcp",

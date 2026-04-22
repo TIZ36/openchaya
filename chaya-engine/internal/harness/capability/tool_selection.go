@@ -103,28 +103,73 @@ func FormatMCPToolsPromptSection(tools []pkg.Tool, maxEstTokens int) (section st
 	return b.String(), listed, omitted
 }
 
+// tokenizeForMatch turns a free-form user message into a set of match tokens
+// suitable for substring-matching against tool descriptions.
+//
+// English / digits: split on non-letter-digit and emit whole words ≥ 2 chars.
+// CJK: emit character bigrams (and the whole run up to 4 chars) so queries
+//      like "查数据库" match a description mentioning "数据" or "数据库".
+// Mixed queries work because both passes run.
 func tokenizeForMatch(msg string) []string {
 	msg = strings.ToLower(strings.TrimSpace(msg))
-	var runes []rune
+	seen := map[string]struct{}{}
+	add := func(t string) {
+		if len([]rune(t)) < 2 {
+			return
+		}
+		if _, ok := seen[t]; ok {
+			return
+		}
+		seen[t] = struct{}{}
+	}
+
+	// Pass 1: latin / digit words.
+	var buf []rune
 	for _, r := range msg {
-		if unicode.IsLetter(r) || unicode.IsNumber(r) {
-			runes = append(runes, r)
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			buf = append(buf, r)
 		} else {
-			runes = append(runes, ' ')
+			buf = append(buf, ' ')
 		}
 	}
-	parts := strings.Fields(string(runes))
-	seen := map[string]struct{}{}
-	var out []string
-	for _, p := range parts {
-		if len(p) < 2 {
-			continue
+	for _, w := range strings.Fields(string(buf)) {
+		add(w)
+	}
+
+	// Pass 2: CJK bigrams. Walk runs of Han / Hiragana / Katakana chars and
+	// emit every 2-char sliding bigram plus 3- and 4-char prefix forms so
+	// common compounds ("数据库", "项目管理") surface as keys.
+	runes := []rune(msg)
+	var cjk []rune
+	flush := func() {
+		if len(cjk) < 2 {
+			cjk = cjk[:0]
+			return
 		}
-		if _, ok := seen[p]; ok {
-			continue
+		for i := 0; i+2 <= len(cjk); i++ {
+			add(string(cjk[i : i+2]))
 		}
-		seen[p] = struct{}{}
-		out = append(out, p)
+		for n := 3; n <= 4; n++ {
+			if len(cjk) >= n {
+				add(string(cjk[:n]))
+				add(string(cjk[len(cjk)-n:]))
+			}
+		}
+		cjk = cjk[:0]
+	}
+	for _, r := range runes {
+		if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r) {
+			cjk = append(cjk, r)
+		} else {
+			flush()
+		}
+	}
+	flush()
+
+	// Ordered output keeps selection deterministic for tests.
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
 	}
 	return out
 }

@@ -31,8 +31,6 @@ export interface PaperAppShellProps {
   onDeleteAgent?: (agent: Session, e: React.MouseEvent) => void;
   userLabel?: string;
   onLogout?: () => void;
-  themeMode?: 'light' | 'dark';
-  onToggleTheme?: () => void;
   children: React.ReactNode;
 }
 
@@ -80,8 +78,6 @@ const PaperAppShell: React.FC<PaperAppShellProps> = ({
   onDeleteAgent,
   userLabel,
   onLogout,
-  themeMode = 'light',
-  onToggleTheme,
   children,
 }) => {
   const ctx: ShellCtx = { agents, topics };
@@ -210,14 +206,6 @@ const PaperAppShell: React.FC<PaperAppShellProps> = ({
             <span className="pshell-foot-user-name">{userLabel || '未登入'}</span>
           </div>
           <div className="pshell-foot-tools">
-            <button
-              type="button"
-              className="pshell-foot-btn"
-              onClick={onToggleTheme}
-              title={themeMode === 'dark' ? '切到浅色' : '切到深色'}
-            >
-              {themeMode === 'dark' ? '☽' : '☀'}
-            </button>
             {onLogout && (
               <button
                 type="button"

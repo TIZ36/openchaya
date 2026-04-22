@@ -2,6 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getAgents, deleteAgent, agentApiId, type Session } from '../services/chat';
 import { updateRoleProfile, type PersonaPreset } from '../services/roleApi';
 import { getLLMConfigs, type LLMConfigFromDB } from '../services/llmApi';
+import {
+  smartnoteMemories, getSmartnoteApiKey,
+  type Memory, type MemoryKind,
+} from '../services/smartnoteApi';
 import { emitSessionsChanged } from '../utils/sessionEvents';
 import { toast } from './ui/use-toast';
 import {
@@ -62,6 +66,12 @@ const PersonaPage: React.FC<PersonaPageProps> = ({ sessionId, onOpenChat }) => {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  /* Smartnote memories scoped to this agent — "它记得的事". */
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [memLoading, setMemLoading] = useState(false);
+  const [memErr, setMemErr] = useState<string | null>(null);
+  const [memBusy, setMemBusy] = useState<Record<string, boolean>>({});
+
   /* Preset editor: null = closed, 'new' = creating, object = editing existing */
   const [presetEditor, setPresetEditor] = useState<null | 'new' | PersonaPreset>(null);
   const [presetName, setPresetName] = useState('');
@@ -100,6 +110,105 @@ const PersonaPage: React.FC<PersonaPageProps> = ({ sessionId, onOpenChat }) => {
     if (!sessionId) return agents.find((a) => a.is_primary) || agents[0] || null;
     return agents.find((a) => a.session_id === sessionId) || agents.find((a) => a.is_primary) || agents[0] || null;
   }, [agents, sessionId]);
+
+  // Pull this agent's memories from Smartnote. ChatPage's save handler writes
+  // them with scope `agent:<id>` — but the `<id>` it uses can be either the
+  // agent UUID (`agent.id`) OR the conversation session_id, depending on
+  // whether the agent record had loaded when the save fired. We accept both
+  // and any trailing name tag, to avoid silent drift between save/read ids.
+  //
+  // Also: the Smartnote list endpoint's `scope` query param is an exact match,
+  // and may not be honoured by every deploy. We fetch a broader slice (by the
+  // agent's name tag) and filter client-side — this is immune to scope drift
+  // and lets us show useful diagnostics when the filter is empty.
+  const agentUuid = agent?.id || null;
+  const agentSid = agent?.session_id || null;
+  const agentName = (agent?.name || agent?.title || '').trim();
+  useEffect(() => {
+    if (!agentUuid && !agentSid) { setMemories([]); return; }
+    if (!getSmartnoteApiKey()) {
+      setMemories([]);
+      setMemErr('没连 Smartnote — 去「设置 · 知识」填 API key');
+      return;
+    }
+    let cancelled = false;
+    setMemLoading(true);
+    setMemErr(null);
+    void (async () => {
+      try {
+        // Try the narrow filter first; if empty, widen to no-scope + client filter.
+        const wantedScopes = new Set(
+          [agentUuid, agentSid].filter(Boolean).map((id) => `agent:${id}`),
+        );
+        const narrow = await smartnoteMemories.list({
+          scope: `agent:${agentUuid || agentSid}`,
+          limit: 100,
+        });
+        if (cancelled) return;
+        let list = (narrow.memories || []).filter((m) => wantedScopes.has(m.scope));
+        if (list.length === 0) {
+          // Backend may ignore the scope filter, or memories may have been
+          // saved under a different id. Pull the whole workspace and filter
+          // ourselves against any of: known scopes, or the agent's name tag.
+          const wide = await smartnoteMemories.list({ limit: 200 });
+          if (cancelled) return;
+          list = (wide.memories || []).filter((m) =>
+            wantedScopes.has(m.scope) ||
+            (agentName && m.tags?.includes(agentName)),
+          );
+        }
+        setMemories(list);
+      } catch (e: any) {
+        if (!cancelled) setMemErr(e?.message || '取不到记忆');
+      } finally {
+        if (!cancelled) setMemLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [agentUuid, agentSid, agentName]);
+
+  const memoryBuckets = useMemo(() => {
+    const groups: Record<MemoryKind, Memory[]> = {
+      fact: [], preference: [], procedure: [], episode: [], document_ref: [],
+    };
+    for (const m of memories) {
+      const k = (m.kind as MemoryKind) in groups ? (m.kind as MemoryKind) : 'fact';
+      groups[k].push(m);
+    }
+    // Pinned first, then most-recent first.
+    for (const k of Object.keys(groups) as MemoryKind[]) {
+      groups[k].sort((a, b) => {
+        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+        return (b.updated_at || b.created_at).localeCompare(a.updated_at || a.created_at);
+      });
+    }
+    return groups;
+  }, [memories]);
+
+  const togglePin = async (mem: Memory): Promise<void> => {
+    setMemBusy((b) => ({ ...b, [mem.id]: true }));
+    try {
+      const next = await smartnoteMemories.update(mem.id, { pinned: !mem.pinned });
+      setMemories((prev) => prev.map((m) => (m.id === mem.id ? next : m)));
+    } catch (e: any) {
+      toast({ title: '改不了', description: e?.message || '', variant: 'destructive' });
+    } finally {
+      setMemBusy((b) => { const n = { ...b }; delete n[mem.id]; return n; });
+    }
+  };
+
+  const removeMemory = async (mem: Memory): Promise<void> => {
+    if (!window.confirm('忘掉这条吗？忘了就找不回来了。')) return;
+    setMemBusy((b) => ({ ...b, [mem.id]: true }));
+    try {
+      await smartnoteMemories.remove(mem.id);
+      setMemories((prev) => prev.filter((m) => m.id !== mem.id));
+    } catch (e: any) {
+      toast({ title: '忘不掉', description: e?.message || '', variant: 'destructive' });
+    } finally {
+      setMemBusy((b) => { const n = { ...b }; delete n[mem.id]; return n; });
+    }
+  };
 
   /** Shared persona presets live on the primary agent's ext (global library). */
   const primaryAgent = useMemo(() => agents.find((a) => a.is_primary) || null, [agents]);
@@ -575,11 +684,72 @@ const PersonaPage: React.FC<PersonaPageProps> = ({ sessionId, onOpenChat }) => {
                 <div style={s.sectHead}>
                   <span style={s.sectN}>04</span>
                   <h2 style={s.sectTitle}>记得的事</h2>
-                  <span style={s.sectAfter}>Memory · 下次来</span>
+                  <span style={s.sectAfter}>
+                    Memory · {memLoading
+                      ? '翻…'
+                      : `${memories.length} 条 · agent:${(agentUuid || agentSid || '').slice(0, 6)}`}
+                  </span>
                 </div>
-                <div style={s.comingBox}>
-                  <p style={s.coming}>记忆这一块下次做。会显示它记住的事、按时间排，可以删、可以改。</p>
-                </div>
+                {memErr ? (
+                  <div style={s.memErr}>{memErr}</div>
+                ) : memLoading ? (
+                  <div style={s.memLoading}>正在从 Smartnote 取…</div>
+                ) : memories.length === 0 ? (
+                  <div style={s.memEmpty}>
+                    它还没记下什么{agentName ? `（查过 scope agent:${(agentUuid || '').slice(0, 6)} · agent:${(agentSid || '').slice(0, 6)} · tag "${agentName}"）` : ''}。
+                    回对话里任意一条消息点「→ 知识」就能让它记住。
+                  </div>
+                ) : (
+                  <div style={s.memBuckets}>
+                    {(['fact', 'preference', 'procedure', 'episode', 'document_ref'] as MemoryKind[])
+                      .filter((k) => memoryBuckets[k].length > 0)
+                      .map((k) => (
+                        <div key={k} style={s.memBucket}>
+                          <div style={s.memBucketHead}>
+                            <span style={s.memKindLabel}>{MEM_KIND_LABEL[k]}</span>
+                            <span style={s.memKindCount}>{memoryBuckets[k].length}</span>
+                          </div>
+                          <ul style={s.memList}>
+                            {memoryBuckets[k].slice(0, 8).map((m) => (
+                              <li key={m.id} style={s.memItem}>
+                                <div style={s.memItemMain}>
+                                  {m.pinned && <span style={s.memPin} title="置顶">★</span>}
+                                  <span style={s.memContent}>{m.content}</span>
+                                </div>
+                                <div style={s.memMeta}>
+                                  <span style={s.memDate}>{relDays(m.updated_at || m.created_at)}</span>
+                                  {m.tags.slice(0, 3).map((t) => (
+                                    <span key={t} style={s.memTag}>#{t}</span>
+                                  ))}
+                                  <button
+                                    type="button"
+                                    style={s.memBtn}
+                                    disabled={!!memBusy[m.id]}
+                                    onClick={() => void togglePin(m)}
+                                    title={m.pinned ? '取消置顶' : '置顶'}
+                                  >
+                                    {m.pinned ? '取消' : '置顶'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    style={{ ...s.memBtn, ...s.memBtnDanger }}
+                                    disabled={!!memBusy[m.id]}
+                                    onClick={() => void removeMemory(m)}
+                                    title="忘掉"
+                                  >
+                                    忘
+                                  </button>
+                                </div>
+                              </li>
+                            ))}
+                            {memoryBuckets[k].length > 8 && (
+                              <li style={s.memMore}>… 还有 {memoryBuckets[k].length - 8} 条</li>
+                            )}
+                          </ul>
+                        </div>
+                      ))}
+                  </div>
+                )}
               </section>
 
               <section style={s.sect}>
@@ -661,6 +831,14 @@ const EmptyState: React.FC = () => (
     </p>
   </div>
 );
+
+const MEM_KIND_LABEL: Record<MemoryKind, string> = {
+  fact: '事实',
+  preference: '偏好',
+  procedure: '做法',
+  episode: '往事',
+  document_ref: '出处',
+};
 
 const firstSentence = (text: string): string => {
   const t = text.trim();
@@ -1088,6 +1266,137 @@ const s: Record<string, React.CSSProperties> = {
     fontSize: 12.5,
     color: 'oklch(0.40 0.110 25)',
     marginTop: 3,
+  },
+
+  // ── Section 04 · 记得的事 (Smartnote memories) ──
+  memErr: {
+    margin: '0 0 12px',
+    padding: '10px 12px',
+    border: '1px dotted var(--rule-strong)',
+    borderRadius: 2,
+    fontFamily: "'Young Serif', serif",
+    fontStyle: 'italic',
+    fontSize: 13,
+    color: 'var(--pencil)',
+    background: 'var(--page)',
+  },
+  memLoading: {
+    fontFamily: "'Young Serif', serif",
+    fontStyle: 'italic',
+    color: 'var(--pencil)',
+    fontSize: 13,
+    padding: '10px 0',
+  },
+  memEmpty: {
+    fontFamily: "'Young Serif', serif",
+    fontStyle: 'italic',
+    color: 'var(--pencil)',
+    fontSize: 13,
+    padding: '14px 14px',
+    border: '1px dotted var(--rule)',
+    background: 'var(--page)',
+    borderRadius: 2,
+  },
+  memBuckets: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 18,
+    marginTop: 4,
+  },
+  memBucket: {
+    borderTop: '1px solid var(--rule)',
+    paddingTop: 10,
+  },
+  memBucketHead: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: 10,
+    marginBottom: 6,
+  },
+  memKindLabel: {
+    fontFamily: "'Young Serif', serif",
+    fontSize: 14,
+    color: 'var(--ink-strong)',
+  },
+  memKindCount: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    letterSpacing: '0.06em',
+    color: 'var(--pencil)',
+  },
+  memList: {
+    listStyle: 'none',
+    margin: 0,
+    padding: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+  },
+  memItem: {
+    padding: '6px 0',
+    borderBottom: '1px dotted var(--rule)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+  },
+  memItemMain: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 6,
+    lineHeight: 1.5,
+    fontSize: 13.5,
+    color: 'var(--ink)',
+  },
+  memPin: {
+    fontFamily: "'JetBrains Mono', monospace",
+    color: 'var(--marginalia-ink)',
+    fontSize: 11,
+    lineHeight: '20px',
+  },
+  memContent: {
+    flex: 1,
+    wordBreak: 'break-word',
+  },
+  memMeta: {
+    display: 'flex',
+    gap: 8,
+    alignItems: 'baseline',
+    flexWrap: 'wrap',
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    letterSpacing: '0.04em',
+    color: 'var(--pencil)',
+  },
+  memDate: { color: 'var(--pencil-soft)' },
+  memTag: {
+    padding: '1px 5px',
+    border: '1px solid var(--rule)',
+    borderRadius: 2,
+    color: 'var(--pencil)',
+  },
+  memBtn: {
+    background: 'transparent',
+    border: 0,
+    padding: '1px 5px',
+    cursor: 'pointer',
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    color: 'var(--pencil)',
+    textDecoration: 'underline',
+    textUnderlineOffset: 3,
+    textDecorationColor: 'var(--rule-strong)',
+  },
+  memBtnDanger: {
+    color: 'oklch(0.45 0.140 25)',
+    textDecorationColor: 'oklch(0.75 0.100 25)',
+  },
+  memMore: {
+    listStyle: 'none',
+    padding: '4px 0',
+    fontFamily: "'Young Serif', serif",
+    fontStyle: 'italic',
+    fontSize: 12,
+    color: 'var(--pencil-soft)',
   },
 };
 

@@ -129,6 +129,21 @@ export const mediaApi = {
       body: JSON.stringify(body),
     }),
 
+  /** Expand a short user idea into a nano-banana-friendly paragraph via
+   *  gemini-2.5-flash. The caller should race this against a short timeout
+   *  and fall back to the original prompt if it rejects or drifts. */
+  geminiRewritePrompt: (body: {
+    prompt: string;
+    aspect_ratio?: string;
+    config_id?: string;
+    model?: string;
+  }) =>
+    req<{ prompt?: string; error?: string }>('/gemini/rewrite-prompt', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+
   geminiImageEdit: (body: {
     prompt: string;
     image_b64?: string;

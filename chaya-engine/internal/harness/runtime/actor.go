@@ -3,9 +3,11 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chaya-ai/chaya-engine/internal/gateway"
@@ -75,6 +77,26 @@ func newBaseActor(id, agentID, userID string, cfg ActorConfig, llm provider.LLMP
 	return a
 }
 
+// progressDirective nudges the model to narrate its plan briefly when a turn
+// will likely take more than a handful of seconds. Soft — the model decides
+// when to use it. Pairs with the backend silent-stream watchdog (a hard floor)
+// so the user always gets *some* signal of forward motion.
+const progressDirective = `
+
+【推进约定】
+- 如果这一轮看起来会超过几秒（需要查资料、调工具、或分步骤），先用一两句话说明你打算怎么做，再开始做。
+- 工具返回后用一句话说命中 / 没命中，再决定下一步。
+- 过程中发现换方向更合适，直接在回复里说"改一下：... "再继续，别默默重来。
+- 没把握的时候先给一个初步答案，再在同一条回复里写"可以继续深入 X / Y / Z"让用户挑方向——别强塞"完美答案"。
+
+【回答长度】
+- 默认用**对话的长度**回答，不要写文章。大多数问题 2-4 句话、不超过 150 字能讲清楚就不要更长。
+- 不用铺垫、不用"总之"开头、不用 markdown 标题、不用项目符号清单做装饰。就说话。
+- 复杂问题：**先一句话结论 + 一句话理由**，然后在末尾反问一句，让用户挑自己关心的那个方向继续。例如："要不要我展开 X / Y / Z？"
+- 只有当用户**明确说**"详细展开 / 完整 / 一步步写 / 给代码"时，才写长答案或清单。
+- 技术答案：先给要点，代码用最小片段；别把整个文件贴回来。
+- 不要罗列你没做的事（"未来可以考虑 A、B、C"）。信息密度 > 篇幅。`
+
 // combinedSystemPromptFromConfig merges system_prompt with persona hints from ext (frontend ChayaConfigPanel).
 func combinedSystemPromptFromConfig(cfg ActorConfig) string {
 	base := strings.TrimSpace(cfg.SystemPrompt)
@@ -82,10 +104,12 @@ func combinedSystemPromptFromConfig(cfg ActorConfig) string {
 		base = defaultSystemPrompt
 	}
 	extras := personaExtrasFromExt(cfg.Ext)
-	if extras == "" {
-		return base
+	out := base
+	if extras != "" {
+		out += "\n\n" + extras
 	}
-	return base + "\n\n" + extras
+	out += progressDirective
+	return out
 }
 
 func personaExtrasFromExt(ext json.RawMessage) string {
@@ -293,12 +317,20 @@ func (a *Actor) streamChat(ctx context.Context, env *envelope.Envelope) string {
 	// Latest persona / LLM selection / system prompt from DB (after 基本设置 save)
 	a.reloadRuntimeConfigFromDB()
 
-	// Save user message
-	a.persistUserMessage(convID, env.Body, env.From)
+	// Save the user's clean text. Knowledge lives in ext only — not mixed
+	// into the persisted content so history stays exactly what the user typed.
+	a.persistUserMessageWithExt(convID, env.Body, env.From, env.Data)
+
+	// For the LLM call, layer RAG knowledge (if any) ON TOP of the user's
+	// text for this turn only. NOT persisted — next turn sees fresh history.
+	userForLLM := env.Body
+	if block := extractKnowledgeBlock(env.Data); block != "" {
+		userForLLM = block + "\n\n---\n\n" + env.Body
+	}
 
 	// Build messages
 	a.mu.Lock()
-	a.history = append(a.history, provider.Message{Role: "user", Content: env.Body})
+	a.history = append(a.history, provider.Message{Role: "user", Content: userForLLM})
 	messages := make([]provider.Message, len(a.history))
 	copy(messages, a.history)
 	a.mu.Unlock()
@@ -326,6 +358,93 @@ func (a *Actor) persistUserMessage(convID, content, source string) {
 		Source:  source,
 	}
 	a.DB.Create(&userMsg)
+}
+
+// persistUserMessageWithExt is the ext-aware variant. The frontend now stores
+// retrieved knowledge in ext.knowledge (chip in the bubble) and no longer
+// mixes it into content — so we pass ext through to the row so the history
+// re-render shows the same chip on reload.
+func (a *Actor) persistUserMessageWithExt(convID, content, source string, data json.RawMessage) {
+	if a.DB == nil {
+		return
+	}
+	userMsg := pgstore.Message{
+		ConvID:  convID,
+		Role:    "user",
+		Content: content,
+		Source:  source,
+	}
+	if ext := extractPersistableExt(data); ext != nil {
+		userMsg.Ext = ext
+	}
+	a.DB.Create(&userMsg)
+}
+
+// extractKnowledgeBlock formats the frontend-supplied knowledge hits into a
+// compact prefix the model can use as context for this single turn. Kept
+// short — one line per hit — to stay inside prompt budgets.
+func extractKnowledgeBlock(data json.RawMessage) string {
+	if len(data) == 0 {
+		return ""
+	}
+	var payload struct {
+		Knowledge []struct {
+			Kind    string `json:"kind"`
+			Content string `json:"content"`
+			Pinned  bool   `json:"pinned"`
+		} `json:"knowledge"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil || len(payload.Knowledge) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("[知识 · 来自你之前存的]")
+	for _, k := range payload.Knowledge {
+		c := strings.TrimSpace(k.Content)
+		if c == "" {
+			continue
+		}
+		kind := strings.TrimSpace(k.Kind)
+		if kind == "" {
+			kind = "memory"
+		}
+		tag := kind
+		if k.Pinned {
+			tag = kind + " · pinned"
+		}
+		b.WriteString("\n- (")
+		b.WriteString(tag)
+		b.WriteString(") ")
+		b.WriteString(c)
+	}
+	return b.String()
+}
+
+// extractPersistableExt keeps the pieces of the envelope payload that should
+// live on the user message row (knowledge chip, media). Drops ephemerals like
+// agent_id and enable_tool_calling that are purely routing/runtime hints.
+func extractPersistableExt(data json.RawMessage) json.RawMessage {
+	if len(data) == 0 {
+		return nil
+	}
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return nil
+	}
+	keep := map[string]json.RawMessage{}
+	for _, k := range []string{"knowledge", "media"} {
+		if v, ok := all[k]; ok && len(v) > 0 {
+			keep[k] = v
+		}
+	}
+	if len(keep) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(keep)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 func (a *Actor) streamAssistantResponse(ctx context.Context, convID string, messages []provider.Message) string {
@@ -370,8 +489,38 @@ func (a *Actor) streamAssistantResponse(ctx context.Context, convID string, mess
 
 	a.publishPipelineStep(convID, "正在生成回答...")
 
-	var full string
+	// Silent-stream watchdog: if no chunk arrives for ~7s, surface a
+	// "still working" progress log so the user sees the turn is alive.
+	// Every real chunk bumps lastChunkAt, so active streams never spam.
+	var (
+		lastChunkAt atomic.Int64
+		full        string
+		streamStart = time.Now()
+	)
+	lastChunkAt.Store(streamStart.UnixNano())
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		const quietWindow = 7 * time.Second
+		for {
+			select {
+			case <-watchCtx.Done():
+				return
+			case <-ticker.C:
+				last := time.Unix(0, lastChunkAt.Load())
+				if time.Since(last) >= quietWindow {
+					elapsed := int(time.Since(streamStart).Seconds())
+					a.publishPipelineStep(convID, fmt.Sprintf("还在想…（%ds）", elapsed))
+					// Reset so we space subsequent ticks by another quietWindow.
+					lastChunkAt.Store(time.Now().UnixNano())
+				}
+			}
+		}
+	}()
+
 	for chunk := range stream {
+		lastChunkAt.Store(time.Now().UnixNano())
 		if chunk.Done {
 			break
 		}
@@ -384,6 +533,7 @@ func (a *Actor) streamAssistantResponse(ctx context.Context, convID string, mess
 			"chunk":      chunk.Content,
 		})
 	}
+	cancelWatch()
 
 	if a.DB != nil {
 		a.DB.Model(&pgstore.Message{}).Where("id = ?", assistantMsg.ID).Update("content", full)

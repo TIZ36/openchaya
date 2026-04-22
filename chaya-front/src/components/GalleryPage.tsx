@@ -64,7 +64,6 @@ const GalleryPage: React.FC = () => {
   }, [filtered]);
 
   const stats = useMemo(() => {
-    const now = Date.now();
     const thisMonth = items.filter((i) => {
       if (!i.created_at) return false;
       const d = new Date(i.created_at);

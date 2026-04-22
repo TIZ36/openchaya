@@ -107,6 +107,31 @@ export interface CreateLLMConfigRequest {
 /**
  * 获取所有LLM配置
  */
+/** Fetch the provider's available model list using a given API key.
+ *  Used when a user adds a provider and wants to auto-discover models. */
+export interface AvailableModel {
+  id: string;
+  name: string;
+}
+export async function listAvailableModels(
+  provider: string,
+  apiKey: string,
+  apiUrl?: string,
+): Promise<AvailableModel[]> {
+  const qs = new URLSearchParams({ provider, api_key: apiKey });
+  if (apiUrl) qs.set('api_url', apiUrl);
+  const resp = await authFetch(`${API_BASE_URL}/models?${qs.toString()}`);
+  const raw = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    const msg = (raw?.error) || `fetch models failed: ${resp.statusText}`;
+    throw new Error(msg);
+  }
+  const data = (raw && raw.code === 0 && raw.data) ? raw.data : raw;
+  const list: any[] = Array.isArray(data?.models) ? data.models : [];
+  return list.map((m) => ({ id: String(m.id || m.name || ''), name: String(m.name || m.id || '') }))
+    .filter((m) => m.id);
+}
+
 export async function getLLMConfigs(): Promise<LLMConfigFromDB[]> {
   const list = await api.get<any[]>('/api/llm/configs');
   // Map backend 'id' → frontend 'config_id'
@@ -176,153 +201,21 @@ export async function getLLMConfigApiKey(configId: string): Promise<string> {
 
 // ==================== LLM配置导入导出 ====================
 
-export interface LLMConfigExportData {
-  version: string;
-  export_type: 'llm_config' | 'llm_configs';
-  exported_at: string;
-  llm_config?: {
-    name: string;
-    provider: string;
-    api_key?: string;
-    api_url?: string;
-    model?: string;
-    tags?: string[];
-    enabled: boolean;
-    description?: string;
-    metadata?: Record<string, any>;
-  };
-  llm_configs?: Array<{
-    name: string;
-    provider: string;
-    api_key?: string;
-    api_url?: string;
-    model?: string;
-    tags?: string[];
-    enabled: boolean;
-    description?: string;
-    metadata?: Record<string, any>;
-  }>;
-}
 
 /**
  * 导出单个LLM配置
  */
-export async function exportLLMConfig(configId: string): Promise<LLMConfigExportData> {
-  const response = await authFetch(`${API_BASE_URL}/configs/${configId}/export`);
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error || `Failed to export config: ${response.statusText}`);
-  }
-  return await response.json();
-}
 
 /**
  * 导出所有LLM配置
  */
-export async function exportAllLLMConfigs(): Promise<LLMConfigExportData> {
-  const response = await authFetch(`${API_BASE_URL}/configs/export-all`);
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error || `Failed to export configs: ${response.statusText}`);
-  }
-  return await response.json();
-}
 
 /**
  * 导入LLM配置
- */
-export async function importLLMConfigs(
-  data: LLMConfigExportData,
-  skipExisting: boolean = false
-): Promise<{ imported: Array<{ config_id: string; name: string }>; skipped: string[] }> {
-  const response = await authFetch(`${API_BASE_URL}/configs/import?skip_existing=${skipExisting}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error || `Failed to import configs: ${response.statusText}`);
-  }
-  return await response.json();
-}
-
-/**
- * 下载LLM配置为JSON文件
- */
-export async function downloadLLMConfigAsJson(configId: string, configName: string): Promise<void> {
-  const data = await exportLLMConfig(configId);
-  
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${configName.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_')}_llm_config.json`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-/**
- * 下载所有LLM配置为JSON文件
- */
-export async function downloadAllLLMConfigsAsJson(): Promise<void> {
-  const data = await exportAllLLMConfigs();
-  
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `llm_configs_${new Date().toISOString().slice(0, 10)}.json`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
 
 /**
  * 从JSON文件导入LLM配置
  */
-export function importLLMConfigsFromFile(): Promise<LLMConfigExportData> {
-  return new Promise((resolve, reject) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) {
-        reject(new Error('No file selected'));
-        return;
-      }
-      
-      try {
-        const text = await file.text();
-        const data = JSON.parse(text) as LLMConfigExportData;
-        
-        // 验证数据格式
-        if (!['llm_config', 'llm_configs'].includes(data.export_type)) {
-          reject(new Error('无效的导入文件：不是LLM配置文件'));
-          return;
-        }
-        
-        if (!data.llm_config && !data.llm_configs) {
-          reject(new Error('无效的导入文件：缺少配置数据'));
-          return;
-        }
-        
-        resolve(data);
-      } catch (error) {
-        reject(new Error('无法解析文件：请确保是有效的JSON格式'));
-      }
-    };
-    
-    input.click();
-  });
-}
 
 // ============================================================================
 // Provider API
@@ -435,38 +328,10 @@ export async function reorderProviders(providerIds: string[]): Promise<{ message
 /**
  * 按供应商 sort_order 排列模型配置（用于 Chaya 等场景）
  */
-export function sortLLMConfigsByProviderOrder(
-  configs: LLMConfigFromDB[],
-  providers: LLMProvider[]
-): LLMConfigFromDB[] {
-  const order = new Map<string, number>();
-  providers.forEach((p) => {
-    order.set(p.provider_id, typeof p.sort_order === 'number' ? p.sort_order : 9999);
-  });
-  return [...configs].sort((a, b) => {
-    const sa = a.supplier || a.provider || '';
-    const sb = b.supplier || b.provider || '';
-    const oa = order.get(sa) ?? 9999;
-    const ob = order.get(sb) ?? 9999;
-    if (oa !== ob) return oa - ob;
-    return (a.name || '').localeCompare(b.name || '', 'zh-CN');
-  });
-}
 
 /**
  * 从 LobeHub CDN 下载供应商 Logo
  */
-export async function downloadProviderLogo(
-  provider: string,
-  theme: 'auto' | 'light' | 'dark' = 'auto'
-): Promise<DownloadLogoResponse> {
-  const response = await authFetch(`${API_BASE_URL}/providers/download-logo?provider=${encodeURIComponent(provider)}&theme=${theme}`);
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(`Failed to download logo: ${error.error || response.statusText}`);
-  }
-  return response.json();
-}
 
 /**
  * Logo 选项

@@ -86,6 +86,7 @@ func main() {
 	ragRetriever := rag.NewRetriever(db, embedder)
 
 	// ── Harness capabilities ──
+	mcp.LoadDescriptionsDefault()
 	mcpReg := mcp.NewRegistry(db, rdb)
 	if err := mcpReg.LoadServers(context.Background()); err != nil {
 		slog.Warn("mcp registry load", "err", err)
@@ -103,6 +104,27 @@ func main() {
 	// ── WS Message Handler ──
 	onWSMessage := func(client *gateway.Client, msg *gateway.WSMessage) {
 		switch msg.Type {
+		case "interrupt":
+			// Client wants to stop the current in-flight turn on this topic.
+			// msg.Topic = conv_id. We deliver a TypeInterrupt envelope to the
+			// user's primary actor; actors (generic_mailbox / primary_agent /
+			// sub_actor) already handle TypeInterrupt to cancel their current
+			// work and ack back via the topic (agent_interrupt_ack event).
+			convID := msg.Topic
+			if convID == "" {
+				slog.Warn("ws interrupt missing topic")
+				break
+			}
+			if !api.ConversationAccessForUser(db, convID, client.UserID, client.TenantID) {
+				slog.Warn("ws interrupt denied: conv not accessible", "user", client.UserID, "conv", convID)
+				break
+			}
+			env := envelope.New(envelope.TypeInterrupt, client.UserID, "")
+			env.ConvID = convID
+			if err := actorPool.SendToUser(client.UserID, env); err != nil {
+				slog.Warn("interrupt deliver failed", "err", err, "conv", convID)
+			}
+
 		case "message":
 			var payload struct {
 				Content string         `json:"content"`
@@ -174,6 +196,7 @@ func main() {
 			r.Use(mw.JWTAuth(cfg.Auth.JWTSecret))
 			api.RegisterAdminRoutes(r, db)
 			api.RegisterConversationRoutes(r, db, providerRegistry)
+			api.RegisterChatFollowupRoutes(r, db, providerRegistry)
 			api.RegisterAgentRoutes(r, db)
 			api.RegisterAgentHarnessRoutes(r, db, mcpReg)
 			api.RegisterLLMConfigRoutes(r, db, providerRegistry)
