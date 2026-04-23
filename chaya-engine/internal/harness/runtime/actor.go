@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/chaya-ai/chaya-engine/internal/api"
 	"github.com/chaya-ai/chaya-engine/internal/gateway"
 	"github.com/chaya-ai/chaya-engine/internal/harness/capability"
 	"github.com/chaya-ai/chaya-engine/internal/provider"
@@ -556,6 +557,12 @@ func (a *Actor) streamAssistantResponse(ctx context.Context, convID string, mess
 		"execution_logs": finalLogs,
 	})
 
+	// Fire follow-up suggestions in the background. Uses the same provider
+	// the agent just answered with (capped to 120 tokens / temp=0 in
+	// GenerateFollowups so it lands in <1s on most providers). Pushed back
+	// to the UI as `agent_followups` so the front-end has zero HTTP wait.
+	go a.publishFollowups(convID, assistantMsg.ID, lastUserText(messages), full)
+
 	// Only PrimaryActor (Orchestrator) should manage cross-turn trace.
 	// Basic Actors (like SubActors or Direct Chat) should clear it to avoid memory leak.
 	if !a.IsPrimary {
@@ -643,4 +650,39 @@ func (a *Actor) callLLM(ctx context.Context, messages []provider.Message) (strin
 		return "", err
 	}
 	return resp.Content, nil
+}
+
+// lastUserText returns the most recent user message content from the message
+// slice, or "" if none. Used to pair user → assistant for followup prompting.
+func lastUserText(msgs []provider.Message) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return msgs[i].Content
+		}
+	}
+	return ""
+}
+
+// publishFollowups runs the suggestion call in the background and emits an
+// `agent_followups` event on the conversation hub when results arrive. Empty
+// list ⇒ no event (the UI keeps the slot empty rather than rendering nothing).
+func (a *Actor) publishFollowups(convID, msgID, userMsg, asstMsg string) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Warn("publishFollowups panic", "err", r)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	prov, model := a.resolveLLM()
+	sugs := api.GenerateFollowups(ctx, prov, model, userMsg, asstMsg)
+	if len(sugs) == 0 {
+		return
+	}
+	a.Hub.Publish(convID, map[string]any{
+		"type":        "agent_followups",
+		"agent_id":    a.AgentID,
+		"message_id":  msgID,
+		"suggestions": sugs,
+	})
 }

@@ -322,18 +322,19 @@ const ChatPage: React.FC<ChatPageProps> = ({
         return;
       }
 
+      if (type === 'agent_followups') {
+        const msgId = p.message_id;
+        const list: string[] = Array.isArray(p.suggestions) ? p.suggestions : [];
+        if (msgId && list.length > 0) {
+          setFollowups((prev) => ({ ...prev, [msgId]: list }));
+        }
+        return;
+      }
+
       if (type === 'agent_stream_done' || type === 'stream_done') {
-        console.log('[ws] stream_done → fetchFollowups', { msgId: p.message_id, len: (p.content || '').length });
         setThinking(false);
         const finalContent = p.content ?? stream?.content ?? '';
         const msgId = p.message_id || `asst-${Date.now()}`;
-        // Kick off followups (async, non-blocking). Look up the last user
-        // message to pair with this assistant reply.
-        setMessages((prev) => {
-          const lastUser = [...prev].reverse().find((m) => m.role === 'user');
-          if (lastUser) void fetchFollowupsRef.current(msgId, lastUser.content || '', finalContent);
-          return prev;
-        });
         setMessages((prev) => {
           // Avoid duplicating if new_message already arrived
           if (prev.some((m) => m.message_id === msgId)) return prev;
@@ -373,7 +374,6 @@ const ChatPage: React.FC<ChatPageProps> = ({
           return [...prev, msg];
         });
         if (msg.role === 'assistant') {
-          console.log('[ws] new_message(assistant) → fetchFollowups', { msgId: msg.message_id, len: (msg.content || '').length });
           setThinking(false);
           setStream(null);
           setSending(false);
@@ -382,11 +382,6 @@ const ChatPage: React.FC<ChatPageProps> = ({
               setProgressByMsg((m) => ({ ...m, [msg.message_id]: live }));
             }
             return [];
-          });
-          setMessages((prev) => {
-            const lastUser = [...prev].reverse().find((m2) => m2.role === 'user');
-            if (lastUser) void fetchFollowupsRef.current(msg.message_id, lastUser.content || '', msg.content || '');
-            return prev;
           });
         }
         return;
@@ -583,73 +578,9 @@ const ChatPage: React.FC<ChatPageProps> = ({
   const [savedMemIds, setSavedMemIds] = useState<Record<string, string>>({}); // message_id → memory_id
 
   /* ---------- Follow-up suggestion chips ---------- */
-
-  /** Called after an assistant message finishes. Fires a best-effort follow-up
-   *  suggestion call, stores results in state. Prefers the agent's own LLM
-   *  config (any provider), falls back to the first enabled config. */
-  const fetchFollowups = useCallback(async (msgId: string, userText: string, assistantText: string) => {
-    console.log('[followups] called', {
-      msgId,
-      userLen: (userText || '').length,
-      asstLen: (assistantText || '').length,
-      agentId: agent?.id,
-      agentLlmCfg: agent?.llm_config_id,
-      llmConfigsN: llmConfigs.length,
-    });
-    if (!assistantText) {
-      console.log('[followups] skip: no assistant text');
-      return;
-    }
-    const preferred =
-      (agent?.llm_config_id && llmConfigs.find((c) => c.config_id === agent.llm_config_id && c.enabled)) ||
-      llmConfigs.find((c) => c.enabled);
-    if (!preferred) {
-      console.log('[followups] skip: no enabled LLM config. agent.llm_config_id=',
-        agent?.llm_config_id, 'configs=', llmConfigs.map((c) => ({ id: c.config_id, enabled: c.enabled, provider: c.provider })));
-      return;
-    }
-    console.log('[followups] using', preferred.provider, preferred.shortname || preferred.model, preferred.config_id);
-    try {
-      const token = localStorage.getItem('chaya_token') || '';
-      const url = `${getBackendUrl()}/api/chat/followups`;
-      console.log('[followups] POST', url);
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          user_message: (userText || '').slice(0, 2000),
-          assistant_message: assistantText.slice(0, 4000),
-          config_id: preferred.config_id,
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        console.warn('[followups] http', res.status, body.slice(0, 300));
-        return;
-      }
-      const raw = await res.json().catch(() => null);
-      const data = (raw && raw.code === 0 && raw.data) ? raw.data : raw;
-      const list: string[] = Array.isArray(data?.suggestions) ? data.suggestions : [];
-      if (list.length === 0) {
-        console.info('[followups] empty', data?.note ? `(${data.note})` : '', 'raw:', data);
-        return;
-      }
-      console.log(`[followups] got ${list.length}:`, list);
-      setFollowups((prev) => ({ ...prev, [msgId]: list }));
-    } catch (e: any) {
-      console.warn('[followups] failed:', e?.message || e);
-    }
-  }, [agent, llmConfigs]);
-
-  // The WS effect below depends only on [sessionId], so its handleEvent
-  // closure captures fetchFollowups from first render — when agent/llmConfigs
-  // are still empty. Mirror the latest fn through a ref so handleEvent always
-  // calls the up-to-date version.
-  const fetchFollowupsRef = useRef(fetchFollowups);
-  useEffect(() => { fetchFollowupsRef.current = fetchFollowups; }, [fetchFollowups]);
+  // Backend pushes `agent_followups` over the WS hub right after stream_done
+  // (see actor.publishFollowups). The handler above writes into `followups`
+  // keyed by message_id — no HTTP round-trip from the client.
 
   /* ---------- Rewind: delete target message + everything after ---------- */
   const [rewindingId, setRewindingId] = useState<string | null>(null);

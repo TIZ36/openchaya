@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -61,27 +62,40 @@ func (a *chatFollowupAPI) followups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prompt := buildFollowupPrompt(user, assistant)
-	resp, err := prov.Chat(r.Context(), provider.ChatRequest{
-		Messages: []provider.Message{{Role: "user", Content: prompt}},
-		Model:    req.Model,
+	sugs := GenerateFollowups(r.Context(), prov, req.Model, user, assistant)
+	OK(w, M{"suggestions": sugs})
+}
+
+// GenerateFollowups runs the suggest-3-prompts call against the given provider
+// and returns the parsed list. Caps output (MaxTokens=120, Temperature=0) so
+// the call returns in well under a second on most providers — important
+// because this fires on every assistant turn and the chips need to land
+// promptly after stream_done. Empty slice on any failure (best-effort).
+func GenerateFollowups(ctx context.Context, prov provider.LLMProvider, model, userMsg, assistantMsg string) []string {
+	if prov == nil || strings.TrimSpace(assistantMsg) == "" {
+		return []string{}
+	}
+	temp := 0.0
+	prompt := buildFollowupPrompt(userMsg, assistantMsg)
+	resp, err := prov.Chat(ctx, provider.ChatRequest{
+		Messages:    []provider.Message{{Role: "user", Content: prompt}},
+		Model:       model,
+		Temperature: &temp,
+		MaxTokens:   120,
 	})
 	if err != nil || resp == nil {
 		slog.Warn("followups: llm call failed", "err", err)
-		OK(w, M{"suggestions": []string{}, "note": "llm call failed"})
-		return
+		return []string{}
 	}
 	sugs := parseFollowupList(resp.Content)
 	if len(sugs) == 0 {
-		// Log the raw so we can see WHY nothing parsed when a user reports
-		// "no chips". Truncated so we don't dump pages of model output.
 		raw := resp.Content
 		if len(raw) > 400 {
 			raw = raw[:400] + "…"
 		}
 		slog.Info("followups: parsed 0 from model output", "raw", raw)
 	}
-	OK(w, M{"suggestions": sugs})
+	return sugs
 }
 
 func buildFollowupPrompt(userMsg, assistantMsg string) string {
