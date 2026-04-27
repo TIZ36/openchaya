@@ -54,6 +54,10 @@ type Actor struct {
 	// lastReasoning is the reasoning_content from the most recent assistant
 	// turn. Round-tripped into the next request — see streamAssistantResponse.
 	lastReasoning  string
+	// historyHydratedFor records which convID we already loaded from DB. Per-
+	// agent actors are usually 1:1 with a conversation but the field guards
+	// against multi-conv reuse just in case. Cleared on actor reconstruction.
+	historyHydratedFor string
 
 	topoMatchMu             sync.Mutex
 	lastTopologyIntentLabel string // Consult 命中意图 label（本回合，用于拓扑学习轨迹）
@@ -313,6 +317,84 @@ func (a *Actor) enrichMessagesWithCapabilities(ctx context.Context, convID, user
 	return out, ec.MCPTools
 }
 
+// hydrateHistoryFromDB loads prior messages for convID into a.history if we
+// haven't done so yet. Idempotent — second call for the same convID is a
+// no-op. Limits to the last N messages to keep prompt size sane; older
+// turns are assumed compacted by the intelligence layer or simply dropped.
+//
+// Pulls reasoning_content out of message.ext.reasoning so reasoning models
+// (DeepSeek-Reasoner / Qwen-thinking) keep working across the restart —
+// otherwise the next call rejects with "reasoning_content must be passed
+// back in history".
+const hydrateMaxMessages = 30
+
+func (a *Actor) hydrateHistoryFromDB(convID string) {
+	if a.DB == nil || convID == "" {
+		return
+	}
+	a.mu.Lock()
+	if a.historyHydratedFor == convID {
+		a.mu.Unlock()
+		return
+	}
+	a.mu.Unlock()
+
+	type row struct {
+		Role    string          `gorm:"column:role"`
+		Content string          `gorm:"column:content"`
+		Ext     json.RawMessage `gorm:"column:ext"`
+	}
+	var rows []row
+	// Pull last N+1 ordered desc, then reverse — cheaper than ordering asc
+	// and offsetting from total count.
+	if err := a.DB.Table("messages").
+		Select("role, content, ext").
+		Where("conv_id = ? AND role IN ('user','assistant')", convID).
+		Order("created_at desc").
+		Limit(hydrateMaxMessages).
+		Find(&rows).Error; err != nil {
+		slog.Warn("hydrate history: db read failed", "conv", convID, "err", err)
+		a.mu.Lock()
+		a.historyHydratedFor = convID
+		a.mu.Unlock()
+		return
+	}
+	// Reverse to chronological order so the LLM sees the conversation in
+	// the order it actually happened.
+	loaded := make([]provider.Message, 0, len(rows))
+	for i := len(rows) - 1; i >= 0; i-- {
+		r := rows[i]
+		msg := provider.Message{Role: r.Role, Content: r.Content}
+		if r.Role == "assistant" && len(r.Ext) > 0 {
+			var wrap struct {
+				Reasoning string `json:"reasoning"`
+			}
+			if json.Unmarshal(r.Ext, &wrap) == nil {
+				msg.Reasoning = wrap.Reasoning
+			}
+		}
+		loaded = append(loaded, msg)
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.historyHydratedFor == convID {
+		return // racy double-call; the other goroutine won
+	}
+	// Keep the system prompt at index 0 (set in newBaseActor); insert the
+	// hydrated turns between it and any in-memory tail.
+	if len(a.history) > 0 && a.history[0].Role == "system" {
+		sys := a.history[0]
+		tail := a.history[1:]
+		a.history = append([]provider.Message{sys}, loaded...)
+		a.history = append(a.history, tail...)
+	} else {
+		a.history = append(loaded, a.history...)
+	}
+	a.historyHydratedFor = convID
+	slog.Info("hydrate history", "conv", convID, "loaded", len(loaded))
+}
+
 // streamChat performs an LLM streaming call, persists messages, publishes events.
 func (a *Actor) streamChat(ctx context.Context, env *envelope.Envelope) string {
 	convID := env.ConvID
@@ -331,6 +413,12 @@ func (a *Actor) streamChat(ctx context.Context, env *envelope.Envelope) string {
 	if block := extractKnowledgeBlock(env.Data); block != "" {
 		userForLLM = block + "\n\n---\n\n" + env.Body
 	}
+
+	// Hydrate prior conversation from DB if this is the first envelope
+	// for this convID after construction (server restart, idle reaper, or
+	// a brand new actor for an existing conversation). Without this the
+	// agent loses all multi-turn context across server restarts.
+	a.hydrateHistoryFromDB(convID)
 
 	// Build messages
 	a.mu.Lock()

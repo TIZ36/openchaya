@@ -109,6 +109,12 @@ func (p *PrimaryActor) handleChat(ctx context.Context, env *envelope.Envelope) {
 	p.turnToolsAt = time.Time{}
 	p.turnToolsMu.Unlock()
 
+	// Hydrate prior conversation from DB on first turn after a cold start
+	// (server restart or actor reaper). Without this, both the delegate
+	// path's summarizer AND the simple-chat path lose all multi-turn
+	// memory across restarts. Idempotent.
+	p.hydrateHistoryFromDB(env.ConvID)
+
 	delegate := p.shouldDelegate(ctx, env)
 	metrics.LogHarnessRoute(env.ConvID, "handle_chat", string(ResolveHarnessRoutePhaseA(env).Kind), delegate)
 	if p.Orchestrator != nil && p.Orchestrator.HarnessMetricsVerbose() {
