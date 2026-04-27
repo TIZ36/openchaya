@@ -1,0 +1,99 @@
+/* ============================================================
+   Paper Motion — global micro-animations.
+
+   Motion philosophy (from .impeccable.md):
+     - Quiet. Motion confirms, never performs.
+     - A message settles onto the page; it doesn't arrive.
+     - 180–240ms, ease-out-quart, transform + opacity only.
+     - Never bounce, never elastic.
+     - The global @media (prefers-reduced-motion) rule in index.css
+       already shortens animation/transition durations to 0.01ms,
+       so we don't need per-rule guards here.
+   ============================================================ */
+
+/* Single keyframe powering most entries: 4px rise + fade. */
+@keyframes paper-settle {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Slightly larger lift for popovers — they come from "below" the trigger. */
+@keyframes paper-settle-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Toast — descends from the top edge of the viewport. */
+@keyframes paper-settle-down {
+  from { opacity: 0; transform: translate(-50%, -6px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* Mild dim/lift for exits — never the inverse of entry, lest the page
+   feel like it's reversing. Faster than enter (75% rule). */
+@keyframes paper-leave {
+  from { opacity: 1; transform: none; }
+  to   { opacity: 0; transform: translateY(-2px); }
+}
+
+/* ---------- Utility class for opt-in entries ---------- */
+.paper-settle {
+  animation: paper-settle var(--dur-settle) var(--ease-quart) both;
+}
+
+/* ---------- Global: chapter / page changes ----------
+   The main canvas swaps its child when the chapter changes. Animate the
+   immediate child so the new page settles in rather than snapping. We
+   scope to direct children of pshell-main to avoid catching nested
+   layouts that have their own list animations. */
+.pshell-main > * {
+  animation: paper-settle var(--dur-settle) var(--ease-quart) both;
+}
+
+/* ---------- Sidebar foot popover ---------- */
+.pshell-user-menu {
+  animation: paper-settle-up 200ms var(--ease-quart) both;
+  transform-origin: bottom left;
+}
+
+/* ---------- Toast (Radix exposes data-state on the root) ----------
+   Radix sets data-state="open"|"closed" and animates between them. The
+   exit duration must complete before Radix unmounts (Radix waits for
+   animationend) — keep it short. */
+.paper-toast[data-state="open"] {
+  animation: paper-settle-down 220ms var(--ease-quart) both;
+}
+.paper-toast[data-state="closed"] {
+  animation: paper-leave 150ms var(--ease-quart) both;
+}
+
+/* ---------- Press feedback ----------
+   Letterpress detail — a button that's pressed sinks 1px into the page.
+   Very subtle scale + brightness so it reads as ink-on-paper, not as a
+   bouncy web button. Skips elements that already manage their own
+   :active style (tone swatches handle their own scale). */
+:where(button, [role="button"], a[href]):not(:disabled):active {
+  transform: translateY(0.5px) scale(0.992);
+  transition: transform 80ms var(--ease-quart);
+}
+
+/* The global :active rule above shouldn't fight elements with custom
+   active transforms. Two cases we already animate manually: */
+:where(.pshell-tone-swatch, .pshell-foot-user-btn):active {
+  transform: none;
+}
+
+/* (Global :focus-visible outline removed: outline-offset got clipped by
+   ancestors with overflow:auto/hidden — most visibly the chat scroll
+   viewport, where a focused followup chip showed as a "[" shape because
+   only the left edge of the outline was inside the scroll box. Components
+   that need a custom focus ring should declare it locally.) */
+
+/* ---------- Image fade-in ----------
+   Avoids the harsh paint when a remote image finishes decoding. Uses
+   the native `loading=lazy` cue: any image with [data-paper-fade] starts
+   transparent and settles. Opt-in (not all images want this — avatars
+   already cached do not). */
+img[data-paper-fade] {
+  animation: paper-settle var(--dur-settle) var(--ease-quart) both;
+}

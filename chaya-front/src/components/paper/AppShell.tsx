@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Session } from '../../services/chat';
 import type { CurrentUser } from '../../utils/themeAccess';
 import { PaperHandRule } from './index';
-import { getTheme, setTheme, type ThemeName } from '../../utils/theme';
+import { getTheme, setTheme, type ThemeName, getTone, setTone, TONES, type ToneName } from '../../utils/theme';
 import { Link } from 'react-router-dom';
 
 /* ============================================================
@@ -265,6 +265,7 @@ const planLabel: Record<string, string> = {
 
 const UserMenuPopover: React.FC<UserMenuPopoverProps> = ({ user, anchorRef, onClose, onOpenSettings, onLogout }) => {
   const [theme, setLocalTheme] = useState<ThemeName>(getTheme());
+  const [tone, setLocalTone] = useState<ToneName>(getTone());
   const popRef = useRef<HTMLDivElement | null>(null);
 
   // Close on outside click / Escape. We anchor to the bottom-left foot
@@ -297,6 +298,12 @@ const UserMenuPopover: React.FC<UserMenuPopoverProps> = ({ user, anchorRef, onCl
     setLocalTheme(next);
   };
 
+  const pickTone = (t: ToneName) => {
+    if (t === tone) return;
+    setTone(t);
+    setLocalTone(t);
+  };
+
   // "X / N" usage; -1 = ∞.
   const fmtUsage = (used?: number, max?: number): string => {
     const u = typeof used === 'number' ? used : 0;
@@ -322,6 +329,27 @@ const UserMenuPopover: React.FC<UserMenuPopoverProps> = ({ user, anchorRef, onCl
       </div>
 
       <div className="pshell-user-menu-divider" />
+
+      <div className="pshell-user-menu-tones" role="radiogroup" aria-label="主题色调">
+        <span className="pshell-user-menu-tones-label">主题</span>
+        <div className="pshell-user-menu-tones-list">
+          {TONES.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              role="radio"
+              aria-checked={tone === t.key}
+              className={`pshell-tone-swatch${tone === t.key ? ' is-active' : ''}`}
+              style={{ ['--swatch' as any]: t.swatch }}
+              onClick={() => pickTone(t.key)}
+              title={t.label}
+            >
+              <span className="pshell-tone-swatch-dot" />
+              <span className="pshell-tone-swatch-label">{t.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
 
       <button
         type="button"

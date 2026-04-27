@@ -399,6 +399,77 @@
   color: var(--pencil);
 }
 
+/* Tone selector — four swatches in a row, inset within the user menu.
+   Lives between the divider above the dark-mode toggle and the toggle
+   itself: light enough not to compete with rows, dense enough to not
+   feel like its own section. */
+.pshell-user-menu-tones {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px 6px;
+}
+.pshell-user-menu-tones-label {
+  font-family: 'Young Serif', ui-serif, serif;
+  font-size: 13px;
+  color: var(--ink);
+}
+.pshell-user-menu-tones-list {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+.pshell-tone-swatch {
+  --swatch: var(--accent-ink);
+  position: relative;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  transition: transform 180ms var(--ease-quart);
+}
+.pshell-tone-swatch-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--swatch);
+  /* Subtle 1px ink rule around the dot — letterpress detail, keeps tiny
+     swatches from disappearing on the lightest tone backgrounds. */
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--ink) 18%, transparent);
+  transition: transform 180ms var(--ease-quart);
+}
+.pshell-tone-swatch:hover .pshell-tone-swatch-dot {
+  transform: scale(1.08);
+}
+.pshell-tone-swatch.is-active {
+  /* Hand-drawn ring around the active swatch — uses currentColor of the
+     swatch itself so the indicator inherits the tone. */
+  box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 2.5px var(--swatch);
+}
+.pshell-tone-swatch.is-active .pshell-tone-swatch-dot {
+  transform: scale(0.92);
+}
+.pshell-tone-swatch-label {
+  /* Visually hidden — title attribute handles tooltip on hover. Keeps
+     the row compact while staying screen-reader-accessible. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.pshell-tone-swatch:focus-visible {
+  outline: 1.5px solid var(--accent-ink);
+  outline-offset: 3px;
+}
+
 /* ---------- Main canvas ---------- */
 .pshell-main {
   min-width: 0;

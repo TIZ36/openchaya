@@ -20,9 +20,10 @@ ToastViewport.displayName = ToastPrimitives.Viewport.displayName;
 const Toast = React.forwardRef<
   React.ElementRef<typeof ToastPrimitives.Root>,
   React.ComponentPropsWithoutRef<typeof ToastPrimitives.Root> & { variant?: Variant }
->(({ variant = 'default', style, ...props }, ref) => (
+>(({ variant = 'default', style, className, ...props }, ref) => (
   <ToastPrimitives.Root
     ref={ref}
+    className={['paper-toast', className].filter(Boolean).join(' ')}
     style={{ ...rootStyle, ...variantStyle(variant), ...style }}
     {...props}
   />
