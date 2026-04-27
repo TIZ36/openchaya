@@ -127,6 +127,18 @@ func AutoMigrate(db *gorm.DB) error {
 			created_at TIMESTAMPTZ DEFAULT NOW()
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_traces_agent ON agent_traces(agent_id, created_at DESC)`,
+		// Hot path indexes — every chat reload hits messages by conv_id ordered
+		// by created_at; the agent list bulk-fetches conversation_agents by
+		// agent_id; conversations list orders by user_id+updated_at.
+		`CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conv_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_conv_agent_agent ON conversation_agents(agent_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_conv_agent_conv ON conversation_agents(conversation_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_conv_user_updated ON conversations(user_id, updated_at DESC)`,
+		// pgvector HNSW for similarity search over kb_chunks.embedding —
+		// without this, /api/kb/search degrades to a full table scan past
+		// a few thousand chunks. HNSW is the higher-recall option (vs ivfflat).
+		`CREATE INDEX IF NOT EXISTS idx_kbchunk_embedding_hnsw
+		   ON kb_chunks USING hnsw (embedding vector_cosine_ops)`,
 		`ALTER TABLE llm_configs ADD COLUMN IF NOT EXISTS media_visible BOOLEAN NOT NULL DEFAULT FALSE`,
 		`UPDATE llm_configs SET media_visible = true WHERE (config::jsonb -> 'metadata' ->> 'media_purpose') = 'true' AND media_visible = false`,
 	}

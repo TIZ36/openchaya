@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chaya-ai/chaya-engine/internal/harness/intelligence"
@@ -163,11 +164,23 @@ func (s *SubActor) callLLMWithTools(ctx context.Context, convID string, messages
 		s.reloadRuntimeConfigFromDB()
 		llm, model := s.resolveLLM()
 
+		// On the LAST allowed iteration, force the model to give a final
+		// answer instead of asking for more tools — saves the otherwise
+		// wasted "you've used all iterations, please answer now" extra
+		// LLM round-trip at the bottom of the function. We also drop the
+		// tools list so the request payload shrinks.
+		iterTools := tools
+		iterChoice := "auto"
+		if iter == maxToolIterations-1 {
+			iterTools = nil
+			iterChoice = "none"
+		}
+
 		resp, err := llm.Chat(ctx, provider.ChatRequest{
 			Messages:   messages,
 			Model:      model,
-			Tools:      tools,
-			ToolChoice: "auto",
+			Tools:      iterTools,
+			ToolChoice: iterChoice,
 		})
 		if err != nil {
 			slog.Error("sub actor tool call LLM error", "id", s.ID, "iteration", iter, "err", err)
@@ -180,44 +193,73 @@ func (s *SubActor) callLLMWithTools(ctx context.Context, convID string, messages
 			return resp.Content
 		}
 
-		// Append assistant message with tool calls
+		// Append assistant message with tool calls. We MUST keep Reasoning
+		// here — DeepSeek-Reasoner / Qwen-thinking enforce that the previous
+		// turn's reasoning_content is round-tripped, otherwise the next call
+		// fails with HTTP 400 "reasoning_content must be passed back".
 		messages = append(messages, provider.Message{
 			Role:      "assistant",
 			Content:   resp.Content,
+			Reasoning: resp.Reasoning,
 			ToolCalls: resp.ToolCalls,
 		})
 
-		// Execute each tool call
-		for _, tc := range resp.ToolCalls {
-			start := time.Now()
+		// Execute tool calls in parallel within a single iteration. The model
+		// is allowed to ask for N independent tools in one turn (e.g.
+		// "fetch these 3 URLs + search KB"); previously we ran them serially
+		// so total latency was sum(individual). Now it's max(individual).
+		//
+		// Doom-check + doom-record stays sequential (it inspects history),
+		// so the gating decision for each call is deterministic and not
+		// racy. Only the actual executeTool work runs concurrently.
+		// Results are collected by index so the tool_result messages are
+		// appended in the same order the model emitted them — most LLMs
+		// don't care about ordering but a few are sensitive to it.
+		type toolOutcome struct {
+			content   string
+			duration  time.Duration
+			tc        provider.ToolCall
+			skipped   bool // doom-loop short-circuit
+		}
+		outcomes := make([]toolOutcome, len(resp.ToolCalls))
+		var wg sync.WaitGroup
+		for i, tc := range resp.ToolCalls {
 			argsSummary := tc.Arguments
 			if len(argsSummary) > 120 {
 				argsSummary = argsSummary[:120] + "..."
 			}
 			s.publishPipelineStepWithType(convID, "", fmt.Sprintf("调用工具 %s（%s）", tc.Name, argsSummary), "tool_start")
 
-			// Doom loop detection
 			if doom.Check(tc.Name, tc.Arguments) {
 				slog.Warn("doom loop detected", "tool", tc.Name, "iteration", iter)
 				s.publishPipelineStepWithType(convID, "", fmt.Sprintf("检测到工具重复调用 %s，已终止", tc.Name), "error")
-				messages = append(messages, provider.Message{
-					Role:       "tool",
-					Content:    "Error: tool call loop detected — same call repeated too many times. Please provide a final answer.",
-					ToolCallID: tc.ID,
-				})
+				outcomes[i] = toolOutcome{
+					tc:      tc,
+					content: "Error: tool call loop detected — same call repeated too many times. Please provide a final answer.",
+					skipped: true,
+				}
 				continue
 			}
 			doom.Record(tc.Name, tc.Arguments)
 
-			resultContent := s.executeTool(ctx, tc, toolIndex)
-			duration := time.Since(start).Milliseconds()
+			wg.Add(1)
+			go func(i int, tc provider.ToolCall) {
+				defer wg.Done()
+				start := time.Now()
+				result := s.executeTool(ctx, tc, toolIndex)
+				outcomes[i] = toolOutcome{tc: tc, content: result, duration: time.Since(start)}
+			}(i, tc)
+		}
+		wg.Wait()
 
-			s.publishPipelineStepWithType(convID, "", fmt.Sprintf("工具完成 %s（%dms，%d 字符）", tc.Name, duration, len(resultContent)), "tool_done")
-
+		for _, o := range outcomes {
+			if !o.skipped {
+				s.publishPipelineStepWithType(convID, "", fmt.Sprintf("工具完成 %s（%dms，%d 字符）", o.tc.Name, o.duration.Milliseconds(), len(o.content)), "tool_done")
+			}
 			messages = append(messages, provider.Message{
 				Role:       "tool",
-				Content:    resultContent,
-				ToolCallID: tc.ID,
+				Content:    o.content,
+				ToolCallID: o.tc.ID,
 			})
 		}
 	}

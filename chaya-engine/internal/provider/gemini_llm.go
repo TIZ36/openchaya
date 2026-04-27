@@ -105,29 +105,26 @@ func (g *geminiLLM) ChatStream(ctx context.Context, req ChatRequest) (<-chan Str
 	go func() {
 		defer close(ch)
 		defer func() { ch <- StreamChunk{Done: true} }()
-		var full string
+		// Walk parts manually so we can split thought parts (gemini-2.5-pro
+		// thinking) from final-answer parts. resp.Text() merges them all
+		// into one string and the UI can't tell which is which.
 		for resp, serr := range g.client.Models.GenerateContentStream(ctx, model, contents, cfg) {
 			if serr != nil {
 				slog.Error("gemini stream", "err", serr)
 				return
 			}
-			if resp == nil {
+			if resp == nil || len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
 				continue
 			}
-			chunkText := resp.Text()
-			if strings.TrimSpace(chunkText) == "" {
-				continue
-			}
-			var delta string
-			if strings.HasPrefix(chunkText, full) {
-				delta = chunkText[len(full):]
-				full = chunkText
-			} else {
-				delta = chunkText
-				full += chunkText
-			}
-			if delta != "" {
-				ch <- StreamChunk{Content: delta}
+			for _, part := range resp.Candidates[0].Content.Parts {
+				if part.Text == "" {
+					continue
+				}
+				if part.Thought {
+					ch <- StreamChunk{Reasoning: part.Text}
+				} else {
+					ch <- StreamChunk{Content: part.Text}
+				}
 			}
 		}
 	}()

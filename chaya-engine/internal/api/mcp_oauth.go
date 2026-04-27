@@ -18,8 +18,11 @@ import (
 
 	"github.com/chaya-ai/chaya-engine/internal"
 	"github.com/chaya-ai/chaya-engine/internal/gateway/middleware"
+	"github.com/chaya-ai/chaya-engine/internal/harness/capability/mcp"
+	pgstore "github.com/chaya-ai/chaya-engine/internal/storage/postgres"
 	"github.com/go-chi/chi/v5"
 	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 )
 
 const (
@@ -74,27 +77,33 @@ func loadOAuthAccessToken(rdb *redis.Client, tenantID, userID, mcpURLNorm string
 }
 
 // MCPOAuthAPI holds OAuth handlers for MCP streamable HTTP servers.
+// db + mcpReg are used after a successful token exchange to (a) look up the
+// server row by URL+tenant, then (b) clear its 5-minute cooldown so the
+// very next probe actually retries instead of being silently suppressed.
+// Both may be nil — callbacks still work, the cooldown bust just no-ops.
 type MCPOAuthAPI struct {
 	rdb       *redis.Client
 	publicURL string
+	db        *gorm.DB
+	mcpReg    *mcp.Registry
 }
 
-func RegisterMCPOAuthRoutes(r chi.Router, rdb *redis.Client, cfg *internal.Config) {
+func RegisterMCPOAuthRoutes(r chi.Router, rdb *redis.Client, cfg *internal.Config, db *gorm.DB, mcpReg *mcp.Registry) {
 	if rdb == nil {
 		return
 	}
-	a := &MCPOAuthAPI{rdb: rdb, publicURL: cfg.Server.PublicBaseURL()}
+	a := &MCPOAuthAPI{rdb: rdb, publicURL: cfg.Server.PublicBaseURL(), db: db, mcpReg: mcpReg}
 	r.Post("/api/mcp/oauth/discover", a.discover)
 	r.Post("/api/mcp/oauth/authorize", a.authorize)
 	r.Get("/api/mcp/oauth/token-status", a.tokenStatus)
 }
 
 // RegisterMCPOAuthPublicRoutes registers callback without JWT (browser redirect + SPA POST).
-func RegisterMCPOAuthPublicRoutes(r chi.Router, rdb *redis.Client, cfg *internal.Config) {
+func RegisterMCPOAuthPublicRoutes(r chi.Router, rdb *redis.Client, cfg *internal.Config, db *gorm.DB, mcpReg *mcp.Registry) {
 	if rdb == nil {
 		return
 	}
-	a := &MCPOAuthAPI{rdb: rdb, publicURL: cfg.Server.PublicBaseURL()}
+	a := &MCPOAuthAPI{rdb: rdb, publicURL: cfg.Server.PublicBaseURL(), db: db, mcpReg: mcpReg}
 	r.Get("/mcp/oauth/callback", a.callbackGet)
 	r.Post("/mcp/oauth/callback", a.callbackPost)
 }
@@ -341,6 +350,28 @@ func (a *MCPOAuthAPI) exchangeOAuthCode(r *http.Request, code, state string) (*o
 	key := oauthTokenKey(tenantID, userID, mcpURL)
 	if err := a.rdb.Set(r.Context(), key, b, oauthTokenTTL).Err(); err != nil {
 		return nil, err
+	}
+
+	// Without these two steps, a server that the user "test connected" before
+	// authorizing stays in the 5-minute oauth-failure cooldown — every probe
+	// after authorize gets silently suppressed and the UI shows "0 tools".
+	// Look up the matching server row by tenant + URL, clear its cooldown,
+	// and re-ensure the client so the next probe actually loads tools.
+	if a.db != nil && a.mcpReg != nil {
+		var s pgstore.MCPServer
+		if err := a.db.Where("tenant_id = ? AND url = ?", tenantID, mcpURL).First(&s).Error; err == nil {
+			a.mcpReg.ClearAuthCooldown(s.ID, userID)
+			go a.mcpReg.EnsureClient(context.Background(), mcp.ServerConfig{
+				ID:       s.ID,
+				TenantID: s.TenantID,
+				Name:     s.Name,
+				URL:      s.URL,
+				Type:     s.Type,
+				Config:   s.Config,
+				Enabled:  s.Enabled,
+				Healthy:  s.Healthy,
+			})
+		}
 	}
 	return rec, nil
 }

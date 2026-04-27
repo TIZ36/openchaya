@@ -11,6 +11,7 @@ import (
 
 	"github.com/chaya-ai/chaya-engine/internal/harness/metrics"
 	"github.com/chaya-ai/chaya-engine/internal/provider"
+	pkg "github.com/chaya-ai/chaya-engine/pkg"
 	"github.com/chaya-ai/chaya-engine/pkg/envelope"
 )
 
@@ -23,6 +24,15 @@ type PrimaryActor struct {
 	delegationScratchMu sync.Mutex
 	delegationScratchBody string
 	delegationScratchSpecs []delegationTaskSpec
+
+	// One-shot turn-scoped tool list cache. ListToolsForHarness is called from
+	// classifyIntent / preciseClassifyAndPlan / sub-actor metadata enrichment;
+	// without this we hit the registry 3+ times per turn, each gated on a
+	// 2-second timeout that often truncates OAuth servers' tools/list response.
+	// 10s window is comfortably longer than one turn's classify→plan→spawn span.
+	turnToolsMu    sync.Mutex
+	turnToolsCache []pkg.Tool
+	turnToolsAt    time.Time
 }
 
 type delegationTaskSpec struct {
@@ -90,6 +100,14 @@ func (p *PrimaryActor) handleChat(ctx context.Context, env *envelope.Envelope) {
 		"agent_name": agentDisplayName(p.Config.SystemPrompt),
 	})
 	p.publishPipelineStep(env.ConvID, "收到请求，正在分析...")
+
+	// Fresh turn — wipe last turn's tool cache so we pick up any newly-bound
+	// MCP/skills since the previous request. The 10-second TTL inside
+	// toolsForTurn is just a safety net for back-to-back rapid calls.
+	p.turnToolsMu.Lock()
+	p.turnToolsCache = nil
+	p.turnToolsAt = time.Time{}
+	p.turnToolsMu.Unlock()
 
 	delegate := p.shouldDelegate(ctx, env)
 	metrics.LogHarnessRoute(env.ConvID, "handle_chat", string(ResolveHarnessRoutePhaseA(env).Kind), delegate)
@@ -216,24 +234,50 @@ func responseMode(env *envelope.Envelope) string {
 	return strings.ToLower(strings.TrimSpace(payload.ResponseMode))
 }
 
+// toolsForTurn returns the tool list for the current user turn, cached for
+// 10 seconds. Without caching the same registry call would fire 3+ times in
+// one turn (intent classify, plan, sub-actor metadata). Bumped per-call
+// timeout from 2s → 6s — OAuth servers' first tools/list often takes 1-3s
+// and we want the classifier to actually see the available tools instead
+// of timing out and pretending none exist.
+func (p *PrimaryActor) toolsForTurn(ctx context.Context) []pkg.Tool {
+	if p.Orchestrator == nil || p.Orchestrator.MCPRegistry == nil {
+		return nil
+	}
+	p.turnToolsMu.Lock()
+	if time.Since(p.turnToolsAt) < 10*time.Second && p.turnToolsCache != nil {
+		out := p.turnToolsCache
+		p.turnToolsMu.Unlock()
+		return out
+	}
+	p.turnToolsMu.Unlock()
+
+	tools := p.Orchestrator.MCPRegistry.ListToolsForHarness(ctx, p.AgentID, 6*time.Second, nil, p.UserID, p.resolvedTenantID())
+	p.turnToolsMu.Lock()
+	p.turnToolsCache = tools
+	p.turnToolsAt = time.Now()
+	p.turnToolsMu.Unlock()
+	return tools
+}
+
 // classifyIntent does a quick LLM call to decide: simple_chat vs need_delegate.
 // It injects available tool names so the classifier knows what capabilities exist.
 func (p *PrimaryActor) classifyIntent(ctx context.Context, convID, userMsg string) string {
 	cancelHeartbeat := p.startHarnessHeartbeat(ctx, convID, "意图判定", 4*time.Second)
 	defer cancelHeartbeat()
 
-	// Gather available tool names for capability-aware classification
-	var toolHint string
-	if p.Orchestrator != nil && p.Orchestrator.MCPRegistry != nil {
-		tools := p.Orchestrator.MCPRegistry.ListToolsForHarness(ctx, p.AgentID, 2*time.Second, nil, p.UserID, p.resolvedTenantID())
-		if len(tools) > 0 {
-			names := make([]string, 0, len(tools))
-			for _, t := range tools {
-				names = append(names, t.Name)
-			}
-			toolHint = fmt.Sprintf("\nAvailable tools: %s", strings.Join(names, ", "))
-		}
+	// P0-B fast path: an agent with zero tools cannot meaningfully delegate;
+	// short-circuit without burning an LLM call (saves ~3-5s on cold paths).
+	tools := p.toolsForTurn(ctx)
+	if len(tools) == 0 {
+		return "simple_chat"
 	}
+
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		names = append(names, t.Name)
+	}
+	toolHint := fmt.Sprintf("\nAvailable tools: %s", strings.Join(names, ", "))
 
 	prompt := fmt.Sprintf(`Classify the user's intent. Reply with exactly one word:
 - "simple_chat" if this is a casual question, greeting, or general knowledge that you can answer directly
@@ -266,20 +310,21 @@ func (p *PrimaryActor) preciseClassifyAndPlan(ctx context.Context, convID, userM
 	cancelHeartbeat := p.startHarnessHeartbeat(ctx, convID, "意图与任务规划", 5*time.Second)
 	defer cancelHeartbeat()
 
-	var toolHint string
-	if p.Orchestrator != nil && p.Orchestrator.MCPRegistry != nil {
-		tools := p.Orchestrator.MCPRegistry.ListToolsForHarness(ctx, p.AgentID, 2*time.Second, nil, p.UserID, p.resolvedTenantID())
-		if len(tools) > 0 {
-			names := make([]string, 0, min(80, len(tools)))
-			for i, t := range tools {
-				if i >= 80 {
-					break
-				}
-				names = append(names, t.Name)
-			}
-			toolHint = fmt.Sprintf("\nAvailable tool names (sample): %s", strings.Join(names, ", "))
-		}
+	// P0-B fast path: no tools available → cannot delegate, skip the LLM router.
+	tools := p.toolsForTurn(ctx)
+	if len(tools) == 0 {
+		return false, nil
 	}
+
+	var toolHint string
+	names := make([]string, 0, min(80, len(tools)))
+	for i, t := range tools {
+		if i >= 80 {
+			break
+		}
+		names = append(names, t.Name)
+	}
+	toolHint = fmt.Sprintf("\nAvailable tool names (sample): %s", strings.Join(names, ", "))
 
 	prompt := fmt.Sprintf(`You route the user message for a multi-agent assistant.
 Return valid JSON only, shape:
@@ -288,8 +333,9 @@ Return valid JSON only, shape:
 Rules:
 1) Set "delegate" to false if the user only needs a short direct answer, greeting, or general chat without tools.
 2) Set "delegate" to true if MCP tools, code work, document retrieval, translation, data analysis, or multi-step expert work may help.
-3) If delegate is true, provide 1-3 parallelizable subtasks with concrete "task" and "expected_result". Use agent_type like researcher / coder / verifier / writer / tempag.
-4) If delegate is false, "tasks" must be [].
+3) If delegate is true, default to ONE subtask. Only split into 2-3 when the work is genuinely independent and parallelizable (e.g. fetch 3 distinct URLs, query 3 unrelated systems). Do NOT split a single coherent task into artificial pieces — it triples LLM + tool latency for no gain.
+4) Use agent_type like researcher / coder / verifier / writer / tempag.
+5) If delegate is false, "tasks" must be [].
 
 %s
 
@@ -412,12 +458,15 @@ func (p *PrimaryActor) delegateAndSummarize(ctx context.Context, env *envelope.E
 	}
 	p.logCapabilityUsage(ctx, convID, env.Body)
 
-	delegationTimeout := 60 * time.Second
+	// Per-subtask deadline rather than a single shared one. Previously a
+	// 60s parent context was shared across all subtasks — one slow MCP call
+	// killed siblings that were nearly done. Now each subtask has its own
+	// 90s budget; the parent context is only cancelled if the user
+	// disconnects or the outer turn deadline (none) fires.
+	perTaskTimeout := 90 * time.Second
 	if isCapabilitySetupIntent(env.Body) {
-		delegationTimeout = 120 * time.Second
+		perTaskTimeout = 180 * time.Second
 	}
-	parallelCtx, cancel := context.WithTimeout(ctx, delegationTimeout)
-	defer cancel()
 	cancelHeartbeat := func() {}
 
 	results := make([]delegationTaskResult, 0, len(taskSpecs))
@@ -502,9 +551,10 @@ func (p *PrimaryActor) delegateAndSummarize(ctx context.Context, env *envelope.E
 		wg.Add(1)
 		go func(spec delegationTaskSpec, ch <-chan string, fp string) {
 			defer wg.Done()
+			taskCtx, taskCancel := context.WithTimeout(ctx, perTaskTimeout)
+			defer taskCancel()
 			select {
 			case result := <-ch:
-				// Save to cache only for stable/success-like results.
 				if shouldCacheDelegationResult(result) {
 					p.supervisor.tempStore.SaveResult(ctx, fp, TempAgRecord{
 						UserID:         p.UserID,
@@ -515,7 +565,7 @@ func (p *PrimaryActor) delegateAndSummarize(ctx context.Context, env *envelope.E
 					})
 				}
 				resultCh <- delegationTaskResult{Spec: spec, Result: result}
-			case <-parallelCtx.Done():
+			case <-taskCtx.Done():
 				resultCh <- delegationTaskResult{Spec: spec, Err: "timed out waiting for sub-actor", TimedOut: true}
 			}
 		}(spec, waitResultCh, fingerprint)
@@ -526,7 +576,10 @@ func (p *PrimaryActor) delegateAndSummarize(ctx context.Context, env *envelope.E
 		p.publishPipelineStep(convID, fmt.Sprintf("开始执行：%d 个子任务", launched))
 	}
 	if launched > 0 {
-		cancelHeartbeat = p.startHarnessHeartbeat(parallelCtx, convID, "子任务执行中", 5*time.Second)
+		// Heartbeat tied to outer ctx — survives even past per-task timeouts
+		// so the user keeps seeing progress while slow tasks finish (or until
+		// every task settles, when the aggregator below cancels it).
+		cancelHeartbeat = p.startHarnessHeartbeat(ctx, convID, "子任务执行中", 5*time.Second)
 	} else if cacheHitCount > 0 {
 		p.publishPipelineStepWithType(convID, "", "全部命中缓存，直接使用历史结果", "info")
 	}
@@ -565,8 +618,17 @@ func (p *PrimaryActor) delegateAndSummarize(ctx context.Context, env *envelope.E
 	}
 
 	subResult := formatDelegationResults(results)
-	if parallelCtx.Err() != nil {
-		p.publishPipelineStepWithType(convID, "", "部分子任务超时，使用已完成结果继续", "warning")
+	// We always show this if any task hit its per-task deadline, regardless
+	// of whether others succeeded — the warning helps the user understand
+	// why the answer might be partial.
+	timedOutCount := 0
+	for _, r := range results {
+		if r.TimedOut {
+			timedOutCount++
+		}
+	}
+	if timedOutCount > 0 {
+		p.publishPipelineStepWithType(convID, "", fmt.Sprintf("有 %d 个子任务超时，使用已完成结果继续", timedOutCount), "warning")
 	}
 	cancelHeartbeat()
 
@@ -618,7 +680,7 @@ func (p *PrimaryActor) buildDelegationPlan(ctx context.Context, convID, userMsg 
 	defer cancel()
 
 	prompt := fmt.Sprintf(`You are a task planner for multi-agent delegation.
-Split the user's request into 2-3 parallelizable subtasks.
+Default to ONE subtask. Only split into 2-3 when the work is genuinely independent and parallelizable.
 Each subtask must include:
 - id
 - agent_type (short role, e.g. researcher / coder / verifier / writer)

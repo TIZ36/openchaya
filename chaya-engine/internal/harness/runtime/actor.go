@@ -51,6 +51,9 @@ type Actor struct {
 	cancelFunc     context.CancelFunc
 	lastAccess     time.Time
 	cachedTenantID string
+	// lastReasoning is the reasoning_content from the most recent assistant
+	// turn. Round-tripped into the next request — see streamAssistantResponse.
+	lastReasoning  string
 
 	topoMatchMu             sync.Mutex
 	lastTopologyIntentLabel string // Consult 命中意图 label（本回合，用于拓扑学习轨迹）
@@ -341,7 +344,11 @@ func (a *Actor) streamChat(ctx context.Context, env *envelope.Envelope) string {
 	full := a.streamAssistantResponse(ctx, convID, messages)
 
 	a.mu.Lock()
-	a.history = append(a.history, provider.Message{Role: "assistant", Content: full})
+	a.history = append(a.history, provider.Message{
+		Role:      "assistant",
+		Content:   full,
+		Reasoning: a.lastReasoning,
+	})
 	a.mu.Unlock()
 
 	return full
@@ -448,6 +455,9 @@ func extractPersistableExt(data json.RawMessage) json.RawMessage {
 	return b
 }
 
+// streamAssistantResponse runs one streaming LLM call and returns the
+// final assistant content. Reasoning (if any) is persisted to message.ext
+// and exposed for the next-turn round-trip via the lastReasoning field.
 func (a *Actor) streamAssistantResponse(ctx context.Context, convID string, messages []provider.Message) string {
 	assistantMsg := pgstore.Message{ConvID: convID, Role: "assistant", AgentID: &a.AgentID}
 	if a.DB != nil {
@@ -520,20 +530,75 @@ func (a *Actor) streamAssistantResponse(ctx context.Context, convID string, mess
 		}
 	}()
 
-	for chunk := range stream {
-		lastChunkAt.Store(time.Now().UnixNano())
-		if chunk.Done {
-			break
+	// Coalesce per-token chunks into ~one-frame batches. Fast providers (e.g.
+	// Deepseek) emit 30-60 tokens/sec; without batching every token = a JSON
+	// encode + WS frame + frontend setState. We flush when the pending delta
+	// crosses ~32 chars OR ~16ms (≈ one render frame), whichever first.
+	const (
+		flushChars  = 32
+		flushPeriod = 16 * time.Millisecond
+	)
+	var (
+		pending      strings.Builder
+		pendingThink strings.Builder
+		fullThink    string
+		lastFlush    = time.Now()
+		lastFlushTh  = time.Now()
+	)
+	flush := func() {
+		if pending.Len() == 0 {
+			return
 		}
-		full += chunk.Content
 		a.Hub.Publish(convID, map[string]any{
 			"type":       "agent_stream_chunk",
 			"agent_id":   a.AgentID,
 			"message_id": assistantMsg.ID,
 			"content":    full,
-			"chunk":      chunk.Content,
+			"chunk":      pending.String(),
 		})
+		pending.Reset()
+		lastFlush = time.Now()
 	}
+	// Thinking/reasoning is published on its own event so the UI can render
+	// it as a folded gray block — distinct from the final answer. Same
+	// batching strategy as content; reasoning streams can be fast (DeepSeek
+	// reasoner emits ~80 tok/sec while thinking).
+	flushThink := func() {
+		if pendingThink.Len() == 0 {
+			return
+		}
+		a.Hub.Publish(convID, map[string]any{
+			"type":       "agent_reasoning_chunk",
+			"agent_id":   a.AgentID,
+			"message_id": assistantMsg.ID,
+			"content":    fullThink,
+			"chunk":      pendingThink.String(),
+		})
+		pendingThink.Reset()
+		lastFlushTh = time.Now()
+	}
+	for chunk := range stream {
+		lastChunkAt.Store(time.Now().UnixNano())
+		if chunk.Done {
+			break
+		}
+		if chunk.Reasoning != "" {
+			fullThink += chunk.Reasoning
+			pendingThink.WriteString(chunk.Reasoning)
+			if pendingThink.Len() >= flushChars || time.Since(lastFlushTh) >= flushPeriod {
+				flushThink()
+			}
+		}
+		if chunk.Content != "" {
+			full += chunk.Content
+			pending.WriteString(chunk.Content)
+			if pending.Len() >= flushChars || time.Since(lastFlush) >= flushPeriod {
+				flush()
+			}
+		}
+	}
+	flushThink()
+	flush() // emit any tail before stream_done so the UI lands on full content.
 	cancelWatch()
 
 	if a.DB != nil {
@@ -543,19 +608,27 @@ func (a *Actor) streamAssistantResponse(ctx context.Context, convID string, mess
 	}
 
 	finalLogs := finishExecutionTrace(convID)
-	a.persistMessageExt(assistantMsg.ID, map[string]any{
+	ext := map[string]any{
 		"agent_log":     finalLogs,
 		"log":           finalLogs,
 		"executionLogs": finalLogs,
-	})
+	}
+	if fullThink != "" {
+		ext["reasoning"] = fullThink
+	}
+	a.persistMessageExt(assistantMsg.ID, ext)
 
-	a.Hub.Publish(convID, map[string]any{
+	doneEvt := map[string]any{
 		"type":           "agent_stream_done",
 		"agent_id":       a.AgentID,
 		"message_id":     assistantMsg.ID,
 		"content":        full,
 		"execution_logs": finalLogs,
-	})
+	}
+	if fullThink != "" {
+		doneEvt["reasoning"] = fullThink
+	}
+	a.Hub.Publish(convID, doneEvt)
 
 	// Fire follow-up suggestions in the background. Uses the same provider
 	// the agent just answered with (capped to 120 tokens / temp=0 in
@@ -568,6 +641,13 @@ func (a *Actor) streamAssistantResponse(ctx context.Context, convID string, mess
 	if !a.IsPrimary {
 		clearExecutionTrace(convID)
 	}
+
+	// Stash for the next-turn history append. DeepSeek-Reasoner / Qwen-thinking
+	// require the previous turn's reasoning_content to be passed back in the
+	// follow-up request — we keep it here and read it in streamChat.
+	a.mu.Lock()
+	a.lastReasoning = fullThink
+	a.mu.Unlock()
 
 	return full
 }

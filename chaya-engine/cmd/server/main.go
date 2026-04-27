@@ -188,7 +188,7 @@ func main() {
 		api.RegisterAuthRoutes(r, db, cfg.Auth.JWTSecret, cfg.Auth.TokenTTL)
 		// MCP streamable HTTP proxy (CORS); optional server_id + JWT injects auth
 		api.RegisterMCPProxyRoutes(r, db, rdb, cfg.Auth.JWTSecret)
-		api.RegisterMCPOAuthPublicRoutes(r, rdb, cfg)
+		api.RegisterMCPOAuthPublicRoutes(r, rdb, cfg, db, mcpReg)
 		api.RegisterMediaOutputPublicRoutes(r, db)
 
 		// Protected routes (JWT required)
@@ -202,7 +202,7 @@ func main() {
 			api.RegisterLLMConfigRoutes(r, db, providerRegistry)
 			api.RegisterMCPRoutes(r, db, mcpReg)
 			api.RegisterAgentMCPRoutes(r, db, mcpReg)
-			api.RegisterMCPOAuthRoutes(r, rdb, cfg)
+			api.RegisterMCPOAuthRoutes(r, rdb, cfg, db, mcpReg)
 			api.RegisterSkillRoutes(r, db)
 			api.RegisterKBRoutes(r, db, ragRetriever)
 			api.RegisterGalleryRoutes(r, db)

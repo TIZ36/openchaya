@@ -25,6 +25,11 @@ type Message struct {
 	Content    string     `json:"content"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`       // assistant's tool call requests
 	ToolCallID string     `json:"tool_call_id,omitempty"`     // for role=tool responses
+	// Reasoning carries the assistant's "thinking" output (DeepSeek-Reasoner /
+	// Qwen-thinking / etc.). When the model emits reasoning_content in turn N,
+	// we MUST pass it back in turn N+1's history or the API rejects the
+	// follow-up with HTTP 400 "reasoning_content must be passed back".
+	Reasoning  string     `json:"reasoning,omitempty"`
 }
 
 // Tool is an OpenAI-compatible function/tool definition.
@@ -42,6 +47,7 @@ type ToolFunction struct {
 // ChatResponse is the result of a non-streaming chat.
 type ChatResponse struct {
 	Content    string     `json:"content"`
+	Reasoning  string     `json:"reasoning,omitempty"` // see Message.Reasoning
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	TokensIn   int        `json:"tokens_in"`
 	TokensOut  int        `json:"tokens_out"`

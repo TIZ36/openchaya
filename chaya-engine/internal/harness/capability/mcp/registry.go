@@ -542,18 +542,16 @@ func (r *Registry) CallTool(ctx context.Context, serverID, toolName string, args
 
 // --- OAuth helpers ---
 
-const oauthClientCacheTTL = 2 * time.Minute
+// 30 minutes is a comfortable safety net well below typical access-token
+// lifetimes (most providers issue 1h+). The cache key below also embeds
+// a token hash, so a re-authorize replaces the entry immediately rather
+// than waiting for TTL — and Healthy() catches in-flight expirations.
+// Previously this was 2 minutes, which meant rebuilding (Initialize
+// handshake, ~100-500ms) every couple of turns for no reason.
+const oauthClientCacheTTL = 30 * time.Minute
 
 // getOAuthClient returns a cached or freshly created MCP client authenticated with the user's OAuth token.
 func (r *Registry) getOAuthClient(ctx context.Context, meta *oauthServerMeta, userID, tenantID string) (*Client, map[string]string, error) {
-	cacheKey := meta.ID + ":" + userID
-	r.mu.RLock()
-	if cc, ok := r.oauthClients[cacheKey]; ok && time.Now().Before(cc.expires) && cc.client.Healthy() {
-		r.mu.RUnlock()
-		return cc.client, cc.headers, nil
-	}
-	r.mu.RUnlock()
-
 	if tenantID == "" {
 		tenantID = meta.TenantID
 	}
@@ -564,6 +562,18 @@ func (r *Registry) getOAuthClient(ctx context.Context, meta *oauthServerMeta, us
 	if tok == "" {
 		return nil, nil, errors.New("尚未完成 OAuth 授权或 token 已过期，请在前端重新授权")
 	}
+
+	// Cache key includes token hash so re-authorize (new token) immediately
+	// invalidates the stale client without waiting out the TTL or relying
+	// solely on Healthy() to notice 401s.
+	tokHash := sha256.Sum256([]byte(tok))
+	cacheKey := fmt.Sprintf("%s:%s:%x", meta.ID, userID, tokHash[:8])
+	r.mu.RLock()
+	if cc, ok := r.oauthClients[cacheKey]; ok && time.Now().Before(cc.expires) && cc.client.Healthy() {
+		r.mu.RUnlock()
+		return cc.client, cc.headers, nil
+	}
+	r.mu.RUnlock()
 
 	headers := map[string]string{"Authorization": "Bearer " + tok}
 

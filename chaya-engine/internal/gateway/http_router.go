@@ -35,6 +35,30 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin:     func(r *http.Request) bool { return true }, // TODO: restrict in production
+	// Echo back the "bearer" subprotocol so browsers accept the upgrade
+	// when the client offers "bearer, <jwt>" as a way to ship the token
+	// out-of-URL (avoids JWTs landing in proxy/access logs).
+	Subprotocols: []string{"bearer"},
+}
+
+// extractWSToken pulls a JWT from either:
+//  1. Sec-WebSocket-Protocol: bearer, <jwt>  — preferred, never logged
+//  2. ?token= query param                    — legacy fallback for old clients
+func extractWSToken(r *http.Request) string {
+	if proto := r.Header.Get("Sec-WebSocket-Protocol"); proto != "" {
+		var bearer bool
+		for _, p := range strings.Split(proto, ",") {
+			p = strings.TrimSpace(p)
+			if p == "bearer" {
+				bearer = true
+				continue
+			}
+			if bearer && p != "" {
+				return p
+			}
+		}
+	}
+	return r.URL.Query().Get("token")
 }
 
 // RegisterRoutes is a hook for main to mount API routes after the router is created.
@@ -63,10 +87,9 @@ func NewRouter(hub *Hub, onWSMessage func(*Client, *WSMessage), convAccess func(
 			return
 		}
 
-		// Extract user info from JWT token in query param
 		userID := r.URL.Query().Get("user_id")
 		tenantID := r.URL.Query().Get("tenant_id")
-		if token := r.URL.Query().Get("token"); token != "" {
+		if token := extractWSToken(r); token != "" {
 			if claims := parseJWTClaims(token); claims != nil {
 				if uid, ok := claims["user_id"].(string); ok {
 					userID = uid

@@ -56,9 +56,27 @@ func (a *AgentAPI) list(w http.ResponseWriter, r *http.Request) {
 	var agents []pgstore.Agent
 	a.db.Where("user_id = ?", userID).Order("is_primary desc, created_at asc").Find(&agents)
 
+	// Bulk-fetch every agent's bound conversation in one query, otherwise
+	// enrichAgent fires N additional SELECTs (and N CREATEs when missing)
+	// — turns a 10-agent list into 30+ queries.
+	convByAgent := make(map[string]string, len(agents))
+	if len(agents) > 0 {
+		ids := make([]string, len(agents))
+		for i, ag := range agents {
+			ids[i] = ag.ID
+		}
+		var links []pgstore.ConversationAgent
+		a.db.Where("agent_id IN ?", ids).Find(&links)
+		for _, l := range links {
+			if _, dup := convByAgent[l.AgentID]; !dup {
+				convByAgent[l.AgentID] = l.ConversationID
+			}
+		}
+	}
+
 	result := make([]M, len(agents))
 	for i, ag := range agents {
-		result[i] = a.enrichAgent(ag)
+		result[i] = a.enrichAgentWithConv(ag, convByAgent[ag.ID])
 	}
 	OK(w, result)
 }
@@ -131,9 +149,10 @@ func (a *AgentAPI) get(w http.ResponseWriter, r *http.Request) {
 }
 
 // enrichAgent adds conversation_id to agent response.
-// Each agent has a bound conversation for its chat history.
+// Each agent has a bound conversation for its chat history. If missing,
+// lazily creates one. List endpoints should use enrichAgentWithConv with
+// a pre-fetched convID to avoid N+1.
 func (a *AgentAPI) enrichAgent(ag pgstore.Agent) M {
-	// Find bound conversation
 	var link pgstore.ConversationAgent
 	convID := ""
 	if a.db.Where("agent_id = ?", ag.ID).First(&link).Error == nil {
@@ -153,7 +172,13 @@ func (a *AgentAPI) enrichAgent(ag pgstore.Agent) M {
 			}
 		}
 	}
+	return a.enrichAgentWithConv(ag, convID)
+}
 
+// enrichAgentWithConv builds the response map without touching the DB.
+// Pass an empty convID if you don't have one — caller is responsible for
+// the lazy-create dance (used by single-get; list resolves in bulk).
+func (a *AgentAPI) enrichAgentWithConv(ag pgstore.Agent, convID string) M {
 	m := M{
 		"id":              ag.ID,
 		"user_id":         ag.UserID,

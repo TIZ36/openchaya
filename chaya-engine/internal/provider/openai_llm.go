@@ -63,8 +63,9 @@ func (p *openaiLLM) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 
 	choice := resp.Choices[0]
 	result := &ChatResponse{
-		Content: choice.Message.Content,
-		Model:   resp.Model,
+		Content:   choice.Message.Content,
+		Reasoning: choice.Message.ReasoningContent,
+		Model:     resp.Model,
 	}
 	if resp.Usage.PromptTokens > 0 {
 		result.TokensIn = resp.Usage.PromptTokens
@@ -122,6 +123,13 @@ func (p *openaiLLM) ChatStream(ctx context.Context, req ChatRequest) (<-chan Str
 				continue
 			}
 			delta := resp.Choices[0].Delta
+			// reasoning_content is the DeepSeek-reasoner / Qwen-reasoning
+			// extension on the OpenAI-compatible API. Surface it as a
+			// separate stream so the UI can render thinking blocks
+			// distinct from the final answer.
+			if delta.ReasoningContent != "" {
+				ch <- StreamChunk{Reasoning: delta.ReasoningContent}
+			}
 			if delta.Content != "" {
 				ch <- StreamChunk{Content: delta.Content}
 			}
@@ -138,6 +146,10 @@ func openaiToOAIMessages(msgs []Message) []oai.ChatCompletionMessage {
 			Role:       m.Role,
 			Content:    m.Content,
 			ToolCallID: m.ToolCallID,
+			// Round-trip reasoning back to providers that require it
+			// (DeepSeek-Reasoner, Qwen-thinking). Empty for non-thinking
+			// models — the field is omitempty in the SDK.
+			ReasoningContent: m.Reasoning,
 		}
 		for _, tc := range m.ToolCalls {
 			msg.ToolCalls = append(msg.ToolCalls, oai.ToolCall{
