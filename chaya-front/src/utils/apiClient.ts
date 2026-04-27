@@ -41,19 +41,50 @@ class ApiClient {
     return !!this.getToken();
   }
 
-  private headers(extra?: Record<string, string>): Record<string, string> {
-    const h: Record<string, string> = { 'Content-Type': 'application/json', ...extra };
-    const token = this.getToken();
-    if (token) h['Authorization'] = `Bearer ${token}`;
-    return h;
+  /**
+   * Low-level: native fetch with JWT auto-attached and centralised 401 handling.
+   * Use this from service files instead of rolling your own authFetch — that
+   * way every call benefits from token injection, auto-logout on 401, and any
+   * future cross-cutting concern (retries, telemetry, request IDs).
+   *
+   * Accepts either a path ("/api/foo") or an absolute URL.
+   */
+  async fetchRaw(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+    const url = typeof input === 'string' && input.startsWith('/')
+      ? `${getBackendUrl()}${input}`
+      : input;
+    const headers = new Headers(init.headers || {});
+    if (!headers.has('Authorization')) {
+      const token = this.getToken();
+      if (token) headers.set('Authorization', `Bearer ${token}`);
+    }
+    const res = await fetch(url as RequestInfo, { ...init, headers });
+    if (res.status === 401) this.handleUnauthorized();
+    return res;
+  }
+
+  /**
+   * Called when any request comes back 401. Clears the token and bounces to
+   * the login screen — without this, every service would need to handle
+   * token expiry itself, and they all do it inconsistently.
+   */
+  private unauthorizedHandled = false;
+  private handleUnauthorized() {
+    if (this.unauthorizedHandled) return;
+    this.unauthorizedHandled = true;
+    this.clearToken();
+    if (typeof window !== 'undefined') {
+      // Defer so the in-flight caller still sees its 401 and can show a toast.
+      setTimeout(() => window.location.reload(), 50);
+    }
   }
 
   async request<T = any>(path: string, options: RequestInit = {}): Promise<T> {
-    const base = getBackendUrl();
-    const res = await fetch(`${base}${path}`, {
-      ...options,
-      headers: { ...this.headers(), ...(options.headers as Record<string, string> || {}) },
-    });
+    const headers = new Headers(options.headers || {});
+    if (!headers.has('Content-Type') && !(options.body instanceof FormData)) {
+      headers.set('Content-Type', 'application/json');
+    }
+    const res = await this.fetchRaw(path, { ...options, headers });
 
     // Handle non-JSON responses (blobs, empty)
     const contentType = res.headers.get('content-type') || '';
@@ -109,17 +140,7 @@ class ApiClient {
    * Upload files (multipart/form-data, no Content-Type header — browser sets it)
    */
   async upload<T = any>(path: string, formData: FormData): Promise<T> {
-    const base = getBackendUrl();
-    const token = this.getToken();
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-
-    const res = await fetch(`${base}${path}`, {
-      method: 'POST',
-      headers,
-      body: formData,
-    });
-
+    const res = await this.fetchRaw(path, { method: 'POST', body: formData });
     const body = await res.json();
     if (body && typeof body === 'object' && 'code' in body) {
       if (body.code !== 0) throw new Error(body.error || `API error ${body.code}`);

@@ -8,13 +8,8 @@ import { api } from '../utils/apiClient';
 
 const API_BASE_URL = `${getBackendUrl()}/api/llm`;
 
-// JWT-aware fetch wrapper — all requests to backend must use this
-const authFetch: typeof fetch = (input, init) => {
-  const token = localStorage.getItem('chaya_token');
-  const headers: Record<string, string> = { ...(init?.headers as Record<string, string> || {}) };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  return fetch(input, { ...init, headers });
-};
+// Delegates to central apiClient for auth + 401 handling.
+const authFetch: typeof fetch = (input, init) => api.fetchRaw(input, init);
 
 // ============================================================================
 // Provider (供应商) 相关类型和API

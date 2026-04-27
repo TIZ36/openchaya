@@ -1,16 +1,21 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from './utils/apiClient';
 import LoginPage from './components/LoginPage';
-import ChatPage from './components/ChatPage';
-import AgentsGalleryPage from './components/AgentsGalleryPage';
-import ModelsPage from './components/ModelsPage';
-import KnowledgePage from './components/KnowledgePage';
-import PersonaPage from './components/PersonaPage';
-import CreatePage from './components/CreatePage';
-import GalleryPage from './components/GalleryPage';
-import SettingsPage from './components/SettingsPage';
 import PaperAppShell from './components/paper/AppShell';
+
+// Login stays eager (always first paint after auth check). Every other page
+// is its own chunk — without this a fresh load pulls Chat(84K) + Create(72K)
+// + Persona(48K) + ... up front even before login.
+const ChatPage = lazy(() => import('./components/ChatPage'));
+const AgentsGalleryPage = lazy(() => import('./components/AgentsGalleryPage'));
+const ModelsPage = lazy(() => import('./components/ModelsPage'));
+const KnowledgePage = lazy(() => import('./components/KnowledgePage'));
+const PersonaPage = lazy(() => import('./components/PersonaPage'));
+const CreatePage = lazy(() => import('./components/CreatePage'));
+const GalleryPage = lazy(() => import('./components/GalleryPage'));
+const IntegrationsPage = lazy(() => import('./components/IntegrationsPage'));
+const SettingsPage = lazy(() => import('./components/SettingsPage'));
 import {
   getAgents, getSessions, createAgent, deleteSession, deleteAgent, updateSessionLLMConfig, type Session,
 } from './services/chat';
@@ -26,7 +31,7 @@ import type { CurrentUser } from './utils/themeAccess';
 
 type Chapter =
   | 'chat' | 'agents' | 'persona' | 'models'
-  | 'knowledge' | 'create' | 'gallery' | 'settings';
+  | 'knowledge' | 'create' | 'gallery' | 'integrations' | 'settings';
 
 interface ClientSettings {
   font: 'default' | 'pixel' | 'terminal' | 'rounded' | 'dotgothic' | 'silkscreen';
@@ -73,6 +78,7 @@ const chapterFromPath = (p: string): Chapter => {
   if (p.startsWith('/knowledge')) return 'knowledge';
   if (p.startsWith('/create')) return 'create';
   if (p.startsWith('/gallery')) return 'gallery';
+  if (p.startsWith('/integrations')) return 'integrations';
   if (p.startsWith('/settings')) return 'settings';
   return 'chat';
 };
@@ -283,6 +289,9 @@ const App: React.FC = () => {
       case 'gallery':
         return <GalleryPage />;
 
+      case 'integrations':
+        return <IntegrationsPage />;
+
       case 'settings':
         return (
           <SettingsPage
@@ -314,10 +323,29 @@ const App: React.FC = () => {
         userLabel={user?.email || user?.name || '未登入'}
         onLogout={handleLogout}
       >
-        {renderChapter()}
+        <Suspense fallback={<ChapterFallback />}>
+          {renderChapter()}
+        </Suspense>
       </PaperAppShell>
     </div>
   );
 };
+
+const ChapterFallback: React.FC = () => (
+  <div
+    style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: '60vh',
+      fontFamily: "'Young Serif', serif",
+      fontStyle: 'italic',
+      color: 'var(--pencil)',
+      fontSize: 14,
+    }}
+  >
+    正在翻页…
+  </div>
+);
 
 export default App;

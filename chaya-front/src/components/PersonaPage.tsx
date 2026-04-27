@@ -6,6 +6,7 @@ import {
   smartnoteMemories, getSmartnoteApiKey,
   type Memory, type MemoryKind,
 } from '../services/smartnoteApi';
+import { mcpApi, skillsApi, type MCPServer, type Skill } from '../services/integrationsApi';
 import { emitSessionsChanged } from '../utils/sessionEvents';
 import { toast } from './ui/use-toast';
 import {
@@ -70,6 +71,14 @@ const PersonaPage: React.FC<PersonaPageProps> = ({ sessionId, onOpenChat }) => {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [memLoading, setMemLoading] = useState(false);
   const [memErr, setMemErr] = useState<string | null>(null);
+
+  // Bound integrations for the current agent. We refetch on agent change
+  // and on every bind/unbind so the chip rows stay accurate without polling.
+  const [boundSkills, setBoundSkills] = useState<Skill[]>([]);
+  const [boundMcps, setBoundMcps] = useState<MCPServer[]>([]);
+  const [allSkills, setAllSkills] = useState<Skill[]>([]);
+  const [allMcps, setAllMcps] = useState<MCPServer[]>([]);
+  const [pickerOpen, setPickerOpen] = useState<null | 'skill' | 'mcp'>(null);
   const [memBusy, setMemBusy] = useState<Record<string, boolean>>({});
 
   /* Preset editor: null = closed, 'new' = creating, object = editing existing */
@@ -124,6 +133,61 @@ const PersonaPage: React.FC<PersonaPageProps> = ({ sessionId, onOpenChat }) => {
   const agentUuid = agent?.id || null;
   const agentSid = agent?.session_id || null;
   const agentName = (agent?.name || agent?.title || '').trim();
+
+  const loadBoundIntegrations = useCallback(async () => {
+    if (!agentUuid) { setBoundSkills([]); setBoundMcps([]); return; }
+    try {
+      const [sk, mc] = await Promise.all([
+        skillsApi.listForAgent(agentUuid).catch(() => []),
+        mcpApi.listForAgent(agentUuid).catch(() => []),
+      ]);
+      setBoundSkills(Array.isArray(sk) ? sk : []);
+      setBoundMcps(Array.isArray(mc) ? mc : []);
+    } catch { /* ignore */ }
+  }, [agentUuid]);
+  useEffect(() => { void loadBoundIntegrations(); }, [loadBoundIntegrations]);
+
+  const openSkillPicker = useCallback(async () => {
+    try {
+      const list = await skillsApi.list();
+      setAllSkills(Array.isArray(list) ? list : []);
+      setPickerOpen('skill');
+    } catch (e: any) {
+      toast({ title: '取 skill 列表失败', description: e?.message || '', variant: 'destructive' });
+    }
+  }, []);
+  const openMcpPicker = useCallback(async () => {
+    try {
+      const list = await mcpApi.list();
+      setAllMcps(Array.isArray(list) ? list : []);
+      setPickerOpen('mcp');
+    } catch (e: any) {
+      toast({ title: '取 MCP 列表失败', description: e?.message || '', variant: 'destructive' });
+    }
+  }, []);
+
+  const toggleSkillBind = useCallback(async (sk: Skill) => {
+    if (!agentUuid) return;
+    const isBound = boundSkills.some((s) => s.id === sk.id);
+    try {
+      if (isBound) await skillsApi.detachFromAgent(agentUuid, sk.id);
+      else await skillsApi.attachToAgent(agentUuid, sk.id);
+      await loadBoundIntegrations();
+    } catch (e: any) {
+      toast({ title: '改不了', description: e?.message || '', variant: 'destructive' });
+    }
+  }, [agentUuid, boundSkills, loadBoundIntegrations]);
+  const toggleMcpBind = useCallback(async (mc: MCPServer) => {
+    if (!agentUuid) return;
+    const isBound = boundMcps.some((m) => m.id === mc.id);
+    try {
+      if (isBound) await mcpApi.unbindFromAgent(agentUuid, mc.id);
+      else await mcpApi.bindToAgent(agentUuid, mc.id);
+      await loadBoundIntegrations();
+    } catch (e: any) {
+      toast({ title: '改不了', description: e?.message || '', variant: 'destructive' });
+    }
+  }, [agentUuid, boundMcps, loadBoundIntegrations]);
   useEffect(() => {
     if (!agentUuid && !agentSid) { setMemories([]); return; }
     if (!getSmartnoteApiKey()) {
@@ -757,20 +821,68 @@ const PersonaPage: React.FC<PersonaPageProps> = ({ sessionId, onOpenChat }) => {
                   <span style={s.sectN}>05</span>
                   <h2 style={s.sectTitle}>会的手艺</h2>
                   <span style={s.sectAfter}>
-                    Skills · {(agent.skill_packs?.length || 0)} 项
+                    Skills · {boundSkills.length} 项
                   </span>
+                  <span style={{ flex: 1 }} />
+                  <PaperButton variant="ghost" size="small" onClick={openSkillPicker}>+ 装</PaperButton>
                 </div>
-                {!agent.skill_packs || agent.skill_packs.length === 0 ? (
+                {boundSkills.length === 0 ? (
                   <div style={s.emptyInline}>
                     <div style={s.emptyInlineTitle}>还没装手艺</div>
                     <div style={s.emptyInlineHint}>
-                      技能包可以在别处装。装上之后它在这里会列出每一项。
+                      到「接口 · Skill」写一个，然后回这里点「+ 装」绑给它。
                     </div>
                   </div>
                 ) : (
                   <div style={s.skillChips}>
-                    {agent.skill_packs.map((sp: any, i: number) => (
-                      <PaperChip key={sp.id || i}>{sp.name || sp.id || `Skill ${i + 1}`}</PaperChip>
+                    {boundSkills.map((sk) => (
+                      <button
+                        key={sk.id}
+                        type="button"
+                        onClick={() => void toggleSkillBind(sk)}
+                        title="点 ✕ 解绑"
+                        style={s.removableChipBtn}
+                      >
+                        <PaperChip>
+                          {sk.name} <span style={s.removeX}>✕</span>
+                        </PaperChip>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section style={s.sect}>
+                <div style={s.sectHead}>
+                  <span style={s.sectN}>06</span>
+                  <h2 style={s.sectTitle}>挂的工具</h2>
+                  <span style={s.sectAfter}>
+                    MCP · {boundMcps.length} 个
+                  </span>
+                  <span style={{ flex: 1 }} />
+                  <PaperButton variant="ghost" size="small" onClick={openMcpPicker}>+ 挂</PaperButton>
+                </div>
+                {boundMcps.length === 0 ? (
+                  <div style={s.emptyInline}>
+                    <div style={s.emptyInlineTitle}>还没挂 MCP 工具</div>
+                    <div style={s.emptyInlineHint}>
+                      到「接口 · MCP」加一个服务器，然后回这里挂给它。
+                    </div>
+                  </div>
+                ) : (
+                  <div style={s.skillChips}>
+                    {boundMcps.map((mc) => (
+                      <button
+                        key={mc.id}
+                        type="button"
+                        onClick={() => void toggleMcpBind(mc)}
+                        title="点 ✕ 解绑"
+                        style={s.removableChipBtn}
+                      >
+                        <PaperChip tone={mc.healthy ? 'default' : 'warning' as any}>
+                          {mc.name} <span style={s.removeX}>✕</span>
+                        </PaperChip>
+                      </button>
                     ))}
                   </div>
                 )}
@@ -779,7 +891,7 @@ const PersonaPage: React.FC<PersonaPageProps> = ({ sessionId, onOpenChat }) => {
               {!agent.is_primary && (
                 <section style={s.sect}>
                   <div style={s.sectHead}>
-                    <span style={s.sectN}>06</span>
+                    <span style={s.sectN}>07</span>
                     <h2 style={s.sectTitle}>危险区</h2>
                     <span style={s.sectAfter}>Danger</span>
                   </div>
@@ -803,6 +915,41 @@ const PersonaPage: React.FC<PersonaPageProps> = ({ sessionId, onOpenChat }) => {
           </div>
         )}
       </PaperContent>
+      {pickerOpen === 'skill' && (
+        <BindPicker
+          title="装哪些手艺给它"
+          empty="还没写过 Skill。到「接口 · Skill」写一个再回来。"
+          items={allSkills.map((sk) => ({
+            id: sk.id,
+            primary: sk.name,
+            secondary: sk.description || '',
+            bound: boundSkills.some((b) => b.id === sk.id),
+          }))}
+          onToggle={(id) => {
+            const sk = allSkills.find((x) => x.id === id);
+            if (sk) void toggleSkillBind(sk);
+          }}
+          onClose={() => setPickerOpen(null)}
+        />
+      )}
+      {pickerOpen === 'mcp' && (
+        <BindPicker
+          title="挂哪些 MCP 工具"
+          empty="还没配 MCP 服务器。到「接口 · MCP」加一个再回来。"
+          items={allMcps.map((mc) => ({
+            id: mc.id,
+            primary: mc.name,
+            secondary: `${mc.type} · ${mc.url}`,
+            bound: boundMcps.some((b) => b.id === mc.id),
+            disabled: !mc.enabled,
+          }))}
+          onToggle={(id) => {
+            const mc = allMcps.find((x) => x.id === id);
+            if (mc) void toggleMcpBind(mc);
+          }}
+          onClose={() => setPickerOpen(null)}
+        />
+      )}
     </PaperPage>
   );
 };
@@ -838,6 +985,66 @@ const MEM_KIND_LABEL: Record<MemoryKind, string> = {
   procedure: '做法',
   episode: '往事',
   document_ref: '出处',
+};
+
+interface BindPickerItem {
+  id: string;
+  primary: string;
+  secondary?: string;
+  bound: boolean;
+  disabled?: boolean;
+}
+
+const BindPicker: React.FC<{
+  title: string;
+  empty: string;
+  items: BindPickerItem[];
+  onToggle: (id: string) => void;
+  onClose: () => void;
+}> = ({ title, empty, items, onToggle, onClose }) => {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div style={s.pickerOverlay} onClick={onClose}>
+      <div style={s.pickerModal} onClick={(e) => e.stopPropagation()}>
+        <div style={s.pickerHead}>
+          <div style={s.pickerTitle}>{title}</div>
+          <button type="button" onClick={onClose} style={s.pickerClose}>×</button>
+        </div>
+        {items.length === 0 ? (
+          <div style={s.pickerEmpty}>{empty}</div>
+        ) : (
+          <div style={s.pickerList}>
+            {items.map((it) => (
+              <button
+                key={it.id}
+                type="button"
+                disabled={it.disabled}
+                onClick={() => onToggle(it.id)}
+                style={{
+                  ...s.pickerRow,
+                  ...(it.bound ? s.pickerRowOn : null),
+                  ...(it.disabled ? s.pickerRowDisabled : null),
+                }}
+              >
+                <div style={s.pickerCheck}>{it.bound ? '✓' : '○'}</div>
+                <div style={s.pickerBody}>
+                  <div style={s.pickerName}>{it.primary}</div>
+                  {it.secondary && <div style={s.pickerSecondary}>{it.secondary}</div>}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+        <div style={s.pickerFoot}>
+          <PaperButton variant="ghost" size="small" onClick={onClose}>关</PaperButton>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 const firstSentence = (text: string): string => {
@@ -1162,6 +1369,94 @@ const s: Record<string, React.CSSProperties> = {
     flexWrap: 'wrap',
     gap: 8,
     marginTop: 16,
+  },
+  removableChipBtn: {
+    background: 'transparent',
+    border: 0,
+    padding: 0,
+    cursor: 'pointer',
+  },
+  removeX: {
+    marginLeft: 6,
+    fontSize: 10,
+    color: 'var(--pencil-soft)',
+  },
+  pickerOverlay: {
+    position: 'fixed', inset: 0,
+    background: 'color-mix(in oklch, var(--ink) 55%, transparent)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    zIndex: 60, padding: 32,
+    backdropFilter: 'blur(6px)',
+    WebkitBackdropFilter: 'blur(6px)',
+  },
+  pickerModal: {
+    background: 'var(--page-elev)',
+    border: '1px solid var(--rule-strong)',
+    borderRadius: 3,
+    boxShadow: '0 20px 60px oklch(0.18 0.02 310 / 0.40)',
+    width: '100%', maxWidth: 520, maxHeight: '78vh',
+    display: 'flex', flexDirection: 'column',
+  },
+  pickerHead: {
+    display: 'flex', alignItems: 'center',
+    padding: '14px 18px',
+    borderBottom: '1px solid var(--rule)',
+  },
+  pickerTitle: {
+    flex: 1,
+    fontFamily: "'Young Serif', serif",
+    fontSize: 16, color: 'var(--ink-strong)',
+  },
+  pickerClose: {
+    background: 'transparent', border: 0,
+    color: 'var(--pencil)', fontSize: 22, lineHeight: 1,
+    cursor: 'pointer', padding: 0,
+  },
+  pickerEmpty: {
+    padding: '40px 24px', textAlign: 'center',
+    color: 'var(--pencil)',
+    fontFamily: "'Young Serif', serif", fontStyle: 'italic',
+  },
+  pickerList: {
+    overflowY: 'auto', flex: 1,
+    padding: '6px 0',
+  },
+  pickerRow: {
+    display: 'flex', alignItems: 'flex-start', gap: 12,
+    width: '100%',
+    padding: '12px 18px',
+    background: 'transparent', border: 0, borderBottom: '1px dotted var(--rule)',
+    textAlign: 'left', cursor: 'pointer',
+    color: 'inherit',
+  },
+  pickerRowOn: {
+    background: 'color-mix(in oklch, var(--accent-ink) 6%, transparent)',
+  },
+  pickerRowDisabled: {
+    opacity: 0.45, cursor: 'not-allowed',
+  },
+  pickerCheck: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 14,
+    color: 'var(--accent-ink)',
+    width: 16,
+    flexShrink: 0,
+    marginTop: 2,
+  },
+  pickerBody: { flex: 1, minWidth: 0 },
+  pickerName: {
+    fontFamily: "'Young Serif', serif",
+    fontSize: 14, color: 'var(--ink-strong)',
+  },
+  pickerSecondary: {
+    marginTop: 2, fontSize: 11.5, color: 'var(--pencil)',
+    fontFamily: "'JetBrains Mono', monospace",
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  pickerFoot: {
+    display: 'flex', justifyContent: 'flex-end',
+    padding: '10px 14px',
+    borderTop: '1px solid var(--rule)',
   },
   foot: {
     marginTop: 24,

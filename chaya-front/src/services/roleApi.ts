@@ -1,12 +1,8 @@
 import type { Session } from './chat';
 import { getBackendUrl } from '../utils/backendUrl';
+import { api } from '../utils/apiClient';
 
-const authFetch: typeof fetch = (input, init) => {
-  const token = localStorage.getItem('chaya_token');
-  const headers: Record<string, string> = { ...(init?.headers as Record<string, string> || {}) };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  return fetch(input, { ...init, headers });
-};
+const authFetch: typeof fetch = (input, init) => api.fetchRaw(input, init);
 
 const API_BASE = `${getBackendUrl()}/api`;
 

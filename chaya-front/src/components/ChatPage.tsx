@@ -37,7 +37,7 @@ interface ChatPageProps {
   ragScope?: 'auto' | 'agent' | 'workspace';
 }
 
-type StreamingDraft = { id: string; content: string; startedAt: number };
+type StreamingDraft = { id: string; content: string; reasoning?: string; startedAt: number };
 
 /** A backend progress event (execution_log) as shown in the chat stream.
  *  log_type is the backend-provided category (step / tool_call / error / …);
@@ -127,6 +127,8 @@ const ChatPage: React.FC<ChatPageProps> = ({
    *  Keyed by message_id so we can keep them bound to their turn when the
    *  user sends another message on top. Best-effort — empty list is fine. */
   const [followups, setFollowups] = useState<Record<string, string[]>>({});
+  /** Per-assistant-message reasoning (extended-thinking). Folded by default. */
+  const [reasoningByMsg, setReasoningByMsg] = useState<Record<string, string>>({});
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const reconnectTimer = useRef<number | null>(null);
@@ -157,6 +159,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
     setLiveProgress([]);
     setProgressByMsg({});
     setFollowups({});
+    setReasoningByMsg({});
 
     void (async () => {
       try {
@@ -184,9 +187,13 @@ const ChatPage: React.FC<ChatPageProps> = ({
         // older rows use `agent_log` and newer ones `executionLogs` — both
         // point at the same shape.
         const hydrated: Record<string, ProgressEntry[]> = {};
+        const hydratedThink: Record<string, string> = {};
         for (const m of list.messages) {
           if (m.role !== 'assistant' || !m.ext) continue;
-          const raw = (m.ext as { executionLogs?: unknown[]; agent_log?: unknown[] });
+          const raw = (m.ext as { executionLogs?: unknown[]; agent_log?: unknown[]; reasoning?: string });
+          if (typeof raw.reasoning === 'string' && raw.reasoning) {
+            hydratedThink[m.message_id] = raw.reasoning;
+          }
           const src = (raw.executionLogs || raw.agent_log) as Array<Record<string, unknown>> | undefined;
           if (!src || src.length === 0) continue;
           hydrated[m.message_id] = src.map((e, i) => ({
@@ -198,6 +205,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
           })).filter((e) => e.message.trim() !== '');
         }
         setProgressByMsg(hydrated);
+        setReasoningByMsg(hydratedThink);
         setForceScroll((n) => n + 1);
       } catch {
         if (!cancelled) setMessages([]);
@@ -253,7 +261,9 @@ const ChatPage: React.FC<ChatPageProps> = ({
         return;
       }
       const wsBase = getBackendUrl().replace(/^http/, 'ws');
-      const ws = new WebSocket(`${wsBase}/ws?token=${encodeURIComponent(token)}`);
+      // Ship the JWT via Sec-WebSocket-Protocol instead of ?token= so it
+      // doesn't end up in proxy/access logs. Backend echoes "bearer" back.
+      const ws = new WebSocket(`${wsBase}/ws`, ['bearer', token]);
       wsRef.current = ws;
       setWsState('connecting');
 
@@ -322,6 +332,24 @@ const ChatPage: React.FC<ChatPageProps> = ({
         return;
       }
 
+      if (type === 'agent_reasoning_chunk') {
+        // Reasoning streams independently of content. Append to the live
+        // stream draft so the UI can show a folded "thinking" block above
+        // the answer; on stream_done we'll flush it to reasoningByMsg.
+        const id = p.message_id || p.agent_id || 'stream';
+        const delta = typeof p.chunk === 'string' ? p.chunk : '';
+        const fullThink = typeof p.content === 'string' ? p.content : '';
+        setStream((prev) => {
+          if (!prev || prev.id !== id) {
+            return { id, content: '', reasoning: delta || fullThink, startedAt: Date.now() };
+          }
+          if (delta) return { ...prev, reasoning: (prev.reasoning || '') + delta };
+          if (fullThink) return { ...prev, reasoning: fullThink };
+          return prev;
+        });
+        return;
+      }
+
       if (type === 'agent_followups') {
         const msgId = p.message_id;
         const list: string[] = Array.isArray(p.suggestions) ? p.suggestions : [];
@@ -335,6 +363,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
         setThinking(false);
         const finalContent = p.content ?? stream?.content ?? '';
         const msgId = p.message_id || `asst-${Date.now()}`;
+        const finalReasoning = (typeof p.reasoning === 'string' && p.reasoning) || stream?.reasoning || '';
         setMessages((prev) => {
           // Avoid duplicating if new_message already arrived
           if (prev.some((m) => m.message_id === msgId)) return prev;
@@ -347,6 +376,9 @@ const ChatPage: React.FC<ChatPageProps> = ({
           };
           return [...prev, next];
         });
+        if (finalReasoning) {
+          setReasoningByMsg((m) => ({ ...m, [msgId]: finalReasoning }));
+        }
         // Snapshot the progress for this turn so it stays visible in history.
         setLiveProgress((live) => {
           if (live.length > 0) {
@@ -961,6 +993,9 @@ const ChatPage: React.FC<ChatPageProps> = ({
           <>
             {messages.map((m) => (
               <React.Fragment key={m.message_id}>
+                {m.role === 'assistant' && reasoningByMsg[m.message_id] && (
+                  <ReasoningBlock text={reasoningByMsg[m.message_id]} />
+                )}
                 <MessageView
                   msg={m}
                   agentName={agentName}
@@ -990,6 +1025,7 @@ const ChatPage: React.FC<ChatPageProps> = ({
               <ProgressStrip entries={liveProgress} />
             )}
             {thinking && !stream && <ThinkingRow agentName={agentName} />}
+            {stream?.reasoning && <ReasoningBlock text={stream.reasoning} live />}
             {stream && <StreamingRow content={stream.content} agentName={agentName} />}
           </>
         )}
@@ -1079,6 +1115,9 @@ const ChatPage: React.FC<ChatPageProps> = ({
    Subcomponents
    ============================================================ */
 
+// Memoized: composer typing rerenders ChatPage on every keystroke. Without
+// memo, every existing message re-renders (markdown parse, attachments, …)
+// per character. Callbacks above are useCallback'd so refs stay stable.
 const MessageView: React.FC<{
   msg: Message;
   agentName: string;
@@ -1086,7 +1125,7 @@ const MessageView: React.FC<{
   onSaveToKnowledge?: (msg: Message, kind?: MemoryKind) => Promise<void> | void;
   onRewind?: (msg: Message) => Promise<void> | void;
   rewinding?: boolean;
-}> = ({ msg, agentName, savedMemId, onSaveToKnowledge, onRewind, rewinding }) => {
+}> = React.memo(({ msg, agentName, savedMemId, onSaveToKnowledge, onRewind, rewinding }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [kOpen, setKOpen] = useState(false);
   const isMe = msg.role === 'user';
@@ -1199,7 +1238,7 @@ const MessageView: React.FC<{
       )}
     </div>
   );
-};
+});
 
 const MediaThumb: React.FC<{ item: { type: string; mimeType: string; data: string; outputId?: string } }> = ({ item }) => {
   const src = item.data?.startsWith('data:')
@@ -1341,6 +1380,33 @@ const ThinkingRow: React.FC<{ agentName: string }> = ({ agentName }) => (
     </div>
   </div>
 );
+
+// Folded thinking block. Auto-expands while reasoning is streaming live so
+// the user sees motion; collapses by default after stream_done. Click to
+// toggle. Renders the reasoning as plain pre-wrapped text.
+const ReasoningBlock: React.FC<{ text: string; live?: boolean }> = ({ text, live }) => {
+  const [open, setOpen] = useState<boolean>(!!live);
+  // Re-open if a new live stream starts after a previous fold.
+  useEffect(() => { if (live) setOpen(true); }, [live]);
+  if (!text) return null;
+  return (
+    <div style={s.thinkWrap}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={s.thinkToggle}
+        aria-expanded={open}
+      >
+        <span style={s.thinkChevron}>{open ? '▾' : '▸'}</span>
+        <span>{live ? '正在思考…' : '思考过程'}</span>
+        {!open && <span style={s.thinkPreview}>（{Math.min(text.length, 999)} 字）</span>}
+      </button>
+      {open && (
+        <pre style={s.thinkBody}>{text}</pre>
+      )}
+    </div>
+  );
+};
 
 const StreamingRow: React.FC<{ content: string; agentName: string }> = ({ content, agentName }) => (
   <div style={s.msg}>
@@ -2130,6 +2196,57 @@ const s: Record<string, React.CSSProperties> = {
     color: 'var(--accent-ink)',
     animation: 'blink 1.1s steps(1) infinite',
     marginLeft: 2,
+  },
+
+  /* Reasoning / extended thinking — rendered as a folded gray block above
+     the assistant's actual reply. Stays visually subordinate to content. */
+  thinkWrap: {
+    margin: '4px 0 6px',
+    background: 'color-mix(in oklch, var(--page-elev) 92%, var(--rule))',
+    border: '1px dashed var(--rule-strong)',
+    borderRadius: 3,
+    padding: '6px 10px',
+    fontFamily: "'Young Serif', serif",
+    color: 'var(--pencil)',
+  },
+  thinkToggle: {
+    background: 'transparent',
+    border: 0,
+    padding: 0,
+    cursor: 'pointer',
+    color: 'var(--pencil)',
+    fontSize: 12,
+    fontFamily: 'inherit',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    width: '100%',
+    textAlign: 'left',
+  },
+  thinkChevron: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    width: 10,
+    color: 'var(--pencil-soft)',
+  },
+  thinkPreview: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10.5,
+    color: 'var(--pencil-soft)',
+    marginLeft: 'auto',
+  },
+  thinkBody: {
+    margin: '6px 0 0',
+    padding: '6px 4px 0',
+    borderTop: '1px dotted var(--rule)',
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12,
+    lineHeight: 1.55,
+    color: 'var(--pencil)',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    maxHeight: 320,
+    overflowY: 'auto',
   },
 
   /* Composer */

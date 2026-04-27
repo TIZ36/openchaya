@@ -4,20 +4,17 @@
  */
 
 import { getBackendUrl } from '../utils/backendUrl';
+import { api } from '../utils/apiClient';
 
 const BASE = () => `${getBackendUrl()}/api/media`;
-const TOKEN_KEY = 'chaya_token';
 
 async function req<T>(endpoint: string, options?: RequestInit): Promise<T> {
-  const url = `${BASE()}${endpoint}`;
-  const token = typeof window !== 'undefined' ? localStorage.getItem(TOKEN_KEY) : null;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: 'application/json',
     ...(options?.headers as Record<string, string> | undefined),
   };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(url, { ...options, headers });
+  const res = await api.fetchRaw(`${BASE()}${endpoint}`, { ...options, headers });
   const body = await res.json().catch(() => ({}));
   if (body && typeof body === 'object' && 'code' in body) {
     const c = body as { code: number; data?: T; error?: string };
@@ -184,13 +181,9 @@ export const mediaApi = {
    * 返回 Blob URL 供 <video> 标签使用。
    */
   geminiVideoDownload: async (videoUri: string, configId?: string): Promise<string> => {
-    const url = `${BASE()}/gemini/video/download`;
-    const token = typeof window !== 'undefined' ? localStorage.getItem(TOKEN_KEY) : null;
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    const res = await fetch(url, {
+    const res = await api.fetchRaw(`${BASE()}/gemini/video/download`, {
       method: 'POST',
-      headers,
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ video_uri: videoUri, config_id: configId }),
     });
     if (!res.ok) {

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { mediaApi, type MediaOutputItem } from '../services/mediaApi';
 import { toast } from './ui/use-toast';
 import { PaperPage, PaperTopbar, PaperContent, PaperButton } from './paper';
+import { loadBlurredSet, saveBlurredSet, BLURRED_IMG_CSS } from '../utils/blurred';
 
 /* ============================================================
    作品集 / Portfolio — aligned with mockups/a-gallery.html
@@ -17,6 +18,15 @@ const GalleryPage: React.FC = () => {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<MediaFilter>('all');
   const [preview, setPreview] = useState<MediaOutputItem | null>(null);
+  const [blurredIds, setBlurredIds] = useState<Set<string>>(() => loadBlurredSet());
+  const toggleBlur = useCallback((outputId: string) => {
+    setBlurredIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(outputId)) next.delete(outputId); else next.add(outputId);
+      saveBlurredSet(next);
+      return next;
+    });
+  }, []);
   const navigate = useNavigate();
 
   const load = useCallback(async () => {
@@ -168,10 +178,10 @@ const GalleryPage: React.FC = () => {
           <Empty hasAny={items.length > 0} onCreate={() => navigate('/create')} />
         ) : (
           <>
-            {grouped.today.length > 0 && <Shelf label="今天" count={grouped.today.length}>{grouped.today.map((it) => <Piece key={it.output_id} item={it} onClick={() => setPreview(it)} />)}</Shelf>}
-            {grouped.yesterday.length > 0 && <Shelf label="昨天" count={grouped.yesterday.length}>{grouped.yesterday.map((it) => <Piece key={it.output_id} item={it} onClick={() => setPreview(it)} />)}</Shelf>}
-            {grouped.week.length > 0 && <Shelf label="这周早些时候" count={grouped.week.length}>{grouped.week.map((it) => <Piece key={it.output_id} item={it} onClick={() => setPreview(it)} />)}</Shelf>}
-            {grouped.earlier.length > 0 && <Shelf label="早些时候" count={grouped.earlier.length}>{grouped.earlier.map((it) => <Piece key={it.output_id} item={it} onClick={() => setPreview(it)} />)}</Shelf>}
+            {grouped.today.length > 0 && <Shelf label="今天" count={grouped.today.length}>{grouped.today.map((it) => <Piece key={it.output_id} item={it} blurred={blurredIds.has(it.output_id)} onToggleBlur={() => toggleBlur(it.output_id)} onClick={() => setPreview(it)} />)}</Shelf>}
+            {grouped.yesterday.length > 0 && <Shelf label="昨天" count={grouped.yesterday.length}>{grouped.yesterday.map((it) => <Piece key={it.output_id} item={it} blurred={blurredIds.has(it.output_id)} onToggleBlur={() => toggleBlur(it.output_id)} onClick={() => setPreview(it)} />)}</Shelf>}
+            {grouped.week.length > 0 && <Shelf label="这周早些时候" count={grouped.week.length}>{grouped.week.map((it) => <Piece key={it.output_id} item={it} blurred={blurredIds.has(it.output_id)} onToggleBlur={() => toggleBlur(it.output_id)} onClick={() => setPreview(it)} />)}</Shelf>}
+            {grouped.earlier.length > 0 && <Shelf label="早些时候" count={grouped.earlier.length}>{grouped.earlier.map((it) => <Piece key={it.output_id} item={it} blurred={blurredIds.has(it.output_id)} onToggleBlur={() => toggleBlur(it.output_id)} onClick={() => setPreview(it)} />)}</Shelf>}
           </>
         )}
       </PaperContent>
@@ -179,6 +189,8 @@ const GalleryPage: React.FC = () => {
       {preview && (
         <PreviewModal
           item={preview}
+          blurred={blurredIds.has(preview.output_id)}
+          onToggleBlur={() => toggleBlur(preview.output_id)}
           onClose={() => setPreview(null)}
           onDelete={() => handleDelete(preview)}
           onRemix={() => {
@@ -213,46 +225,76 @@ const Shelf: React.FC<{ label: string; count: number; children: React.ReactNode 
   </div>
 );
 
-const Piece: React.FC<{ item: MediaOutputItem; onClick: () => void }> = ({ item, onClick }) => {
+const Piece: React.FC<{
+  item: MediaOutputItem;
+  onClick: () => void;
+  blurred: boolean;
+  onToggleBlur: () => void;
+}> = ({ item, onClick, blurred, onToggleBlur }) => {
   const url = mediaApi.getOutputFileUrl(item.output_id);
   const [broken, setBroken] = useState(false);
   const aspect = aspectOf(item);
   const isFave = (item.metadata as any)?.favorite;
   const title = (item.prompt || '').split(/[.。\n]/)[0].slice(0, 40) || '无名';
   return (
-    <button type="button" style={s.piece} onClick={onClick}>
-      {item.media_type === 'video' && (
-        <span style={{ ...s.badge, ...s.badgeVideo }}>VIDEO</span>
-      )}
-      {isFave && (
-        <span style={{ ...s.badge, ...s.badgeFave }}>♡</span>
-      )}
-      <div style={{ ...s.pieceImg, aspectRatio: aspect }}>
-        {!broken ? (
-          <img
-            src={url}
-            alt={item.prompt || 'output'}
-            onError={() => setBroken(true)}
-            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-          />
-        ) : (
-          <span style={s.pieceBroken}>—</span>
+    <div style={{ ...s.piece, cursor: blurred ? 'default' : 'pointer' }}>
+      <button
+        type="button"
+        style={s.pieceClick}
+        onClick={() => { if (!blurred) onClick(); }}
+        disabled={blurred}
+        aria-label={blurred ? '已遮起来' : '打开'}
+      >
+        {item.media_type === 'video' && (
+          <span style={{ ...s.badge, ...s.badgeVideo }}>VIDEO</span>
         )}
-      </div>
-      <div style={s.pieceCaption}>
-        <span style={s.pieceTitle}>{title}</span>
-        <span style={s.pieceDate}>{relDate(item.created_at)}</span>
-      </div>
-    </button>
+        {isFave && (
+          <span style={{ ...s.badge, ...s.badgeFave }}>♡</span>
+        )}
+        <div style={{ ...s.pieceImg, aspectRatio: aspect }}>
+          {!broken ? (
+            <img
+              src={url}
+              alt={item.prompt || 'output'}
+              onError={() => setBroken(true)}
+              style={{
+                width: '100%', height: '100%', objectFit: 'cover', display: 'block',
+                ...(blurred
+                  ? BLURRED_IMG_CSS
+                  : { filter: 'none', transform: 'none', transition: 'filter 200ms ease, transform 200ms ease' }),
+              }}
+            />
+          ) : (
+            <span style={s.pieceBroken}>—</span>
+          )}
+          {blurred && !broken && <span style={s.pieceBlurBadge}>遮</span>}
+        </div>
+        <div style={s.pieceCaption}>
+          <span style={s.pieceTitle}>{blurred ? '已遮起来' : title}</span>
+          <span style={s.pieceDate}>{relDate(item.created_at)}</span>
+        </div>
+      </button>
+      <button
+        type="button"
+        aria-label={blurred ? '揭开' : '遮起来'}
+        title={blurred ? '揭开' : '遮起来'}
+        style={s.pieceBlurBtn}
+        onClick={(e) => { e.stopPropagation(); onToggleBlur(); }}
+      >
+        {blurred ? '○' : '●'}
+      </button>
+    </div>
   );
 };
 
 const PreviewModal: React.FC<{
   item: MediaOutputItem;
+  blurred: boolean;
+  onToggleBlur: () => void;
   onClose: () => void;
   onDelete: () => void;
   onRemix: () => void;
-}> = ({ item, onClose, onDelete, onRemix }) => {
+}> = ({ item, blurred, onToggleBlur, onClose, onDelete, onRemix }) => {
   const url = mediaApi.getOutputFileUrl(item.output_id);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -263,7 +305,16 @@ const PreviewModal: React.FC<{
     <div style={s.modalOverlay} onClick={onClose}>
       <div style={s.modal} onClick={(e) => e.stopPropagation()}>
         <div style={s.modalImgWrap}>
-          <img src={url} alt={item.prompt || 'output'} style={s.modalImg} />
+          <img
+            src={url}
+            alt={item.prompt || 'output'}
+            style={{
+              ...s.modalImg,
+              ...(blurred
+                ? BLURRED_IMG_CSS
+                : { filter: 'none', transform: 'none', transition: 'filter 200ms ease, transform 200ms ease' }),
+            }}
+          />
         </div>
         <div style={s.modalInfo}>
           <div style={s.modalHead}>
@@ -278,6 +329,7 @@ const PreviewModal: React.FC<{
             <MetaRow k="Size" v={item.file_size ? `${Math.round((item.file_size || 0) / 1024)} KB` : '—'} />
           </dl>
           <div style={{ ...s.modalFoot, flexWrap: 'wrap', gap: 8 }}>
+            <PaperButton variant="ghost" size="small" onClick={onToggleBlur}>{blurred ? '揭开' : '遮起来'}</PaperButton>
             <PaperButton variant="ghost" size="small" onClick={() => window.open(url, '_blank')}>原图</PaperButton>
             <PaperButton size="small" onClick={onRemix} title="把这张当参考，去创作页改">二创 →</PaperButton>
             <span style={{ flex: 1 }} />
@@ -455,14 +507,53 @@ const s: Record<string, React.CSSProperties> = {
     border: '1px solid var(--rule-strong)',
     borderRadius: 2,
     overflow: 'hidden',
-    cursor: 'pointer',
     transition: 'transform 200ms cubic-bezier(0.22,1,0.36,1), box-shadow 200ms',
     boxShadow: '0 1px 2px oklch(0.18 0.02 310 / 0.04)',
     position: 'relative',
     display: 'block',
     width: '100%',
+  },
+  pieceClick: {
+    display: 'block',
+    width: '100%',
+    background: 'transparent',
+    border: 0,
     padding: 0,
     textAlign: 'left',
+    cursor: 'inherit',
+    color: 'inherit',
+    font: 'inherit',
+  },
+  pieceBlurBadge: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    fontFamily: "'Young Serif', serif",
+    fontSize: 11,
+    color: 'var(--paper)',
+    background: 'color-mix(in oklch, var(--ink) 70%, transparent)',
+    padding: '2px 8px',
+    borderRadius: 1,
+    letterSpacing: '0.08em',
+    zIndex: 2,
+  },
+  pieceBlurBtn: {
+    position: 'absolute',
+    bottom: 6,
+    right: 6,
+    width: 22,
+    height: 22,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'color-mix(in oklch, var(--page-elev) 85%, transparent)',
+    border: '1px solid var(--rule-strong)',
+    borderRadius: 999,
+    color: 'var(--pencil)',
+    fontSize: 10,
+    cursor: 'pointer',
+    padding: 0,
+    zIndex: 3,
   },
   badge: {
     position: 'absolute',

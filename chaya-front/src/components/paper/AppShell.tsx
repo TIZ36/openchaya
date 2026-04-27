@@ -16,6 +16,7 @@ export type Chapter =
   | 'knowledge'
   | 'create'
   | 'gallery'
+  | 'integrations'
   | 'settings';
 
 export interface PaperAppShellProps {
@@ -34,14 +35,17 @@ export interface PaperAppShellProps {
   children: React.ReactNode;
 }
 
+// 'persona' is intentionally absent from this list — the page still exists
+// and is reachable by clicking an agent in 「我养的」 (which navigates to
+// /persona). Removing it from the nav avoids a redundant top-level entry.
 const CHAPTERS: { id: Chapter; n: string; name: string; subFn?: (ctx: ShellCtx) => string }[] = [
   { id: 'chat',       n: '00', name: '对话',    subFn: (c) => (c.topics.length > 0 ? `${c.topics.length}` : '—') },
   { id: 'agents',     n: '01', name: '我养的',  subFn: (c) => `${c.agents.length}` },
-  { id: 'persona',    n: '02', name: '人设',    subFn: () => '—' },
-  { id: 'models',     n: '03', name: '模型',    subFn: () => '—' },
-  { id: 'knowledge',  n: '04', name: '知识',    subFn: () => '—' },
-  { id: 'create',     n: '05', name: '创作',    subFn: () => '画' },
-  { id: 'gallery',    n: '06', name: '作品集',  subFn: () => '—' },
+  { id: 'models',     n: '02', name: '模型',    subFn: () => '—' },
+  { id: 'knowledge',  n: '03', name: '知识',    subFn: () => '—' },
+  { id: 'create',     n: '04', name: '创作',    subFn: () => '画' },
+  { id: 'gallery',    n: '05', name: '作品集',  subFn: () => '—' },
+  { id: 'integrations', n: '06', name: '接口', subFn: () => '插件' },
   { id: 'settings',   n: '07', name: '设置',    subFn: () => '—' },
 ];
 

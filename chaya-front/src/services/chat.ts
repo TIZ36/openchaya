@@ -124,21 +124,19 @@ export interface Summary {
 
 import { getBackendUrl } from '../utils/backendUrl';
 import { ensureDataUrlFromMaybeBase64 } from '../utils/dataUrl';
+import { api } from '../utils/apiClient';
 
 const API_BASE = `${getBackendUrl()}/api`;
 
-// Wrap fetch with JWT auth + {code, data} unwrapping
-const _origFetch = globalThis.fetch;
-async function authFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const token = localStorage.getItem('chaya_token');
-  const headers: Record<string, string> = {
-    ...(init?.headers as Record<string, string> || {}),
-  };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  if (!headers['Content-Type'] && init?.method && init.method !== 'GET') {
-    headers['Content-Type'] = 'application/json';
+// Delegates to the central apiClient so JWT injection and 401 → auto-logout
+// happen in one place. Adds Content-Type for non-GET so existing call sites
+// that build raw bodies don't need to change.
+function authFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers || {});
+  if (init?.method && init.method !== 'GET' && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
   }
-  return _origFetch(input, { ...init, headers });
+  return api.fetchRaw(input, { ...init, headers });
 }
 
 // Unwrap {code, data} response
