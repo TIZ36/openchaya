@@ -233,7 +233,11 @@ const Piece: React.FC<{
 }> = ({ item, onClick, blurred, onToggleBlur }) => {
   const url = mediaApi.getOutputFileUrl(item.output_id);
   const [broken, setBroken] = useState(false);
-  const aspect = aspectOf(item);
+  // Only set aspect-ratio when we actually know the image dimensions —
+  // otherwise the previous "random pretty fraction" fallback combined with
+  // object-fit: cover cropped real content (the user's complaint). Unknown
+  // size → let the image's natural aspect dictate height (true masonry).
+  const knownAspect = aspectOf(item);
   const isFave = (item.metadata as any)?.favorite;
   const title = (item.prompt || '').split(/[.。\n]/)[0].slice(0, 40) || '无名';
   return (
@@ -251,14 +255,21 @@ const Piece: React.FC<{
         {isFave && (
           <span style={{ ...s.badge, ...s.badgeFave }}>♡</span>
         )}
-        <div style={{ ...s.pieceImg, aspectRatio: aspect }}>
+        <div style={{ ...s.pieceImg, ...(knownAspect ? { aspectRatio: knownAspect } : null) }}>
           {!broken ? (
             <img
               src={url}
               alt={item.prompt || 'output'}
               onError={() => setBroken(true)}
+              loading="lazy"
               style={{
-                width: '100%', height: '100%', objectFit: 'cover', display: 'block',
+                width: '100%', display: 'block',
+                // contain — never crop; let the actual image be visible
+                // in full. With the surrounding column-width masonry the
+                // tiles size themselves to the image's natural aspect.
+                height: knownAspect ? '100%' : 'auto',
+                objectFit: knownAspect ? 'contain' : undefined,
+                background: 'color-mix(in oklch, var(--rule) 60%, var(--page-elev))',
                 ...(blurred
                   ? BLURRED_IMG_CSS
                   : { filter: 'none', transform: 'none', transition: 'filter 200ms ease, transform 200ms ease' }),
@@ -371,14 +382,14 @@ const Empty: React.FC<{ hasAny: boolean; onCreate: () => void }> = ({ hasAny, on
 
 /* ---------- utils ---------- */
 
+// Returns an aspect-ratio string only when we genuinely know the dimensions.
+// Empty string ⇒ caller doesn't pin aspect-ratio and the image renders at
+// its natural size (height: auto), so the user always sees the full picture.
 const aspectOf = (item: MediaOutputItem): string => {
   const m = item.metadata as any;
   if (m?.aspect_ratio) return String(m.aspect_ratio).replace(':', ' / ');
   if (m?.width && m?.height) return `${m.width} / ${m.height}`;
-  // Stagger for handmade mosaic feel
-  const hash = item.output_id.charCodeAt(0) + item.output_id.charCodeAt(item.output_id.length - 1);
-  const variants = ['1 / 1', '2 / 3', '3 / 2', '3 / 5', '16 / 9'];
-  return variants[hash % variants.length];
+  return '';
 };
 
 const relDate = (iso?: string): string => {
@@ -497,12 +508,16 @@ const s: Record<string, React.CSSProperties> = {
   },
   shelfLine: { flex: 1 },
   mosaic: {
-    columnCount: 4,
-    columnGap: 14,
+    // Switch from a fixed 4 columns to a target column-width — denser and
+    // responsive. ~190px gives ~6 columns on a 1280-wide canvas, ~8 on
+    // a 1600-wide one. User sees more variety per screen instead of 4
+    // big tiles.
+    columnWidth: 190,
+    columnGap: 12,
   },
   piece: {
     breakInside: 'avoid',
-    marginBottom: 14,
+    marginBottom: 12,
     background: 'var(--page-elev)',
     border: '1px solid var(--rule-strong)',
     borderRadius: 2,
@@ -590,14 +605,15 @@ const s: Record<string, React.CSSProperties> = {
     color: 'var(--pencil-soft)',
   },
   pieceCaption: {
-    padding: '8px 12px',
+    padding: '6px 9px 7px',
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'baseline',
+    gap: 6,
   },
   pieceTitle: {
     fontFamily: "'Young Serif', serif",
-    fontSize: 13,
+    fontSize: 12,
     color: 'var(--ink)',
     lineHeight: 1.3,
     overflow: 'hidden',
@@ -608,11 +624,10 @@ const s: Record<string, React.CSSProperties> = {
   },
   pieceDate: {
     fontFamily: "'JetBrains Mono', monospace",
-    fontSize: 10,
+    fontSize: 9.5,
     color: 'var(--pencil-soft)',
     letterSpacing: '0.06em',
     whiteSpace: 'nowrap',
-    marginLeft: 8,
   },
   empty: {
     padding: '64px 32px',
