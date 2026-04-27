@@ -674,7 +674,11 @@ const s: Record<string, React.CSSProperties> = {
     gap: 0,
     width: '100%',
     maxWidth: 1100,
-    maxHeight: '85vh',
+    // Modal height = 90vh. Image and info both fit within it. Previously
+    // the image had maxHeight: 75vh (viewport-relative), which on tall
+    // portrait images overflowed the modal row and got clipped by the
+    // modal's overflow:hidden — user only saw half the picture.
+    height: '90vh',
     overflow: 'hidden',
   },
   modalImgWrap: {
@@ -682,13 +686,19 @@ const s: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 32,
-    minHeight: 400,
+    padding: 24,
+    // Fill the grid row so the centered img can use the full available
+    // height, regardless of how short the info column is.
+    minHeight: 0,
+    height: '100%',
+    overflow: 'hidden',
   },
   modalImg: {
     maxWidth: '100%',
-    maxHeight: '75vh',
+    // Container-relative so the image can never exceed its column.
+    maxHeight: '100%',
     objectFit: 'contain',
+    display: 'block',
   },
   modalInfo: {
     padding: '28px 28px 22px',
