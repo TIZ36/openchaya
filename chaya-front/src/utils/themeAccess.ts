@@ -6,6 +6,15 @@ export interface TenantInfo {
   plan?: string;
 }
 
+export interface PlanLimits {
+  agents: number;    // -1 = unlimited
+  dark_mode: boolean;
+}
+
+export interface PlanUsage {
+  agents: number;
+}
+
 export interface CurrentUser {
   id?: string;
   name?: string;
@@ -14,6 +23,8 @@ export interface CurrentUser {
   tenant?: TenantInfo;
   primary_agent_id?: string;
   is_founder?: boolean;
+  limits?: PlanLimits;
+  usage?: PlanUsage;
 }
 
 export function normalizeTenantPlan(plan?: string | null): TenantPlan {

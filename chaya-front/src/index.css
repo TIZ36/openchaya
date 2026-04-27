@@ -57,6 +57,36 @@
   --safe-area-inset-left:   env(safe-area-inset-left, 0px);
 }
 
+/* ========================================
+   Dark mode — Pro+ feature
+   Activated by [data-theme="dark"] on <html>.
+   Applied via setTheme() in utils/theme.ts.
+   ======================================== */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Inverted aubergine — keeps the plum tint, just on a near-black page */
+  --paper:         oklch(0.18  0.018 310);   /* deep aubergine page */
+  --page:          oklch(0.21  0.018 310);   /* lifted surface */
+  --page-elev:     oklch(0.24  0.018 310);   /* card / modal */
+  --ink:           oklch(0.92  0.010 310);   /* warm off-white text */
+  --ink-strong:    oklch(0.97  0.012 310);   /* headlines */
+  --pencil:        oklch(0.70  0.012 310);   /* secondary text */
+  --pencil-soft:   oklch(0.55  0.010 310);   /* tertiary / placeholder */
+  --rule:          oklch(0.32  0.012 310);   /* 1px division */
+  --rule-strong:   oklch(0.40  0.014 310);   /* emphasized borders */
+  --accent-ink:    oklch(0.78  0.150 310);   /* fountain-pen aubergine, lifted */
+  --accent-ink-h:  oklch(0.85  0.155 310);
+  --accent-soft:   oklch(0.30  0.060 310);
+  --marginalia:    oklch(0.44  0.080 75);    /* ochre, dimmer */
+  --marginalia-ink: oklch(0.78 0.130 75);
+
+  --status-success:  oklch(0.72 0.140 155);
+  --status-warning:  oklch(0.78 0.150 70);
+  --status-error:    oklch(0.72 0.180 25);
+  --status-error-bg: oklch(0.30 0.060 25);
+}
+
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;

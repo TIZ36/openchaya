@@ -51,14 +51,25 @@ func (a *AdminAPI) requireFounder(w http.ResponseWriter, r *http.Request) (*pgst
 
 func buildMeResponse(db *gorm.DB, user pgstore.User, tenant pgstore.Tenant) M {
 	userPayload := buildAuthUser(db, user, tenant)
+	plan := effectiveTenantPlanForUser(user, tenant)
+	limits := LimitsForPlan(plan)
+	// Founders always see ultra-tier limits regardless of stored plan, so
+	// internal use never bumps into upsell modals.
+	if isFounderEmail(user.Email) {
+		limits = LimitsForPlan("ultra")
+	}
 	return M{
 		"user": userPayload,
 		"tenant": authTenant{
 			ID:   tenant.ID,
 			Name: tenant.Name,
-			Plan: effectiveTenantPlanForUser(user, tenant),
+			Plan: plan,
 		},
 		"is_founder": isFounderEmail(user.Email),
+		"limits":     limits,
+		"usage": M{
+			"agents": agentCountForUser(db, user.ID),
+		},
 	}
 }
 

@@ -176,13 +176,14 @@ const App: React.FC = () => {
 
   // ── Agent create ──
   const [isCreatingAgent, setIsCreatingAgent] = useState(false);
+  // Upsell modal — shown when backend returns a `plan_limit:` error.
+  // Generic toasts buried this kind of failure; a dedicated modal makes
+  // the path forward (upgrade) explicit.
+  const [planLimitMsg, setPlanLimitMsg] = useState<string | null>(null);
   const handleCreateAgent = useCallback(async () => {
     try {
       setIsCreatingAgent(true);
       const created = await createAgent();
-      // If the user picked a default model in Settings · 默认模型, apply it
-      // to the fresh agent right away. Best-effort — don't block or surface
-      // the wiring error; the agent is already usable with the backend default.
       if (settings.defaultLLMConfigId) {
         try {
           await updateSessionLLMConfig(created.session_id, settings.defaultLLMConfigId);
@@ -195,11 +196,19 @@ const App: React.FC = () => {
       emitSessionsChanged();
       toast({ title: '已新养一只', description: '去给它写点人设。', variant: 'success' });
     } catch (error) {
-      toast({
-        title: '养不出来',
-        description: error instanceof Error ? error.message : String(error),
-        variant: 'destructive',
-      });
+      const raw = error instanceof Error ? error.message : String(error);
+      if (raw.includes('plan_limit')) {
+        // Backend convention: "plan_limit:agents 当前 free 套餐最多 1 个 agent，已用 1"
+        // Strip the prefix; the rest is human-readable.
+        const human = raw.replace(/^plan_limit:[a-z_]+\s*/, '').trim() || '已经达到当前套餐上限';
+        setPlanLimitMsg(human);
+      } else {
+        toast({
+          title: '养不出来',
+          description: raw,
+          variant: 'destructive',
+        });
+      }
     } finally {
       setIsCreatingAgent(false);
     }
@@ -322,11 +331,91 @@ const App: React.FC = () => {
         onDeleteAgent={handleDeleteAgent}
         userLabel={user?.email || user?.name || '未登入'}
         onLogout={handleLogout}
+        currentUser={user}
       >
         <Suspense fallback={<ChapterFallback />}>
           {renderChapter()}
         </Suspense>
       </PaperAppShell>
+      {planLimitMsg && (
+        <PlanLimitModal
+          message={planLimitMsg}
+          plan={(user?.tenant?.plan as any) || 'free'}
+          onClose={() => setPlanLimitMsg(null)}
+          onUpgrade={() => { setPlanLimitMsg(null); navigate('/settings'); }}
+        />
+      )}
+    </div>
+  );
+};
+
+const PlanLimitModal: React.FC<{
+  message: string;
+  plan: 'free' | 'pro' | 'ultra';
+  onClose: () => void;
+  onUpgrade: () => void;
+}> = ({ message, plan, onClose, onUpgrade }) => {
+  const nextPlan = plan === 'free' ? 'Pro' : 'Ultra';
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0,
+        background: 'color-mix(in oklch, var(--ink) 55%, transparent)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 200, padding: 32,
+        backdropFilter: 'blur(6px)',
+        WebkitBackdropFilter: 'blur(6px)',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: 'var(--page-elev)',
+          border: '1px solid var(--rule-strong)',
+          borderRadius: 3,
+          boxShadow: '0 20px 60px oklch(0.18 0.02 310 / 0.40)',
+          width: '100%', maxWidth: 400,
+          padding: '28px 28px 22px',
+          fontFamily: "'Young Serif', serif",
+        }}
+      >
+        <div style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--pencil)', marginBottom: 6 }}>
+          PLAN LIMIT
+        </div>
+        <div style={{ fontSize: 18, color: 'var(--ink-strong)', marginBottom: 14, lineHeight: 1.45 }}>
+          {message}
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--pencil)', lineHeight: 1.6, marginBottom: 22, fontStyle: 'italic' }}>
+          升到 {nextPlan} 可以解锁更多 agent 名额、深色模式，以及未来的高级模型与共享配额。
+        </div>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              background: 'transparent', border: '1px solid var(--rule-strong)',
+              padding: '6px 16px', cursor: 'pointer',
+              fontFamily: "'Young Serif', serif", fontSize: 13, color: 'var(--pencil)',
+              borderRadius: 2,
+            }}
+          >
+            知道了
+          </button>
+          <button
+            type="button"
+            onClick={onUpgrade}
+            style={{
+              background: 'var(--accent-ink)', border: '1px solid var(--accent-ink)',
+              padding: '6px 16px', cursor: 'pointer', color: 'var(--paper)',
+              fontFamily: "'Young Serif', serif", fontSize: 13,
+              borderRadius: 2,
+            }}
+          >
+            去升级
+          </button>
+        </div>
+      </div>
     </div>
   );
 };

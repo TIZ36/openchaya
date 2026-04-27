@@ -225,6 +225,7 @@
   margin-top: auto;
   padding: 12px 8px 4px;
   border-top: 1px solid var(--rule);
+  position: relative; /* anchor for the user menu popover */
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -269,6 +270,133 @@
 .pshell-foot-btn:hover {
   color: var(--accent-ink);
   background: color-mix(in oklch, var(--accent-ink) 8%, transparent);
+}
+
+/* User button (now opens a popover instead of just being a label) */
+.pshell-foot-user-btn {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 2px;
+  transition: background 180ms var(--ease-quart);
+  color: inherit;
+  text-align: left;
+}
+.pshell-foot-user-btn:hover {
+  background: color-mix(in oklch, var(--accent-ink) 6%, transparent);
+}
+.pshell-foot-user-chev {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px;
+  color: var(--pencil-soft);
+  margin-left: auto;
+  padding-left: 6px;
+}
+
+/* Popover anchored above the foot user button */
+.pshell-user-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 8px;
+  right: 8px;
+  background: var(--page-elev);
+  border: 1px solid var(--rule-strong);
+  border-radius: 3px;
+  box-shadow: 0 12px 32px oklch(0.18 0.02 310 / 0.18);
+  padding: 12px 4px 4px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+}
+.pshell-user-menu-head {
+  padding: 0 12px 10px;
+  border-bottom: 1px dotted var(--rule);
+}
+.pshell-user-menu-email {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--ink-strong);
+  word-break: break-all;
+  line-height: 1.4;
+}
+.pshell-user-menu-plan {
+  margin-top: 6px;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.pshell-plan-badge {
+  font-family: 'Young Serif', ui-serif, serif;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  padding: 1px 8px;
+  border-radius: 1px;
+  border: 1px solid var(--rule-strong);
+}
+.pshell-plan-badge.plan-free  { color: var(--pencil); background: var(--paper); }
+.pshell-plan-badge.plan-pro   { color: var(--paper); background: var(--accent-ink); border-color: var(--accent-ink); }
+.pshell-plan-badge.plan-ultra { color: var(--paper); background: oklch(0.32 0.140 310); border-color: oklch(0.32 0.140 310); }
+.pshell-plan-badge.plan-founder {
+  color: var(--marginalia-ink);
+  background: var(--marginalia);
+  border-color: var(--marginalia);
+}
+
+.pshell-user-menu-stats {
+  padding: 8px 12px;
+}
+.pshell-user-menu-stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11.5px;
+  color: var(--pencil);
+  font-family: 'Young Serif', ui-serif, serif;
+}
+.pshell-user-menu-stat .mono {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--ink-strong);
+  font-size: 11px;
+}
+
+.pshell-user-menu-divider {
+  height: 1px;
+  background: var(--rule);
+  margin: 4px 8px;
+}
+
+.pshell-user-menu-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 12px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  font-family: 'Young Serif', ui-serif, serif;
+  font-size: 13px;
+  color: var(--ink);
+  text-decoration: none;
+  border-radius: 2px;
+  transition: background 180ms var(--ease-quart);
+}
+.pshell-user-menu-row:hover {
+  background: color-mix(in oklch, var(--accent-ink) 6%, transparent);
+}
+.pshell-user-menu-row:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.pshell-user-menu-row.danger {
+  color: oklch(0.55 0.16 25);
+}
+.pshell-user-menu-row-value {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--pencil);
 }
 
 /* ---------- Main canvas ---------- */

@@ -1,6 +1,9 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Session } from '../../services/chat';
+import type { CurrentUser } from '../../utils/themeAccess';
 import { PaperHandRule } from './index';
+import { getTheme, setTheme, type ThemeName } from '../../utils/theme';
+import { Link } from 'react-router-dom';
 
 /* ============================================================
    Paper App Shell — replaces the legacy app-sidebar + app-frame.
@@ -32,6 +35,8 @@ export interface PaperAppShellProps {
   onDeleteAgent?: (agent: Session, e: React.MouseEvent) => void;
   userLabel?: string;
   onLogout?: () => void;
+  /** Full user object — drives the avatar menu (plan badge, usage, theme). */
+  currentUser?: CurrentUser | null;
   children: React.ReactNode;
 }
 
@@ -82,9 +87,12 @@ const PaperAppShell: React.FC<PaperAppShellProps> = ({
   onDeleteAgent,
   userLabel,
   onLogout,
+  currentUser,
   children,
 }) => {
   const ctx: ShellCtx = { agents, topics };
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuAnchorRef = useRef<HTMLButtonElement | null>(null);
 
   const sortedAgents = useMemo(() => {
     return [...agents].sort((a, b) => {
@@ -205,24 +213,148 @@ const PaperAppShell: React.FC<PaperAppShellProps> = ({
         )}
 
         <div className="pshell-foot">
-          <div className="pshell-foot-user" title={userLabel || ''}>
+          <button
+            type="button"
+            ref={menuAnchorRef}
+            className="pshell-foot-user pshell-foot-user-btn"
+            title={userLabel || ''}
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-expanded={menuOpen}
+          >
             <span className="pshell-foot-user-dot" aria-hidden />
             <span className="pshell-foot-user-name">{userLabel || '未登入'}</span>
-          </div>
-          <div className="pshell-foot-tools">
-            {onLogout && (
-              <button
-                type="button"
-                className="pshell-foot-btn"
-                onClick={onLogout}
-                title="登出"
-              >⤴</button>
-            )}
-          </div>
+            <span className="pshell-foot-user-chev">{menuOpen ? '▾' : '▸'}</span>
+          </button>
+          {menuOpen && (
+            <UserMenuPopover
+              user={currentUser || null}
+              onClose={() => setMenuOpen(false)}
+              onLogout={onLogout}
+              onOpenSettings={() => { onChapterChange('settings'); setMenuOpen(false); }}
+              anchorRef={menuAnchorRef}
+            />
+          )}
         </div>
       </aside>
 
       <main className="pshell-main">{children}</main>
+    </div>
+  );
+};
+
+/* ============================================================
+   Avatar / user menu popover
+   Anchored above the foot user button. Shows plan + usage badges,
+   theme toggle (Pro+ gated visually but the toggle still works),
+   settings shortcut, logout.
+   ============================================================ */
+
+interface UserMenuPopoverProps {
+  user: CurrentUser | null;
+  anchorRef: React.RefObject<HTMLButtonElement | null>;
+  onClose: () => void;
+  onOpenSettings: () => void;
+  onLogout?: () => void;
+}
+
+const planLabel: Record<string, string> = {
+  free: 'Free',
+  pro: 'Pro',
+  ultra: 'Ultra',
+};
+
+const UserMenuPopover: React.FC<UserMenuPopoverProps> = ({ user, anchorRef, onClose, onOpenSettings, onLogout }) => {
+  const [theme, setLocalTheme] = useState<ThemeName>(getTheme());
+  const popRef = useRef<HTMLDivElement | null>(null);
+
+  // Close on outside click / Escape. We anchor to the bottom-left foot
+  // button so the menu floats up — the popover lives in the sidebar's
+  // overflow space, no portal needed.
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (popRef.current?.contains(t)) return;
+      if (anchorRef.current?.contains(t)) return;
+      onClose();
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [anchorRef, onClose]);
+
+  const plan = (user?.tenant?.plan || 'free') as 'free' | 'pro' | 'ultra';
+  const limits = user?.limits;
+  const usage = user?.usage;
+  const darkModeAllowed = !!limits?.dark_mode || plan !== 'free' || !!user?.is_founder;
+
+  const flipTheme = () => {
+    const next: ThemeName = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    setLocalTheme(next);
+  };
+
+  // "X / N" usage; -1 = ∞.
+  const fmtUsage = (used?: number, max?: number): string => {
+    const u = typeof used === 'number' ? used : 0;
+    if (typeof max !== 'number' || max < 0) return `${u} / ∞`;
+    return `${u} / ${max}`;
+  };
+
+  return (
+    <div ref={popRef} className="pshell-user-menu">
+      <div className="pshell-user-menu-head">
+        <div className="pshell-user-menu-email">{user?.email || user?.name || '未登入'}</div>
+        <div className="pshell-user-menu-plan">
+          <span className={`pshell-plan-badge plan-${plan}`}>{planLabel[plan] || plan}</span>
+          {user?.is_founder && <span className="pshell-plan-badge plan-founder">Founder</span>}
+        </div>
+      </div>
+
+      <div className="pshell-user-menu-stats">
+        <div className="pshell-user-menu-stat">
+          <span>Agent</span>
+          <span className="mono">{fmtUsage(usage?.agents, limits?.agents)}</span>
+        </div>
+      </div>
+
+      <div className="pshell-user-menu-divider" />
+
+      <button
+        type="button"
+        className="pshell-user-menu-row"
+        onClick={() => { if (darkModeAllowed) flipTheme(); }}
+        disabled={!darkModeAllowed}
+        title={darkModeAllowed ? '切换深色 / 浅色' : '深色模式仅 Pro+ 可用'}
+      >
+        <span className="pshell-user-menu-row-label">深色模式</span>
+        <span className="pshell-user-menu-row-value">
+          {darkModeAllowed ? (theme === 'dark' ? '已开' : '关') : 'Pro+'}
+        </span>
+      </button>
+
+      <Link
+        to="/settings"
+        className="pshell-user-menu-row"
+        onClick={(e) => { e.preventDefault(); onOpenSettings(); }}
+      >
+        <span className="pshell-user-menu-row-label">设置</span>
+        <span className="pshell-user-menu-row-value">→</span>
+      </Link>
+
+      {onLogout && (
+        <button
+          type="button"
+          className="pshell-user-menu-row danger"
+          onClick={() => { onLogout(); onClose(); }}
+        >
+          <span className="pshell-user-menu-row-label">登出</span>
+          <span className="pshell-user-menu-row-value">⤴</span>
+        </button>
+      )}
     </div>
   );
 };

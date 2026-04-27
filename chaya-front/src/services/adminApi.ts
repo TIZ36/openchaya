@@ -1,10 +1,12 @@
 import { api } from '../utils/apiClient';
-import { buildStoredUser, type CurrentUser, type TenantInfo, type TenantPlan } from '../utils/themeAccess';
+import { buildStoredUser, type CurrentUser, type TenantInfo, type TenantPlan, type PlanLimits, type PlanUsage } from '../utils/themeAccess';
 
 export interface MeResponse {
   user: CurrentUser;
   tenant: TenantInfo;
   is_founder: boolean;
+  limits?: PlanLimits;
+  usage?: PlanUsage;
 }
 
 export interface MembershipItem {
@@ -19,10 +21,10 @@ export interface MembershipItem {
 
 export async function getMe(): Promise<MeResponse> {
   const res = await api.get<MeResponse>('/api/me');
-  return {
-    ...res,
-    user: buildStoredUser(res.user, res.tenant),
-  };
+  // Pin limits/usage onto the user object so any component holding a
+  // CurrentUser ref sees them without re-fetching.
+  const user = buildStoredUser({ ...res.user, limits: res.limits, usage: res.usage }, res.tenant);
+  return { ...res, user };
 }
 
 export async function listMemberships(): Promise<MembershipItem[]> {

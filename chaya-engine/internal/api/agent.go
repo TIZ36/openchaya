@@ -179,6 +179,14 @@ func (a *AgentAPI) bulkConvStats(convByAgent map[string]string) map[string]*conv
 // POST /api/agents — body: name?, config?
 func (a *AgentAPI) create(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserID(r.Context())
+
+	// Enforce per-plan agent count cap. Founders bypass via the same
+	// effective-plan helper used in /api/me. -1 means unlimited.
+	if err := a.checkAgentCreateAllowed(r, userID); err != nil {
+		Fail(w, CodeForbidden, err.Error())
+		return
+	}
+
 	var req struct {
 		Name   string          `json:"name"`
 		Config json.RawMessage `json:"config"`
