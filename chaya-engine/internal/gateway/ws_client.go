@@ -13,7 +13,11 @@ const (
 	writeWait      = 10 * time.Second
 	pongWait       = 60 * time.Second
 	pingInterval   = 30 * time.Second
-	maxMessageSize = 1 << 20 // 1MB
+	// Big enough to fit a couple of phone-camera photos as base64 in a single
+	// chat envelope (raw ~2–4MB → base64 ~3–6MB each). The gateway closes the
+	// socket with code 1009 once a frame exceeds this — at 1MB any vision
+	// upload looked like the turn was silently stuck on the client.
+	maxMessageSize = 32 << 20 // 32MB
 )
 
 // Client represents a single WebSocket connection (first host / Gateway side).

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/chaya-ai/chaya-engine/internal/provider"
 	"github.com/go-chi/chi/v5"
@@ -72,7 +73,10 @@ func GenerateFollowupsWithFallback(ctx context.Context, reg *provider.Registry, 
 		}
 	}
 	for i, cand := range chain {
-		budget := 120
+		// 200 (was 120) — three 20-字 Chinese items + JSON quoting overhead
+		// can clip 120 budget and yield only the opening `[`. The salvage
+		// path handles partials, but raising the ceiling avoids them.
+		budget := 200
 		if cand.Reasoning {
 			// Reasoning models spend MaxTokens on hidden thinking first,
 			// content second. Need enough headroom for ~60 visible tokens
@@ -124,7 +128,7 @@ func GenerateFollowups(ctx context.Context, prov provider.LLMProvider, model, us
 	if prov == nil || strings.TrimSpace(assistantMsg) == "" {
 		return []string{}
 	}
-	maxTokens := 120
+	maxTokens := 200
 	if provider.IsReasoningModel(model) {
 		maxTokens = 800
 	}
@@ -154,14 +158,66 @@ func buildFollowupPrompt(userMsg, assistantMsg string) string {
 
 // parseFollowupList is a forgiving parser. Tries, in order:
 //  1. JSON array inside [...] (tolerates code fences + trailing commas)
-//  2. Newline-split fallback — strips numbering / bullets / quotes.
+//  2. Quoted-string salvage — for truncated arrays where MaxTokens cut
+//     mid-stream so there's no closing `]` but earlier items are intact.
+//  3. Newline-split fallback — strips numbering / bullets / quotes.
 // Deepseek and OpenAI sometimes ignore the "JSON only" instruction and return
 // prose or numbered lists; we accept both.
 func parseFollowupList(text string) []string {
 	if s := parseFollowupJSON(text); len(s) > 0 {
 		return s
 	}
+	if s := parseFollowupQuoted(text); len(s) > 0 {
+		return s
+	}
 	return parseFollowupLines(text)
+}
+
+// parseFollowupQuoted pulls JSON-style "quoted strings" out of any text.
+// The narrow case it solves: a small budget cuts the model's array off
+// mid-stream — `["写一篇博客", "再总结一下", "继续问` — and parseFollowupJSON
+// gives up because there's no closing `]`. The first two items are still
+// usable; we extract them by regex and unescape the standard JSON sequences.
+// Lines parser can't help: the whole reply is one line ending in `,`.
+//
+// Subtle: the regex naively matches any `"…"`, which means `", "` between
+// items also looks like a valid pair. We post-filter on "has at least one
+// letter/digit rune" — pure punctuation captures get dropped.
+func parseFollowupQuoted(text string) []string {
+	matches := quotedStringRe.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		if len(m) < 2 {
+			continue
+		}
+		s := m[1]
+		// Drop captures that are only whitespace / punctuation (the inter-
+		// item `, ` of a partially-truncated array is itself a `"`-delimited
+		// substring and would otherwise sneak through).
+		if !hasContentRune(s) {
+			continue
+		}
+		// Minimal JSON unescape — the only sequences the followup prompt
+		// could plausibly produce. Order matters: backslash must come last
+		// so we don't double-process an already-unescaped `\`.
+		s = strings.ReplaceAll(s, `\"`, `"`)
+		s = strings.ReplaceAll(s, `\n`, "\n")
+		s = strings.ReplaceAll(s, `\\`, `\`)
+		out = append(out, s)
+	}
+	return trimAndCap(out)
+}
+
+func hasContentRune(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseFollowupJSON(text string) []string {
@@ -183,6 +239,12 @@ func parseFollowupJSON(text string) []string {
 var (
 	trailingCommaRe = regexp.MustCompile(`,(\s*[\]\}])`)
 	numberingRe     = regexp.MustCompile(`^\s*(?:[-*•·]|\d+[\.\):、]|[（(]\d+[)）])\s+`)
+	// Matches a JSON-style "quoted string". (?:[^"\\]|\\.)+ lets `\"` and
+	// `\\` pass without ending the match early. Length filtering is done
+	// downstream by hasContentRune + trimAndCap rather than here, since
+	// regex {2,} surprisingly catches the inter-item `, ` of truncated
+	// arrays as a 2-char "match".
+	quotedStringRe = regexp.MustCompile(`"((?:[^"\\]|\\.)+)"`)
 )
 
 func parseFollowupLines(text string) []string {
@@ -198,8 +260,14 @@ func parseFollowupLines(text string) []string {
 			continue
 		}
 		ln = numberingRe.ReplaceAllString(ln, "")
-		ln = strings.Trim(ln, `"'"" `)
-		if ln == "" || len([]rune(ln)) > 60 {
+		// Strip JSON structural delimiters that survive a truncated array
+		// (e.g. the line is just "[" because MaxTokens cut off mid-stream
+		// before the first quoted string). Also strip stray quotes/commas
+		// at the edges.
+		ln = strings.Trim(ln, `"'"" ,[](){};`)
+		// A meaningful suggestion is at least 2 runes — anything shorter
+		// is structural junk, not a sentence the user would tap.
+		if rc := len([]rune(ln)); rc < 2 || rc > 60 {
 			continue
 		}
 		cleaned = append(cleaned, ln)
@@ -212,16 +280,16 @@ func trimAndCap(arr []string) []string {
 	seen := map[string]struct{}{}
 	for _, s := range arr {
 		s = strings.TrimSpace(s)
-		if s == "" {
+		// Same min-length guard as parseFollowupLines — defense-in-depth in
+		// case a JSON-parsed array contains a degenerate "[" / "" entry.
+		rc := len([]rune(s))
+		if rc < 2 || rc > 60 {
 			continue
 		}
 		if _, dup := seen[s]; dup {
 			continue
 		}
 		seen[s] = struct{}{}
-		if len([]rune(s)) > 60 {
-			continue
-		}
 		out = append(out, s)
 		if len(out) >= 3 {
 			break
