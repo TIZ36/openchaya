@@ -58,6 +58,8 @@ const PersonaPage: React.FC<PersonaPageProps> = ({ sessionId, onOpenChat }) => {
   const [name, setName] = useState('');
   const [prompt, setPrompt] = useState('');
   const [llmConfigId, setLlmConfigId] = useState('');
+  // 上下文窗口（条数）。后端 hydrate 时按这个上限从 DB 拉历史；4-200 之间。
+  const [historyMax, setHistoryMax] = useState<number>(30);
   const [avatarDataUrl, setAvatarDataUrl] = useState<string | null>(null);
   const [avatarDirty, setAvatarDirty] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -352,7 +354,11 @@ const PersonaPage: React.FC<PersonaPageProps> = ({ sessionId, onOpenChat }) => {
     setLlmConfigId(agent?.llm_config_id || '');
     setAvatarDataUrl(agent?.avatar || null);
     setAvatarDirty(false);
-  }, [agent?.session_id, agent?.system_prompt, agent?.name, agent?.title, agent?.llm_config_id, agent?.avatar]);
+    const ext = (agent?.ext as any) || {};
+    const persona = ext.persona || {};
+    const n = Number(persona.historyMaxMessages);
+    setHistoryMax(Number.isFinite(n) && n > 0 ? n : 30);
+  }, [agent?.session_id, agent?.system_prompt, agent?.name, agent?.title, agent?.llm_config_id, agent?.avatar, agent?.ext]);
 
   // "dirty" = any buffer diverges from saved agent
   const dirty = useMemo(() => {
@@ -361,8 +367,10 @@ const PersonaPage: React.FC<PersonaPageProps> = ({ sessionId, onOpenChat }) => {
     if ((agent.system_prompt || '') !== prompt) return true;
     if ((agent.llm_config_id || '') !== llmConfigId) return true;
     if (avatarDirty) return true;
+    const savedHist = Number(((agent.ext as any)?.persona)?.historyMaxMessages) || 30;
+    if (savedHist !== historyMax) return true;
     return false;
-  }, [agent, name, prompt, llmConfigId, avatarDirty]);
+  }, [agent, name, prompt, llmConfigId, avatarDirty, historyMax]);
 
   const saveAll = async () => {
     if (!agent || !dirty) return;
@@ -379,6 +387,17 @@ const PersonaPage: React.FC<PersonaPageProps> = ({ sessionId, onOpenChat }) => {
       if ((agent.system_prompt || '') !== prompt) updates.system_prompt = prompt;
       if ((agent.llm_config_id || '') !== llmConfigId) updates.llm_config_id = llmConfigId || null;
       if (avatarDirty) updates.avatar = avatarDataUrl || null;
+      // Merge persona-level settings into ext without clobbering siblings
+      // (presets, currentPersonaId, voice, etc. are written elsewhere).
+      const savedHist = Number(((agent.ext as any)?.persona)?.historyMaxMessages) || 30;
+      if (savedHist !== historyMax) {
+        const prevExt = (agent.ext as any) || {};
+        const prevPersona = prevExt.persona || {};
+        updates.ext = {
+          ...prevExt,
+          persona: { ...prevPersona, historyMaxMessages: clampHistoryMax(historyMax) },
+        };
+      }
       if (Object.keys(updates).length === 0) { setSaving(false); return; }
 
       // Payload-size sanity check — some backends cap request bodies at 2-4 MB.
@@ -640,6 +659,39 @@ const PersonaPage: React.FC<PersonaPageProps> = ({ sessionId, onOpenChat }) => {
                     placeholder="例：&#10;你叫阿茶。你的语气像午后半醒的朋友，不急。&#10;说话中文为主，偶尔蹦英文单词但不做作。&#10;用户来问问题时，先别急着给结论——问一问他们在怕什么，或者在期待什么。"
                     style={{ minHeight: 180 }}
                   />
+                </div>
+                <div style={{ marginTop: 18 }}>
+                  <div style={s.fieldLabel}>
+                    <span>记多少话（上下文窗口）</span>
+                    <span style={s.fieldHint}>每轮 LLM 调用回灌的最近消息条数。短一点快、长一点更连贯。范围 4–200。</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6 }}>
+                    <input
+                      type="range"
+                      min={4}
+                      max={200}
+                      step={2}
+                      value={historyMax}
+                      onChange={(e) => setHistoryMax(clampHistoryMax(Number(e.target.value)))}
+                      style={{ flex: 1, accentColor: 'var(--accent-ink)' }}
+                    />
+                    <input
+                      type="number"
+                      min={4}
+                      max={200}
+                      value={historyMax}
+                      onChange={(e) => setHistoryMax(clampHistoryMax(Number(e.target.value)))}
+                      style={{
+                        width: 64, padding: '4px 8px',
+                        background: 'var(--paper)',
+                        border: '1px solid var(--rule-strong)',
+                        borderRadius: 2,
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: 13, color: 'var(--ink)', textAlign: 'right',
+                      }}
+                    />
+                    <span style={{ fontSize: 11, color: 'var(--pencil-soft)', fontFamily: "'JetBrains Mono', monospace" }}>条</span>
+                  </div>
                 </div>
               </section>
 
@@ -1045,6 +1097,15 @@ const BindPicker: React.FC<{
       </div>
     </div>
   );
+};
+
+// Backend clamps to [4, 200]; we mirror that here so UI never shows / saves
+// a value the engine will silently discard. 30 matches hydrateDefaultMessages.
+const clampHistoryMax = (n: number): number => {
+  if (!Number.isFinite(n) || n <= 0) return 30;
+  if (n < 4) return 4;
+  if (n > 200) return 200;
+  return Math.round(n);
 };
 
 const firstSentence = (text: string): string => {

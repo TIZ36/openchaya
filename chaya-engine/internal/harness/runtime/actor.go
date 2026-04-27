@@ -326,7 +326,36 @@ func (a *Actor) enrichMessagesWithCapabilities(ctx context.Context, convID, user
 // (DeepSeek-Reasoner / Qwen-thinking) keep working across the restart —
 // otherwise the next call rejects with "reasoning_content must be passed
 // back in history".
-const hydrateMaxMessages = 30
+const (
+	hydrateDefaultMessages = 30
+	hydrateMinMessages     = 4
+	hydrateMaxMessages     = 200
+)
+
+// historyMaxFromExt reads the per-agent override from ext.persona.historyMaxMessages.
+// Falls back to hydrateDefaultMessages when missing or out of range. Clamped
+// to [4, 200] so a typo can't blow context budget or strip all memory.
+func historyMaxFromExt(ext json.RawMessage) int {
+	if len(ext) == 0 {
+		return hydrateDefaultMessages
+	}
+	var wrap struct {
+		Persona *struct {
+			HistoryMaxMessages *int `json:"historyMaxMessages"`
+		} `json:"persona"`
+	}
+	if err := json.Unmarshal(ext, &wrap); err != nil || wrap.Persona == nil || wrap.Persona.HistoryMaxMessages == nil {
+		return hydrateDefaultMessages
+	}
+	n := *wrap.Persona.HistoryMaxMessages
+	if n < hydrateMinMessages {
+		return hydrateMinMessages
+	}
+	if n > hydrateMaxMessages {
+		return hydrateMaxMessages
+	}
+	return n
+}
 
 func (a *Actor) hydrateHistoryFromDB(convID string) {
 	if a.DB == nil || convID == "" {
@@ -347,11 +376,12 @@ func (a *Actor) hydrateHistoryFromDB(convID string) {
 	var rows []row
 	// Pull last N+1 ordered desc, then reverse — cheaper than ordering asc
 	// and offsetting from total count.
+	limit := historyMaxFromExt(a.Config.Ext)
 	if err := a.DB.Table("messages").
 		Select("role, content, ext").
 		Where("conv_id = ? AND role IN ('user','assistant')", convID).
 		Order("created_at desc").
-		Limit(hydrateMaxMessages).
+		Limit(limit).
 		Find(&rows).Error; err != nil {
 		slog.Warn("hydrate history: db read failed", "conv", convID, "err", err)
 		a.mu.Lock()

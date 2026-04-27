@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/chaya-ai/chaya-engine/internal/gateway/middleware"
 	pgstore "github.com/chaya-ai/chaya-engine/internal/storage/postgres"
@@ -74,11 +75,104 @@ func (a *AgentAPI) list(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	stats := a.bulkConvStats(convByAgent)
+
 	result := make([]M, len(agents))
 	for i, ag := range agents {
-		result[i] = a.enrichAgentWithConv(ag, convByAgent[ag.ID])
+		m := a.enrichAgentWithConv(ag, convByAgent[ag.ID])
+		if convID := convByAgent[ag.ID]; convID != "" {
+			if st, ok := stats[convID]; ok {
+				if st.count > 0 {
+					m["message_count"] = st.count
+				}
+				if !st.lastAt.IsZero() {
+					m["last_message_at"] = st.lastAt
+				}
+				if st.preview != "" {
+					m["preview_text"] = st.preview
+				}
+			}
+		}
+		result[i] = m
 	}
 	OK(w, result)
+}
+
+// convStats holds the headline numbers shown on the Persona page dossier
+// card: how many turns, when the last one happened, and the very first
+// thing the user said (used as a quote when the agent has no name yet).
+type convStats struct {
+	count   int64
+	lastAt  time.Time
+	preview string
+}
+
+// bulkConvStats aggregates message_count + MAX(created_at) per conv in one
+// query, and the first-user-message preview in another. Two grouped reads
+// regardless of agent count — never N+1.
+func (a *AgentAPI) bulkConvStats(convByAgent map[string]string) map[string]*convStats {
+	out := map[string]*convStats{}
+	if len(convByAgent) == 0 {
+		return out
+	}
+	ids := make([]string, 0, len(convByAgent))
+	seen := map[string]bool{}
+	for _, c := range convByAgent {
+		if c == "" || seen[c] {
+			continue
+		}
+		seen[c] = true
+		ids = append(ids, c)
+	}
+	if len(ids) == 0 {
+		return out
+	}
+
+	type aggRow struct {
+		ConvID string    `gorm:"column:conv_id"`
+		Cnt    int64     `gorm:"column:cnt"`
+		LastAt time.Time `gorm:"column:last_at"`
+	}
+	var aggs []aggRow
+	a.db.Raw(
+		`SELECT conv_id, COUNT(*) AS cnt, MAX(created_at) AS last_at
+		   FROM messages
+		  WHERE conv_id IN ?
+		    AND role IN ('user','assistant')
+		  GROUP BY conv_id`, ids,
+	).Scan(&aggs)
+	for _, r := range aggs {
+		out[r.ConvID] = &convStats{count: r.Cnt, lastAt: r.LastAt}
+	}
+
+	// Preview = first user message per conv (DISTINCT ON is Postgres-specific
+	// but we already require pgvector elsewhere, so portability isn't a goal).
+	type previewRow struct {
+		ConvID  string `gorm:"column:conv_id"`
+		Content string `gorm:"column:content"`
+	}
+	var previews []previewRow
+	a.db.Raw(
+		`SELECT DISTINCT ON (conv_id) conv_id, content
+		   FROM messages
+		  WHERE conv_id IN ?
+		    AND role = 'user'
+		  ORDER BY conv_id, created_at ASC`, ids,
+	).Scan(&previews)
+	for _, r := range previews {
+		st := out[r.ConvID]
+		if st == nil {
+			st = &convStats{}
+			out[r.ConvID] = st
+		}
+		p := strings.TrimSpace(r.Content)
+		if len([]rune(p)) > 60 {
+			rs := []rune(p)
+			p = string(rs[:60]) + "…"
+		}
+		st.preview = p
+	}
+	return out
 }
 
 // create 新建通用 Agent（Type=generic，可删），并绑定专属会话。
@@ -172,7 +266,24 @@ func (a *AgentAPI) enrichAgent(ag pgstore.Agent) M {
 			}
 		}
 	}
-	return a.enrichAgentWithConv(ag, convID)
+	m := a.enrichAgentWithConv(ag, convID)
+	// Single-get path also gets the dossier stats. Used by Persona page when
+	// the user opens an agent directly (deep link / refresh).
+	if convID != "" {
+		stats := a.bulkConvStats(map[string]string{ag.ID: convID})
+		if st, ok := stats[convID]; ok {
+			if st.count > 0 {
+				m["message_count"] = st.count
+			}
+			if !st.lastAt.IsZero() {
+				m["last_message_at"] = st.lastAt
+			}
+			if st.preview != "" {
+				m["preview_text"] = st.preview
+			}
+		}
+	}
+	return m
 }
 
 // enrichAgentWithConv builds the response map without touching the DB.
