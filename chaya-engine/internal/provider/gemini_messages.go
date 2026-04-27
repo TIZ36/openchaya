@@ -1,12 +1,46 @@
 package provider
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/genai"
 )
+
+// geminiPartFromAttachment converts our generic Attachment into a Gemini
+// Part. Inline data is base64-decoded into raw bytes (the SDK takes []byte).
+// Returns nil for unsupported types or malformed data — caller filters.
+func geminiPartFromAttachment(a Attachment) *genai.Part {
+	if a.Data == "" && a.URL == "" {
+		return nil
+	}
+	mime := a.MimeType
+	if mime == "" {
+		switch a.Type {
+		case "image", "":
+			mime = "image/jpeg"
+		case "audio":
+			mime = "audio/mpeg"
+		case "video":
+			mime = "video/mp4"
+		}
+	}
+	if a.Data != "" {
+		raw, err := base64.StdEncoding.DecodeString(a.Data)
+		if err != nil {
+			slog.Warn("gemini: skip attachment with bad base64", "err", err, "name", a.Name)
+			return nil
+		}
+		return genai.NewPartFromBytes(raw, mime)
+	}
+	// Hosted URLs aren't directly supported by inline_data; we'd need
+	// fileData uploads. Skip for v1 with a log so it's noticeable.
+	slog.Info("gemini: hosted-URL attachment not yet supported; skipping", "url", a.URL)
+	return nil
+}
 
 func geminiProviderMessagesToGenAI(messages []Message) (systemInst *genai.Content, contents []*genai.Content, err error) {
 	var sysTexts []string
@@ -19,7 +53,23 @@ func geminiProviderMessagesToGenAI(messages []Message) (systemInst *genai.Conten
 				sysTexts = append(sysTexts, m.Content)
 			}
 		case "user":
-			contents = append(contents, genai.NewContentFromText(m.Content, genai.RoleUser))
+			// Build a parts list so attached images / inline data can ride
+			// along with the text. Gemini accepts mixed text + inline_data
+			// parts in a single Content message.
+			parts := []*genai.Part{}
+			if strings.TrimSpace(m.Content) != "" {
+				parts = append(parts, genai.NewPartFromText(m.Content))
+			}
+			for _, a := range m.Attachments {
+				p := geminiPartFromAttachment(a)
+				if p != nil {
+					parts = append(parts, p)
+				}
+			}
+			if len(parts) == 0 {
+				parts = append(parts, genai.NewPartFromText(""))
+			}
+			contents = append(contents, genai.NewContentFromParts(parts, genai.RoleUser))
 		case "assistant":
 			for _, tc := range m.ToolCalls {
 				toolIDToName[tc.ID] = tc.Name

@@ -144,13 +144,32 @@ func openaiToOAIMessages(msgs []Message) []oai.ChatCompletionMessage {
 	for i, m := range msgs {
 		msg := oai.ChatCompletionMessage{
 			Role:       m.Role,
-			Content:    m.Content,
 			ToolCallID: m.ToolCallID,
 			// Round-trip reasoning back to providers that require it
 			// (DeepSeek-Reasoner, Qwen-thinking). Empty for non-thinking
 			// models — the field is omitempty in the SDK.
 			ReasoningContent: m.Reasoning,
 		}
+
+		// Vision payloads: when the user attached images, switch to the
+		// multi-part content shape (chat completions). The SDK requires
+		// Content to be empty when MultiContent is set; we put the text
+		// part first so the prompt order matches what the user typed.
+		imageParts := buildOAIImageParts(m.Attachments)
+		if len(imageParts) > 0 {
+			parts := make([]oai.ChatMessagePart, 0, 1+len(imageParts))
+			if m.Content != "" {
+				parts = append(parts, oai.ChatMessagePart{
+					Type: oai.ChatMessagePartTypeText,
+					Text: m.Content,
+				})
+			}
+			parts = append(parts, imageParts...)
+			msg.MultiContent = parts
+		} else {
+			msg.Content = m.Content
+		}
+
 		for _, tc := range m.ToolCalls {
 			msg.ToolCalls = append(msg.ToolCalls, oai.ToolCall{
 				ID:   tc.ID,
@@ -164,6 +183,40 @@ func openaiToOAIMessages(msgs []Message) []oai.ChatCompletionMessage {
 		out[i] = msg
 	}
 	return out
+}
+
+// buildOAIImageParts converts our generic Attachment list into OpenAI's
+// chat-completion image_url parts. Skips non-image attachments (audio /
+// file) — those go through different model APIs (whisper / files) which
+// the chat surface doesn't speak.
+func buildOAIImageParts(att []Attachment) []oai.ChatMessagePart {
+	if len(att) == 0 {
+		return nil
+	}
+	parts := make([]oai.ChatMessagePart, 0, len(att))
+	for _, a := range att {
+		if a.Type != "" && a.Type != "image" {
+			continue
+		}
+		var url string
+		switch {
+		case a.Data != "":
+			mime := a.MimeType
+			if mime == "" {
+				mime = "image/jpeg"
+			}
+			url = "data:" + mime + ";base64," + a.Data
+		case a.URL != "":
+			url = a.URL
+		default:
+			continue
+		}
+		parts = append(parts, oai.ChatMessagePart{
+			Type: oai.ChatMessagePartTypeImageURL,
+			ImageURL: &oai.ChatMessageImageURL{URL: url},
+		})
+	}
+	return parts
 }
 
 func openaiToOAITools(tools []Tool) []oai.Tool {

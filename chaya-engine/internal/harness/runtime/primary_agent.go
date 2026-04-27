@@ -662,6 +662,10 @@ func (p *PrimaryActor) summarizeAndStream(ctx context.Context, env *envelope.Env
 	)
 	messages := make([]provider.Message, len(p.history))
 	copy(messages, p.history)
+	// Pin the *real* user message so the followup goroutine in
+	// streamAssistantResponse uses it instead of the meta-instruction tail
+	// of the synthetic 3-message scaffold above.
+	p.followupUserOverride = env.Body
 	p.mu.Unlock()
 
 	// Stream the summarized response

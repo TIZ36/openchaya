@@ -58,6 +58,12 @@ type Actor struct {
 	// agent actors are usually 1:1 with a conversation but the field guards
 	// against multi-conv reuse just in case. Cleared on actor reconstruction.
 	historyHydratedFor string
+	// followupUserOverride lets the delegate path override the
+	// "what was the user actually asking" string used when building
+	// follow-up suggestions. Without it summarizeAndStream feeds in a
+	// synthetic meta-prompt ("Based on the above work result...") and
+	// the chips end up hilariously off-topic. Cleared after each turn.
+	followupUserOverride string
 
 	topoMatchMu             sync.Mutex
 	lastTopologyIntentLabel string // Consult 命中意图 label（本回合，用于拓扑学习轨迹）
@@ -450,9 +456,15 @@ func (a *Actor) streamChat(ctx context.Context, env *envelope.Envelope) string {
 	// agent loses all multi-turn context across server restarts.
 	a.hydrateHistoryFromDB(convID)
 
+	// Pull image / file attachments off env.Data so the LLM call gets them
+	// as a true multipart message (vision input). Without this they were
+	// only being persisted into ext for the UI bubble — the LLM saw the
+	// user's text but no picture.
+	atts := extractAttachments(env.Data)
+
 	// Build messages
 	a.mu.Lock()
-	a.history = append(a.history, provider.Message{Role: "user", Content: userForLLM})
+	a.history = append(a.history, provider.Message{Role: "user", Content: userForLLM, Attachments: atts})
 	messages := make([]provider.Message, len(a.history))
 	copy(messages, a.history)
 	a.mu.Unlock()
@@ -504,6 +516,51 @@ func (a *Actor) persistUserMessageWithExt(convID, content, source string, data j
 		userMsg.Ext = ext
 	}
 	a.DB.Create(&userMsg)
+}
+
+// extractAttachments pulls the frontend-supplied media[] off env.Data and
+// converts it into provider.Attachment values for the LLM call. Frontend
+// shape: ext.media = [{type, mime_type, data, name, output_id?}, ...]
+//
+// We accept either base64 in `data` (uploaded files / pasted images) or
+// an `output_id` referencing a stored gallery item — for the latter we
+// don't load bytes here (the engine doesn't host a fetch path tied to
+// the user identity yet); skipped with a log so the user sees that
+// gallery references aren't reaching the model. Direct uploads work.
+func extractAttachments(data json.RawMessage) []provider.Attachment {
+	if len(data) == 0 {
+		return nil
+	}
+	var wrap struct {
+		Media []struct {
+			Type     string `json:"type"`
+			MimeType string `json:"mime_type"`
+			Data     string `json:"data"`
+			URL      string `json:"url"`
+			Name     string `json:"name"`
+			OutputID string `json:"output_id"`
+		} `json:"media"`
+	}
+	if err := json.Unmarshal(data, &wrap); err != nil || len(wrap.Media) == 0 {
+		return nil
+	}
+	out := make([]provider.Attachment, 0, len(wrap.Media))
+	for _, m := range wrap.Media {
+		if m.Data == "" && m.URL == "" {
+			if m.OutputID != "" {
+				slog.Info("attachment: gallery output_id reference not yet inlined", "output_id", m.OutputID)
+			}
+			continue
+		}
+		out = append(out, provider.Attachment{
+			Type:     m.Type,
+			MimeType: m.MimeType,
+			Data:     m.Data,
+			URL:      m.URL,
+			Name:     m.Name,
+		})
+	}
+	return out
 }
 
 // extractKnowledgeBlock formats the frontend-supplied knowledge hits into a
@@ -752,7 +809,14 @@ func (a *Actor) streamAssistantResponse(ctx context.Context, convID string, mess
 	// the agent just answered with (capped to 120 tokens / temp=0 in
 	// GenerateFollowups so it lands in <1s on most providers). Pushed back
 	// to the UI as `agent_followups` so the front-end has zero HTTP wait.
-	go a.publishFollowups(convID, assistantMsg.ID, lastUserText(messages), full)
+	userMsgForFollowup := lastUserText(messages)
+	a.mu.Lock()
+	if a.followupUserOverride != "" {
+		userMsgForFollowup = a.followupUserOverride
+		a.followupUserOverride = ""
+	}
+	a.mu.Unlock()
+	go a.publishFollowups(convID, assistantMsg.ID, userMsgForFollowup, full)
 
 	// Only PrimaryActor (Orchestrator) should manage cross-turn trace.
 	// Basic Actors (like SubActors or Direct Chat) should clear it to avoid memory leak.
