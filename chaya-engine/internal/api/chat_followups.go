@@ -45,46 +45,66 @@ func (a *chatFollowupAPI) followups(w http.ResponseWriter, r *http.Request) {
 		OK(w, M{"suggestions": []string{}})
 		return
 	}
-
-	// Resolve provider. Prefer the explicit config_id (frontend sends the
-	// agent's own config), fall back to any available provider so the feature
-	// gracefully degrades instead of silently producing nothing.
-	var prov provider.LLMProvider
-	var err error
-	if req.ConfigID != "" {
-		prov, err = a.reg.Get(req.ConfigID)
-	}
-	if prov == nil || err != nil {
-		prov, _, err = a.reg.GetAny()
-	}
-	if prov == nil || err != nil {
-		OK(w, M{"suggestions": []string{}, "note": "no llm provider"})
-		return
-	}
-
-	sugs := GenerateFollowups(r.Context(), prov, req.Model, user, assistant)
+	sugs := GenerateFollowupsWithFallback(r.Context(), a.reg, req.ConfigID, user, assistant)
 	OK(w, M{"suggestions": sugs})
 }
 
-// GenerateFollowups runs the suggest-3-prompts call against the given provider
-// and returns the parsed list. Caps output (MaxTokens=120, Temperature=0) so
-// the call returns in well under a second on most providers — important
-// because this fires on every assistant turn and the chips need to land
-// promptly after stream_done. Empty slice on any failure (best-effort).
-func GenerateFollowups(ctx context.Context, prov provider.LLMProvider, model, userMsg, assistantMsg string) []string {
-	if prov == nil || strings.TrimSpace(assistantMsg) == "" {
+// GenerateFollowupsWithFallback walks a ranked provider chain (cheap
+// non-reasoning preferred, agent's own provider as last resort) until one
+// returns a parseable list. Each candidate gets a budget appropriate to
+// its kind: 120 tokens for direct models, 800 for reasoning models that
+// must spend most of their allowance on hidden thinking.
+//
+// Why a chain at all: the agent's primary LLM is often a reasoning model
+// (DeepSeek-Reasoner / Qwen-thinking) where MaxTokens=120 leaves zero
+// room for actual content — the call returns "" and the user gets no
+// suggestion chips. Falling back to a plain chat model is faster AND
+// more reliable for this kind of one-shot lightweight task.
+func GenerateFollowupsWithFallback(ctx context.Context, reg *provider.Registry, preferredID, userMsg, assistantMsg string) []string {
+	if reg == nil || strings.TrimSpace(assistantMsg) == "" {
+		return []string{}
+	}
+	chain := reg.FollowupChain(preferredID)
+	if len(chain) == 0 {
+		// Last-ditch: any enabled provider.
+		if p, model, err := reg.GetAny(); err == nil && p != nil {
+			chain = []provider.FallbackCandidate{{Provider: p, Model: model, Reasoning: provider.IsReasoningModel(model)}}
+		}
+	}
+	for i, cand := range chain {
+		budget := 120
+		if cand.Reasoning {
+			// Reasoning models spend MaxTokens on hidden thinking first,
+			// content second. Need enough headroom for ~60 visible tokens
+			// of suggestions on top of the thinking budget.
+			budget = 800
+		}
+		sugs := callFollowup(ctx, cand.Provider, cand.Model, userMsg, assistantMsg, budget)
+		if len(sugs) > 0 {
+			if i > 0 {
+				slog.Info("followups: fallback hit", "rank", i, "config", cand.ConfigID, "model", cand.Model)
+			}
+			return sugs
+		}
+	}
+	return []string{}
+}
+
+// callFollowup runs the actual one-shot call. Empty slice on any failure
+// — caller's job to try the next candidate in the chain.
+func callFollowup(ctx context.Context, prov provider.LLMProvider, model, userMsg, assistantMsg string, maxTokens int) []string {
+	if prov == nil {
 		return []string{}
 	}
 	temp := 0.0
-	prompt := buildFollowupPrompt(userMsg, assistantMsg)
 	resp, err := prov.Chat(ctx, provider.ChatRequest{
-		Messages:    []provider.Message{{Role: "user", Content: prompt}},
+		Messages:    []provider.Message{{Role: "user", Content: buildFollowupPrompt(userMsg, assistantMsg)}},
 		Model:       model,
 		Temperature: &temp,
-		MaxTokens:   120,
+		MaxTokens:   maxTokens,
 	})
 	if err != nil || resp == nil {
-		slog.Warn("followups: llm call failed", "err", err)
+		slog.Warn("followups: llm call failed", "model", model, "err", err)
 		return []string{}
 	}
 	sugs := parseFollowupList(resp.Content)
@@ -93,9 +113,22 @@ func GenerateFollowups(ctx context.Context, prov provider.LLMProvider, model, us
 		if len(raw) > 400 {
 			raw = raw[:400] + "…"
 		}
-		slog.Info("followups: parsed 0 from model output", "raw", raw)
+		slog.Info("followups: parsed 0 from model output", "model", model, "raw", raw, "reasoning_len", len(resp.Reasoning))
 	}
 	return sugs
+}
+
+// GenerateFollowups is the legacy single-provider entry point kept for the
+// actor's in-process path. New code should use GenerateFollowupsWithFallback.
+func GenerateFollowups(ctx context.Context, prov provider.LLMProvider, model, userMsg, assistantMsg string) []string {
+	if prov == nil || strings.TrimSpace(assistantMsg) == "" {
+		return []string{}
+	}
+	maxTokens := 120
+	if provider.IsReasoningModel(model) {
+		maxTokens = 800
+	}
+	return callFollowup(ctx, prov, model, userMsg, assistantMsg, maxTokens)
 }
 
 func buildFollowupPrompt(userMsg, assistantMsg string) string {

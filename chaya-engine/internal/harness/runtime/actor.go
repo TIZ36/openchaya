@@ -746,6 +746,12 @@ func lastUserText(msgs []provider.Message) string {
 // publishFollowups runs the suggestion call in the background and emits an
 // `agent_followups` event on the conversation hub when results arrive. Empty
 // list ⇒ no event (the UI keeps the slot empty rather than rendering nothing).
+//
+// Routes through GenerateFollowupsWithFallback so a reasoning-model agent
+// (DeepSeek-Reasoner / Qwen-thinking) doesn't silently lose followups when
+// the 120-token budget gets eaten by hidden thinking. The chain prefers a
+// non-reasoning sibling config; falls back to the agent's own model with
+// a relaxed budget if that's the only one available.
 func (a *Actor) publishFollowups(convID, msgID, userMsg, asstMsg string) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -754,8 +760,15 @@ func (a *Actor) publishFollowups(convID, msgID, userMsg, asstMsg string) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	prov, model := a.resolveLLM()
-	sugs := api.GenerateFollowups(ctx, prov, model, userMsg, asstMsg)
+
+	var sugs []string
+	if a.Registry != nil {
+		sugs = api.GenerateFollowupsWithFallback(ctx, a.Registry, a.Config.LLMConfigID, userMsg, asstMsg)
+	} else {
+		// No registry → fall back to the actor's directly-injected provider.
+		prov, model := a.resolveLLM()
+		sugs = api.GenerateFollowups(ctx, prov, model, userMsg, asstMsg)
+	}
 	if len(sugs) == 0 {
 		return
 	}
