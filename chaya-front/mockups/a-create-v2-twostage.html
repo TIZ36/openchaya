@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Chaya · 创作 v2 · Two Stage</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Young+Serif&family=Commissioner:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/style.css" rel="stylesheet">
+<link rel="stylesheet" href="./_shared.css">
+<style>
+  /* ================================================================
+     v2 — Two Stage
+     左：上中下三段
+        ▸ 上 — 提示词稿纸（最大）
+        ▸ 中 — 参考图条（横向、薄薄一条；每张悬浮显示 directive）
+        ▸ 下 — 一行 chips：风格 / 尺寸 / 模型 / 数量 / 负面（点开 inline drawer）
+     右：流式结果列（最新一张永远在顶；完成一张就插入）
+     ================================================================ */
+  .content { padding: 0; display: grid; grid-template-columns: 1fr 380px; overflow: hidden; height: 100%; }
+
+  /* ---------- LEFT — composition ---------- */
+  .composer { display: grid; grid-template-rows: 1fr auto auto auto; overflow: hidden; }
+
+  .prompt-area {
+    overflow-y: auto;
+    padding: 36px 56px 24px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .prompt-eyebrow { display: flex; justify-content: space-between; align-items: baseline; }
+  .prompt-eyebrow .lbl { font-size: 10.5px; letter-spacing: 0.22em; color: var(--pencil); text-transform: uppercase; }
+  .prompt-eyebrow .hint { font-family: var(--display); font-style: italic; color: var(--marginalia-ink); font-size: 12px; }
+  .prompt-textarea {
+    width: 100%; background: transparent; border: 0; outline: none;
+    font-family: var(--display); font-size: 19px; line-height: 1.9; color: var(--ink-strong);
+    resize: none; min-height: 220px;
+    background-image: repeating-linear-gradient(transparent, transparent 35px, color-mix(in oklch, var(--rule) 60%, transparent) 35px, color-mix(in oklch, var(--rule) 60%, transparent) 36px);
+    background-position: 0 2px;
+  }
+  .prompt-textarea::placeholder { color: var(--pencil-soft); font-style: italic; }
+
+  /* ---------- REFS — horizontal thin strip ---------- */
+  .refs {
+    border-top: 1px solid var(--rule);
+    padding: 14px 56px;
+    display: flex; align-items: center; gap: 12px;
+    background: color-mix(in oklch, var(--paper) 50%, var(--page));
+  }
+  .refs-label { font-size: 10.5px; letter-spacing: 0.22em; color: var(--pencil); text-transform: uppercase; white-space: nowrap; }
+  .refs-row { display: flex; gap: 8px; overflow-x: auto; flex: 1; padding: 2px 0; }
+  .ref-card {
+    position: relative; flex: 0 0 auto;
+    width: 72px; height: 72px; border-radius: 2px; overflow: hidden;
+    border: 1px solid var(--rule-strong); cursor: pointer;
+  }
+  .ref-card img { width: 100%; height: 100%; object-fit: cover; }
+  .ref-card .hash { position: absolute; top: 4px; left: 4px; background: color-mix(in oklch, var(--ink) 75%, transparent); color: var(--paper); font-family: var(--mono); font-size: 9.5px; padding: 1px 5px; border-radius: 1px; }
+  .ref-card .tick { position: absolute; bottom: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--status-success); }
+  .ref-card.has-dir { box-shadow: inset 0 0 0 1px var(--accent); }
+  .ref-card .x { position: absolute; top: 2px; right: 2px; width: 16px; height: 16px; display: grid; place-items: center; background: var(--page); color: var(--pencil); border-radius: 1px; opacity: 0; transition: opacity 180ms var(--ease); font-size: 11px; }
+  .ref-card:hover .x { opacity: 1; }
+  /* directive popover — appears on hover/focus, anchored to ref card */
+  .ref-card .dir-pop {
+    position: absolute; bottom: calc(100% + 6px); left: 0; min-width: 220px;
+    background: var(--page-elev); border: 1px solid var(--rule-strong); border-radius: 2px;
+    padding: 8px 10px; box-shadow: 0 6px 20px oklch(0.18 0.02 310 / 0.12);
+    font-family: var(--display); font-size: 12.5px; color: var(--ink); font-style: italic;
+    display: none; z-index: 5;
+  }
+  .ref-card:hover .dir-pop { display: block; }
+  .ref-add {
+    flex: 0 0 auto; width: 72px; height: 72px; border-radius: 2px;
+    border: 1px dashed var(--rule-strong); background: transparent;
+    display: grid; place-items: center; cursor: pointer;
+    font-family: var(--display); font-size: 11px; color: var(--pencil);
+    line-height: 1.2; text-align: center;
+  }
+  .ref-add:hover { border-color: var(--accent); color: var(--accent); }
+  .ref-add .plus { font-size: 18px; line-height: 1; display: block; margin-bottom: 2px; color: var(--pencil-soft); }
+
+  /* ---------- CHIPS bar ---------- */
+  .chips-bar {
+    border-top: 1px solid var(--rule);
+    background: var(--page);
+    padding: 12px 56px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+  }
+  .chip-set {
+    display: inline-flex; align-items: baseline; gap: 8px;
+    padding: 7px 12px; border: 1px solid var(--rule-strong); border-radius: 2px;
+    background: var(--page-elev); cursor: pointer;
+    font-family: var(--display); font-size: 13px;
+    transition: border-color 180ms var(--ease);
+  }
+  .chip-set:hover { border-color: var(--accent); }
+  .chip-set .k { font-size: 10px; letter-spacing: 0.18em; color: var(--pencil); text-transform: uppercase; font-family: var(--sans); }
+  .chip-set .v { color: var(--ink-strong); }
+  .chip-set.active { border-color: var(--accent); }
+  .chip-set.active .v { color: var(--accent); }
+  .chip-set.empty .v { color: var(--pencil-soft); font-style: italic; }
+
+  /* inline drawer — slides down under chips when one is open */
+  .drawer {
+    border-top: 1px solid var(--rule);
+    background: color-mix(in oklch, var(--accent-soft) 50%, var(--page));
+    padding: 18px 56px;
+  }
+  .drawer h4 { font-family: var(--display); font-size: 14px; color: var(--ink-strong); margin-bottom: 4px; }
+  .drawer .desc { font-size: 12px; color: var(--pencil); font-style: italic; margin-bottom: 12px; }
+
+  .drawer-style { display: grid; grid-template-columns: 1fr 280px; gap: 18px; }
+  .drawer-style textarea {
+    background: var(--paper); border: 1px solid var(--rule-strong); border-radius: 2px;
+    padding: 10px 12px; font-family: var(--display); font-size: 13px;
+    width: 100%; min-height: 84px; resize: vertical; outline: none;
+  }
+  .drawer-style textarea:focus { border-color: var(--accent); }
+  .drawer-preset { display: flex; flex-direction: column; gap: 10px; }
+  .preset-group { font-size: 10px; letter-spacing: 0.18em; color: var(--pencil-soft); text-transform: uppercase; }
+  .preset-row { display: flex; flex-wrap: wrap; gap: 4px; }
+  .preset-pill { font-family: var(--display); font-size: 12px; padding: 4px 9px; border: 1px solid var(--rule-strong); border-radius: 2px; background: var(--paper); cursor: pointer; color: var(--ink); }
+  .preset-pill.sel { background: var(--accent); color: var(--paper); border-color: var(--accent); }
+  .preset-pill.mine { border-style: dashed; }
+
+  /* ---------- SEND footer ---------- */
+  .send-foot {
+    border-top: 1px solid var(--rule);
+    padding: 14px 56px;
+    display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 20px;
+    background: color-mix(in oklch, var(--paper) 50%, var(--page));
+  }
+  .send-foot .cost-line { display: flex; align-items: baseline; gap: 10px; font-size: 12px; color: var(--pencil); font-family: var(--mono); letter-spacing: 0.06em; }
+  .send-foot .cost-line strong { font-family: var(--display); font-size: 16px; color: var(--accent); font-weight: 400; }
+  .send-btn { padding: 13px 28px; background: var(--accent); color: var(--paper); border: 0; border-radius: 2px; cursor: pointer; font-family: var(--display); font-size: 15px; letter-spacing: 0.02em; box-shadow: 0 1px 0 color-mix(in oklch, var(--ink) 25%, transparent), 0 2px 6px oklch(0.18 0.02 310 / 0.12); }
+  .send-btn:hover { background: var(--accent-h); }
+
+  /* ---------- RIGHT — streaming results ---------- */
+  .results { border-left: 1px solid var(--rule); overflow-y: auto; padding: 24px 20px; background: var(--page); display: flex; flex-direction: column; gap: 22px; }
+  .results-head { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: 8px; border-bottom: 1px solid var(--rule); }
+  .results-head h3 { font-family: var(--display); font-size: 15px; color: var(--ink-strong); }
+  .results-head .meta { font-family: var(--mono); font-size: 10px; color: var(--pencil); letter-spacing: 0.08em; text-transform: uppercase; }
+
+  .plate {
+    position: relative; border-radius: 2px; overflow: hidden;
+    background: var(--paper); border: 1px solid var(--rule);
+    animation: settle 320ms var(--ease);
+  }
+  @keyframes settle { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .plate img { width: 100%; display: block; }
+  .plate .stamp { position: absolute; top: 8px; left: 8px; background: color-mix(in oklch, var(--ink) 75%, transparent); color: var(--paper); font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; padding: 2px 7px; border-radius: 1px; }
+  .plate .below { padding: 8px 10px; font-family: var(--display); font-style: italic; font-size: 12px; color: var(--pencil); display: flex; justify-content: space-between; border-top: 1px solid var(--rule); background: var(--page-elev); }
+
+  .plate.pending {
+    aspect-ratio: 1;
+    background:
+      repeating-linear-gradient(135deg, color-mix(in oklch, var(--rule) 60%, transparent), color-mix(in oklch, var(--rule) 60%, transparent) 6px, transparent 6px, transparent 12px);
+    display: grid; place-items: center;
+  }
+  .plate.pending .mark { font-family: var(--display); font-style: italic; color: var(--pencil); font-size: 12px; }
+
+  .stream-banner { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--pencil); font-family: var(--mono); letter-spacing: 0.06em; padding: 4px 0; }
+  .stream-banner .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s var(--ease) infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="wordmark">cha<span>ya</span></div>
+    <div class="tagline">Atelier</div>
+    <svg class="hand-rule" viewBox="0 0 200 6" width="200" height="6"><path d="M2 3 Q 60 0, 120 3 T 198 3" stroke="oklch(0.85 0.01 310)" fill="none" stroke-width="1.2"/></svg>
+    <div class="side-label">Chapters</div>
+    <div class="side-nav">
+      <div class="nav-item"><span class="num">I</span><span class="name">对话</span><span class="sub">/chat</span></div>
+      <div class="nav-item active"><span class="num">V</span><span class="name">创作</span><span class="sub">/create</span></div>
+      <div class="nav-item"><span class="num">VI</span><span class="name">作品集</span><span class="sub">/gallery</span></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <div class="crumb">Chapter V · Atelier · <em style="font-family:var(--display);font-style:italic;color:var(--marginalia-ink);text-transform:none;letter-spacing:0;">v2 two-stage</em></div>
+        <h1>画一张</h1>
+        <div class="subtitle">上面写词，下面捏参数。一张画好就贴出来一张。</div>
+      </div>
+      <div class="meta">gemini-2.5-flash-image · 1:1</div>
+    </header>
+
+    <div class="content">
+      <!-- ============ COMPOSER ============ -->
+      <section class="composer">
+        <div class="prompt-area">
+          <div class="prompt-eyebrow">
+            <span class="lbl">你想画什么</span>
+            <span class="hint">用 #1 #2 指代参考图</span>
+          </div>
+          <textarea class="prompt-textarea" placeholder="例：一间藏在巷子里的小茶馆…">把 #1 的脸用 #2 的笔触画出来，背景换成傍晚的雨。</textarea>
+        </div>
+
+        <!-- REFS strip -->
+        <div class="refs">
+          <span class="refs-label">参考 · 3</span>
+          <div class="refs-row">
+            <div class="ref-card has-dir" title="点开放大 · 悬停看用法">
+              <img src="https://images.unsplash.com/photo-1502823403499-6ccfcf4fb453?w=200&h=200&fit=crop" alt="">
+              <span class="hash">#1</span>
+              <span class="tick"></span>
+              <span class="x">×</span>
+              <span class="dir-pop">用它的脸</span>
+            </div>
+            <div class="ref-card has-dir">
+              <img src="https://images.unsplash.com/photo-1547826039-bfc35e0f1ea8?w=200&h=200&fit=crop" alt="">
+              <span class="hash">#2</span>
+              <span class="tick"></span>
+              <span class="x">×</span>
+              <span class="dir-pop">借它的笔触和颜色</span>
+            </div>
+            <div class="ref-card">
+              <img src="https://images.unsplash.com/photo-1519681393784-d120267933ba?w=200&h=200&fit=crop" alt="">
+              <span class="hash">#3</span>
+              <span class="x">×</span>
+              <span class="dir-pop" style="font-style:normal;color:var(--pencil-soft);">（没写用法）</span>
+            </div>
+            <button class="ref-add"><span class="plus">＋</span>加参考</button>
+          </div>
+        </div>
+
+        <!-- CHIPS BAR — secondary settings -->
+        <div class="chips-bar">
+          <button class="chip-set active"><span class="k">风格</span><span class="v">水墨</span></button>
+          <button class="chip-set"><span class="k">尺寸</span><span class="v">1:1</span></button>
+          <button class="chip-set"><span class="k">模型</span><span class="v">nano-banana</span></button>
+          <button class="chip-set"><span class="k">数量</span><span class="v">× 4</span></button>
+          <button class="chip-set empty"><span class="k">不要</span><span class="v">（空）</span></button>
+        </div>
+
+        <!-- DRAWER (showing style open) -->
+        <div class="drawer">
+          <h4>风格 · 笔触</h4>
+          <div class="desc">点预设当起点；随便改；满意了存下来下次用。</div>
+          <div class="drawer-style">
+            <textarea>chinese ink painting, traditional brushwork, on rice paper, soft greys, a single red seal in the corner</textarea>
+            <div class="drawer-preset">
+              <div class="preset-group">内置</div>
+              <div class="preset-row">
+                <button class="preset-pill sel">水墨</button>
+                <button class="preset-pill">油画</button>
+                <button class="preset-pill">照片</button>
+                <button class="preset-pill">素描</button>
+                <button class="preset-pill">插画</button>
+                <button class="preset-pill">日式</button>
+              </div>
+              <div class="preset-group">我的</div>
+              <div class="preset-row">
+                <button class="preset-pill mine">我的水彩</button>
+                <button class="preset-pill mine">80s 海报</button>
+                <button class="preset-pill mine" style="opacity:0.6;">＋ 存为预设</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- SEND -->
+        <div class="send-foot">
+          <div class="cost-line">
+            <span>4 张 × ¥0.20 =</span><strong>¥0.80</strong>
+            <span style="color:var(--pencil-soft);">· 3 张参考会一起寄出</span>
+          </div>
+          <button class="send-btn">寄出 →</button>
+        </div>
+      </section>
+
+      <!-- ============ STREAMING RESULTS ============ -->
+      <aside class="results">
+        <div class="results-head">
+          <h3>最近</h3>
+          <span class="meta">auto-saved</span>
+        </div>
+
+        <div class="stream-banner">
+          <span class="pulse"></span>
+          <span>正在画 · 已收到 2 / 4</span>
+        </div>
+
+        <!-- streaming: latest at top, one at a time -->
+        <div class="plate">
+          <span class="stamp">#2 · 04s · just now</span>
+          <img src="https://images.unsplash.com/photo-1542293787938-c9e299b88062?w=400&h=400&fit=crop" alt="">
+          <div class="below"><span>茶馆 · 慢</span><span>1:1 · 水墨</span></div>
+        </div>
+        <div class="plate">
+          <span class="stamp">#1 · 03s</span>
+          <img src="https://images.unsplash.com/photo-1545048702-79362596cdc9?w=400&h=400&fit=crop" alt="">
+          <div class="below"><span>茶馆 · 慢</span><span>1:1 · 水墨</span></div>
+        </div>
+        <div class="plate pending"><span class="mark">#3 画着…</span></div>
+        <div class="plate pending"><span class="mark">#4 等着</span></div>
+
+        <div style="height:8px;"></div>
+        <div class="results-head" style="border-bottom:1px dashed var(--rule);">
+          <h3 style="font-size:13px;color:var(--pencil);">更早</h3>
+          <span class="meta">14:02</span>
+        </div>
+        <div class="plate">
+          <img src="https://images.unsplash.com/photo-1513506003901-1e6a229e2d15?w=400&h=400&fit=crop" alt="">
+          <div class="below"><span>书桌台灯</span><span>1:1 · 照片</span></div>
+        </div>
+      </aside>
+    </div>
+  </main>
+</div>
+</body>
+</html>
