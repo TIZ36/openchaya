@@ -102,11 +102,6 @@ func keywordHit(msgLower string, keywords []string) bool {
 	return false
 }
 
-// FormatMatchForPrompt renders a topology Consult hit for system prompt injection (Orchestrator).
-func FormatMatchForPrompt(m *Match) string {
-	return FormatMatchForPromptEnriched(m, nil, nil)
-}
-
 // FormatMatchForPromptEnriched adds human-readable tool/skill captions when maps are provided.
 // toolHints: MCP tool name → short description; skillHints: skill id → display name.
 func FormatMatchForPromptEnriched(m *Match, toolHints map[string]string, skillHints map[string]string) string {

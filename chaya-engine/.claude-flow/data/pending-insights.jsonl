@@ -84,3 +84,14 @@
 {"type":"edit","file":"/Users/lilithgames/aiproj/chaya-next/chaya-engine/internal/teahouse/stream.go","timestamp":1779781287210,"sessionId":null}
 {"type":"edit","file":"/Users/lilithgames/aiproj/chaya-next/chaya-engine/internal/teahouse/stream.go","timestamp":1779781810481,"sessionId":null}
 {"type":"edit","file":"/Users/lilithgames/aiproj/chaya-next/chaya-engine/internal/harness/runtime/actor.go","timestamp":1779781824437,"sessionId":null}
+{"type":"edit","file":"/Users/lilithgames/aiproj/chaya-next/chaya-engine/internal/harness/capability/media/capability.go","timestamp":1779787086677,"sessionId":null}
+{"type":"edit","file":"/Users/lilithgames/aiproj/chaya-next/chaya-engine/internal/channel/gemini/media.go","timestamp":1779787131279,"sessionId":null}
+{"type":"edit","file":"/Users/lilithgames/aiproj/chaya-next/chaya-engine/internal/channel/gemini/media.go","timestamp":1779787142912,"sessionId":null}
+{"type":"edit","file":"/Users/lilithgames/aiproj/chaya-next/chaya-engine/pkg/envelope/envelope.go","timestamp":1779787223087,"sessionId":null}
+{"type":"edit","file":"/Users/lilithgames/aiproj/chaya-next/chaya-engine/internal/harness/runtime/permission.go","timestamp":1779787232781,"sessionId":null}
+{"type":"edit","file":"/Users/lilithgames/aiproj/chaya-next/chaya-engine/internal/harness/capability/mcp/client.go","timestamp":1779787241515,"sessionId":null}
+{"type":"edit","file":"/Users/lilithgames/aiproj/chaya-next/chaya-engine/internal/harness/intelligence/doomloop.go","timestamp":1779787251633,"sessionId":null}
+{"type":"edit","file":"/Users/lilithgames/aiproj/chaya-next/chaya-engine/internal/harness/runtime/actor.go","timestamp":1779787308965,"sessionId":null}
+{"type":"edit","file":"/Users/lilithgames/aiproj/chaya-next/chaya-engine/internal/harness/intelligence/topology/consult.go","timestamp":1779787317959,"sessionId":null}
+{"type":"edit","file":"/Users/lilithgames/aiproj/chaya-next/chaya-engine/internal/harness/intelligence/topology/consolidate.go","timestamp":1779787340070,"sessionId":null}
+{"type":"edit","file":"/Users/lilithgames/aiproj/chaya-next/chaya-engine/internal/harness/intelligence/topology/consolidate.go","timestamp":1779787355926,"sessionId":null}

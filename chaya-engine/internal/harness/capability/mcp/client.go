@@ -115,10 +115,6 @@ func (c *Client) CallToolWithHeaders(ctx context.Context, toolName string, args 
 	}, extraHeaders)
 }
 
-func (c *Client) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	return c.callWithHeaders(ctx, method, params, nil)
-}
-
 func (c *Client) callWithHeaders(ctx context.Context, method string, params any, extraHeaders map[string]string) (json.RawMessage, error) {
 	reqID := c.reqID.Add(1)
 	rpcReq := JSONRPCRequest{

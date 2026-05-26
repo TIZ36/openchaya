@@ -32,10 +32,9 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       output: {
-        // Pin React/Router into a long-cached vendor chunk so it survives
-        // feature deploys; pages already split via React.lazy in App.tsx.
+        // Pin React into a long-cached vendor chunk so it survives feature deploys.
         manualChunks: {
-          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-react': ['react', 'react-dom'],
         },
       },
     },

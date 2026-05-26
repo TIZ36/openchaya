@@ -38,11 +38,6 @@ func (d *DoomLoopDetector) Record(toolName, args string) {
 	}
 }
 
-// Reset clears the history.
-func (d *DoomLoopDetector) Reset() {
-	d.recentCalls = nil
-}
-
 func hash(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:8])

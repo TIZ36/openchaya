@@ -70,16 +70,6 @@ func matchPattern(pattern, value string) bool {
 	return matched
 }
 
-// Merge combines multiple rulesets. Later rulesets take priority (prepended).
-func Merge(rulesets ...Ruleset) Ruleset {
-	var merged Ruleset
-	// Reverse order: last ruleset has highest priority
-	for i := len(rulesets) - 1; i >= 0; i-- {
-		merged = append(merged, rulesets[i]...)
-	}
-	return merged
-}
-
 // Presets
 
 // PrimaryRuleset gives full access (PrimaryAgent default).

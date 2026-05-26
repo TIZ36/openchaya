@@ -947,10 +947,6 @@ func (a *Actor) publishPipelineStepWithType(convID, messageID, msg, typ string) 
 	a.publishPipelineStepWithTypeDetail(convID, messageID, msg, "", typ)
 }
 
-func (a *Actor) publishPipelineStepWithDetail(convID, msg, detail string) {
-	a.publishPipelineStepWithTypeDetail(convID, "", msg, detail, "step")
-}
-
 func (a *Actor) publishPipelineStepWithTypeDetail(convID, messageID, msg, detail, typ string) {
 	if a.Hub == nil || strings.TrimSpace(msg) == "" {
 		return

@@ -83,14 +83,6 @@ func Task(from, to, convID, body string) *Envelope {
 	return e
 }
 
-// Result creates a result envelope (SubAgent → PrimaryAgent).
-func Result(from, to, replyTo, body string) *Envelope {
-	e := New(TypeResult, from, to)
-	e.ReplyTo = replyTo
-	e.Body = body
-	return e
-}
-
 // WithData attaches structured data to the envelope.
 func (e *Envelope) WithData(v any) *Envelope {
 	e.Data, _ = json.Marshal(v)

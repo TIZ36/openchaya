@@ -41,20 +41,6 @@ func NewManager(db *gorm.DB, agentID string) *Manager {
 	return m
 }
 
-// RecordTrace saves a trace and updates edge weights in real-time.
-func (m *Manager) RecordTrace(trace *InteractionTrace) {
-	trace.AgentID = m.agentID
-	if err := m.traceStore.Save(trace); err != nil {
-		slog.Warn("save trace", "err", err)
-	}
-	// Real-time edge weight update could go here
-}
-
-// Consult queries the topology for the user message (zero LLM).
-func (m *Manager) Consult(userMsg string) *Match {
-	return Consult(m.graph, userMsg)
-}
-
 // Consolidate triggers LLM-assisted graph refinement.
 // Called periodically (daily cron) or when pending traces exceed threshold.
 // The actual LLM call is injected as a function to avoid circular deps.
@@ -285,9 +271,4 @@ func (m *Manager) saveToDB() {
 			"built_at": time.Now(),
 		})
 	}
-}
-
-// GetGraph returns the current graph (for API/visualization).
-func (m *Manager) GetGraph() *Graph {
-	return m.graph
 }

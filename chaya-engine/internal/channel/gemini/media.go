@@ -2,8 +2,6 @@ package gemini
 
 import (
 	"context"
-	"encoding/json"
-	"strings"
 
 	"google.golang.org/genai"
 )
@@ -77,78 +75,6 @@ func RewritePrompt(ctx context.Context, c *genai.Client, model, userPrompt, aspe
 		return "", err
 	}
 	return text, nil
-}
-
-// SuggestFollowups reads the latest user+assistant turn and asks
-// gemini-2.5-flash for a few natural follow-up prompts the user might want
-// to send next. Tiny call (~400 tokens out), cheap and async. Failure
-// returns an empty list — the caller treats it as "no suggestions".
-func SuggestFollowups(ctx context.Context, c *genai.Client, model, userMsg, assistantMsg string) ([]string, error) {
-	if model == "" {
-		model = "gemini-2.5-flash"
-	}
-	meta := `You are a conversation UX helper. Given the last turn between a user and an AI assistant, propose 3 natural follow-up prompts the user is MOST likely to want next.
-
-Rules:
-- Match the language of the user's last message (中文 → 中文, English → English).
-- Each suggestion ≤ 15 words / 20 chars. Conversational phrasing, first-person from the user.
-- Must extend the thread forward — clarify, drill down, or ask for an obvious next step. Never repeat the user's own question.
-- No greetings, no emojis, no numbering.
-- Output ONLY a JSON array of strings like ["...", "...", "..."]. No prose, no markdown fence.
-
-Last user message:
-"""` + userMsg + `"""
-
-Last assistant reply:
-"""` + assistantMsg + `"""`
-	body := map[string]any{
-		"contents": []any{
-			map[string]any{
-				"role":  "user",
-				"parts": []any{map[string]any{"text": meta}},
-			},
-		},
-		"generationConfig": map[string]any{
-			"responseModalities": []any{"TEXT"},
-			"temperature":        0.6,
-			"maxOutputTokens":    200,
-		},
-	}
-	cfg := c.ClientConfig()
-	raw, err := generateContentRESTMap(ctx, cfg, model, body)
-	if err != nil {
-		return nil, err
-	}
-	_, text, err := extractMediaFromResponseMap(ctx, c, raw)
-	if err != nil {
-		return nil, err
-	}
-	return parseFollowupJSON(text), nil
-}
-
-// parseFollowupJSON is forgiving: some models wrap the array in ```json fences
-// or emit a trailing period. We extract the outermost [...] and parse.
-func parseFollowupJSON(text string) []string {
-	i := strings.Index(text, "[")
-	j := strings.LastIndex(text, "]")
-	if i < 0 || j <= i {
-		return nil
-	}
-	var arr []string
-	if err := json.Unmarshal([]byte(text[i:j+1]), &arr); err != nil {
-		return nil
-	}
-	out := make([]string, 0, len(arr))
-	for _, s := range arr {
-		s = strings.TrimSpace(s)
-		if s != "" && len([]rune(s)) <= 40 {
-			out = append(out, s)
-		}
-		if len(out) >= 3 {
-			break
-		}
-	}
-	return out
 }
 
 // EditImage uses multimodal generateContent (REST) with reference images (legacy-compatible).
