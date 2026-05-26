@@ -7,6 +7,7 @@ import {
 } from '../services/smartnoteApi';
 import { getMe, listMemberships, updateMembership, type MembershipItem } from '../services/adminApi';
 import { getLLMConfigs, type LLMConfigFromDB } from '../services/llmApi';
+import type { TypeSpeed } from '../v2/typewriter';
 import { toast } from './ui/use-toast';
 import {
   PaperPage, PaperTopbar, PaperContent, PaperSplit, PaperTOC,
@@ -20,8 +21,23 @@ import {
 
 export type FontId = 'default' | 'pixel' | 'terminal' | 'rounded' | 'dotgothic' | 'silkscreen';
 
+export type { TypeSpeed };
+
+export type AppearanceMode = 'light' | 'dark' | 'system';
+export type ColorTheme = 'default' | 'anthropic' | 'cursor' | 'warm' | 'linear';
+/** 可单独开启毛玻璃的界面区域。 */
+export type GlassZone = 'composer' | 'sidebar' | 'topbar' | 'menu' | 'modal' | 'bubble';
+/** 毛玻璃整体强度（模糊+透明度）：subtle 轻 · standard 标准 · strong 强。 */
+export type GlassIntensity = 'subtle' | 'standard' | 'strong';
+
 export interface ClientSettings {
   font: FontId;
+  appearance?: AppearanceMode;
+  theme?: ColorTheme;
+  /** 开启了毛玻璃的区域列表。默认 composer / menu / modal。 */
+  glassZones?: GlassZone[];
+  /** 毛玻璃整体强度。默认 standard。 */
+  glassIntensity?: GlassIntensity;
   enableToolCalling: boolean;
   density?: 'relaxed' | 'normal' | 'compact';
   handRule?: boolean;
@@ -32,6 +48,14 @@ export interface ClientSettings {
   ragTopK?: number;
   ragScope?: 'auto' | 'agent' | 'workspace';
   defaultLLMConfigId?: string;
+  /** Local Agents 默认 provider（本地功能，桌面版）。 */
+  localAgentProvider?: 'claude' | 'codex' | 'gemini';
+  /** 对话(闲聊 + agent) 出字平滑：开关 + 速度档。默认开 / 适中。 */
+  chatStreamSmooth?: boolean;
+  chatStreamSpeed?: TypeSpeed;
+  /** CLI(本地 Agent) 出字平滑：开关 + 速度档。默认开 / 适中。 */
+  cliStreamSmooth?: boolean;
+  cliStreamSpeed?: TypeSpeed;
 }
 
 interface SettingsPageProps {

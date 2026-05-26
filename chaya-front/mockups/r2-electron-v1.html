@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>Chaya · Electron · v1 minimal cream</title>
+<style>
+  /*
+    Electron 极简米白方案 v1
+    · 整窗一张米白，靠空白与极淡分隔线划分区域，无卡片阴影、无渐变、无 marginalia 暖黄
+    · 单一墨色 + 单一极淡分隔色 + 单一极淡背景层
+    · 字体：display 仅用于标题/标识，正文系统 sans
+    · 保留 v1 对话区结构（用户/助手两栏，imgs 网格，hover 显示动作）
+  */
+  :root {
+    --cream:        #f7f4ed;     /* 主米白 */
+    --cream-elev:   #fbf8f2;     /* 略亮（对话流背景） */
+    --cream-sink:   #f1ede3;     /* 略暗（侧栏背景） */
+    --ink:          #2a2622;
+    --ink-strong:   #15110d;
+    --ink-soft:     #6b645a;
+    --ink-faint:    #9a9389;
+    --rule:         #ebe5d6;
+    --rule-strong:  #ddd5c1;
+    --accent:       #1f1b16;     /* 极简版"强调色"就是更黑的墨 */
+    --display: 'Young Serif', ui-serif, Georgia, 'LXGW WenKai', serif;
+    --sans: 'Inter', 'Commissioner', system-ui, -apple-system, 'PingFang SC', 'LXGW WenKai', sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; background: var(--cream); color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  button, input, textarea { font: inherit; color: inherit; }
+
+  /* ===== Electron titlebar (mac style) ===== */
+  .tb {
+    height: 38px; background: var(--cream-sink);
+    border-bottom: 1px solid var(--rule);
+    display: grid; grid-template-columns: 280px 1fr 280px; align-items: center;
+    -webkit-app-region: drag; user-select: none;
+  }
+  .tb .l { display: flex; align-items: center; gap: 8px; padding: 0 14px; }
+  .tb .dots { display: flex; gap: 6px; }
+  .tb .dots i { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+  .tb .dots i:nth-child(1) { background: #e26d5a; }
+  .tb .dots i:nth-child(2) { background: #e3b34a; }
+  .tb .dots i:nth-child(3) { background: #5ab27a; }
+  .tb .brand { font-family: var(--display); font-size: 14px; color: var(--ink-strong); margin-left: 12px; letter-spacing: 0.01em; }
+  .tb .m { text-align: center; font-size: 12px; color: var(--ink-soft); }
+  .tb .r { display: flex; align-items: center; justify-content: flex-end; gap: 14px; padding: 0 14px; -webkit-app-region: no-drag; }
+  .tb .r .tbtn { width: 24px; height: 24px; border: 0; background: transparent; cursor: pointer; color: var(--ink-soft); border-radius: 4px; display: grid; place-items: center; }
+  .tb .r .tbtn:hover { background: rgba(0,0,0,0.04); color: var(--ink); }
+  .tb .r .sb { font-size: 11px; color: var(--ink-faint); font-family: var(--mono); }
+
+  /* ===== shell ===== */
+  .app { display: grid; grid-template-columns: 280px 1fr; height: calc(100vh - 38px); }
+
+  /* ===== sidebar — sink shade, no card chrome ===== */
+  .side {
+    background: var(--cream-sink);
+    border-right: 1px solid var(--rule);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .side .sec { padding: 14px 16px 6px; font-size: 10.5px; letter-spacing: 0.18em; color: var(--ink-faint); text-transform: uppercase; }
+  .side .new {
+    margin: 10px 12px 6px;
+    padding: 8px 10px; background: transparent;
+    border: 1px solid var(--rule-strong); border-radius: 6px;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--ink); cursor: pointer;
+  }
+  .side .new:hover { background: rgba(0,0,0,0.025); }
+  .side .new .plus { font-family: var(--display); font-size: 16px; line-height: 1; color: var(--ink-soft); }
+  .side .search {
+    margin: 0 12px 4px;
+    padding: 6px 10px; background: transparent;
+    border: 1px solid transparent; border-radius: 6px;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12.5px; color: var(--ink-soft);
+  }
+  .side .search:hover, .side .search:focus-within { background: var(--cream); border-color: var(--rule); }
+  .side .search input { border: 0; outline: 0; background: transparent; flex: 1; }
+
+  .convs { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+  .conv {
+    padding: 7px 10px; border-radius: 6px; cursor: pointer;
+    display: flex; flex-direction: column; gap: 1px;
+    transition: background 120ms var(--ease);
+  }
+  .conv:hover { background: rgba(0,0,0,0.03); }
+  .conv.active { background: var(--cream-elev); }
+  .conv .row1 { display: flex; align-items: baseline; gap: 8px; }
+  .conv .t { font-size: 13.5px; color: var(--ink-strong); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+  .conv .when { font-size: 10.5px; color: var(--ink-faint); font-family: var(--mono); }
+  .conv .p { font-size: 12px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conv .dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--ink-soft); vertical-align: middle; margin-right: 5px; opacity: 0.55; }
+  .conv .dot.c { background: var(--accent); }   /* 创作类会话 */
+
+  /* agents at bottom — 极简：行而非卡片 */
+  .agents {
+    border-top: 1px solid var(--rule);
+    max-height: 42%; display: flex; flex-direction: column; min-height: 0;
+  }
+  .agents .hd { display: flex; align-items: center; padding: 10px 16px 4px; }
+  .agents .hd .l { font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-faint); }
+  .agents .hd .a { margin-left: auto; width: 22px; height: 22px; border-radius: 4px; border: 0; background: transparent; cursor: pointer; color: var(--ink-faint); font-size: 16px; line-height: 1; }
+  .agents .hd .a:hover { background: rgba(0,0,0,0.04); color: var(--ink); }
+  .agents .lst { overflow-y: auto; padding: 0 8px 8px; }
+  .agent {
+    display: grid; grid-template-columns: 24px 1fr auto; gap: 10px;
+    padding: 7px 8px; border-radius: 6px; cursor: pointer;
+    align-items: center;
+  }
+  .agent:hover { background: rgba(0,0,0,0.03); }
+  .agent.active { background: var(--cream-elev); }
+  .agent .av { width: 24px; height: 24px; border-radius: 4px; background: rgba(0,0,0,0.05); display: grid; place-items: center; font-family: var(--display); font-size: 12px; color: var(--ink); }
+  .agent.primary .av { background: var(--ink-strong); color: var(--cream); }
+  .agent .n { font-size: 13px; color: var(--ink-strong); }
+  .agent .s { font-size: 11px; color: var(--ink-faint); font-family: var(--mono); margin-top: 1px; }
+  .agent .cfg { font-size: 12px; color: var(--ink-faint); }
+  .agent:hover .cfg { color: var(--ink); }
+
+  .me-row {
+    border-top: 1px solid var(--rule);
+    padding: 10px 14px;
+    display: grid; grid-template-columns: 26px 1fr auto auto; gap: 10px; align-items: center;
+  }
+  .me-row .me { width: 26px; height: 26px; border-radius: 50%; background: rgba(0,0,0,0.06); display: grid; place-items: center; font-size: 12px; color: var(--ink-strong); font-family: var(--display); }
+  .me-row .who { font-size: 12.5px; color: var(--ink); }
+  .me-row .who small { display: block; color: var(--ink-faint); font-family: var(--mono); font-size: 10px; }
+  .me-row .ibtn { width: 24px; height: 24px; border-radius: 4px; border: 0; background: transparent; cursor: pointer; color: var(--ink-soft); display: grid; place-items: center; }
+  .me-row .ibtn:hover { background: rgba(0,0,0,0.04); color: var(--ink); }
+
+  /* ===== main chat ===== */
+  .chat { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; background: var(--cream); }
+  .chat-top { padding: 12px 28px; border-bottom: 1px solid var(--rule); display: flex; align-items: center; gap: 12px; }
+  .chat-top h2 { font-family: var(--display); font-size: 16px; color: var(--ink-strong); font-weight: 400; letter-spacing: 0.005em; }
+  .chat-top .sub { font-size: 12px; color: var(--ink-faint); margin-left: 4px; }
+  .chat-top .right { margin-left: auto; display: flex; gap: 4px; }
+  .ic { width: 28px; height: 28px; border: 0; background: transparent; cursor: pointer; color: var(--ink-soft); border-radius: 5px; display: grid; place-items: center; }
+  .ic:hover { background: rgba(0,0,0,0.04); color: var(--ink); }
+  .modepin {
+    margin-left: 8px;
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--rule-strong); font-size: 11.5px; color: var(--ink-soft);
+  }
+  .modepin .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink); }
+
+  /* === stream — 保留 v1 的对话区设计 === */
+  .stream { overflow-y: auto; padding: 26px 0 8px; background: var(--cream-elev); }
+  .msg-wrap { max-width: 760px; margin: 0 auto; padding: 0 28px; }
+  .msg { display: grid; grid-template-columns: 30px 1fr; gap: 14px; margin-bottom: 24px; }
+  .msg .av { width: 26px; height: 26px; border-radius: 5px; display: grid; place-items: center; font-family: var(--display); font-size: 11.5px; color: var(--cream); background: var(--ink-strong); margin-top: 2px; }
+  .msg.assistant .av { background: var(--ink); }
+  .msg .body .role { font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 4px; }
+  .msg .body p { font-size: 14.5px; color: var(--ink); line-height: 1.72; margin-bottom: 8px; }
+  .msg .body p.lead { font-family: var(--display); font-size: 15.5px; color: var(--ink-strong); }
+  .msg .body .imgs { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; margin-top: 10px; max-width: 580px; }
+  .msg .body .imgs .ph { aspect-ratio: 1/1; background: var(--cream-sink); border: 1px solid var(--rule); display: grid; place-items: center; font-family: var(--display); color: var(--ink-soft); font-size: 13px; border-radius: 3px; }
+  .msg .body .acts { display: flex; gap: 8px; margin-top: 8px; opacity: 0; transition: opacity 160ms var(--ease); }
+  .msg:hover .body .acts { opacity: 1; }
+  .msg .body .acts button { font-size: 11px; color: var(--ink-soft); background: transparent; border: 0; cursor: pointer; padding: 2px 6px; border-radius: 4px; }
+  .msg .body .acts button:hover { background: rgba(0,0,0,0.05); color: var(--ink); }
+
+  /* === composer === */
+  .composer-wrap { padding: 14px 28px 22px; background: var(--cream-elev); border-top: 1px solid var(--rule); }
+  .composer { max-width: 760px; margin: 0 auto; }
+  .shell {
+    border: 1px solid var(--rule-strong); border-radius: 10px; background: var(--cream);
+    transition: border-color 180ms var(--ease);
+    overflow: hidden;
+  }
+  .shell:focus-within { border-color: var(--ink); }
+
+  /* 创作配置面板：嵌入对话框上半，纯米白，分隔靠一条 hairline */
+  .cpane { display: none; padding: 12px 14px 12px; border-bottom: 1px solid var(--rule); }
+  .composer[data-mode="create"] .cpane { display: block; }
+  .cpane .hd { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .cpane .hd .t { font-family: var(--display); font-size: 13px; color: var(--ink-strong); }
+  .cpane .hd .h { font-size: 11px; color: var(--ink-faint); }
+  .cpane .hd .x { margin-left: auto; width: 22px; height: 22px; border-radius: 4px; border: 0; background: transparent; cursor: pointer; color: var(--ink-faint); }
+  .cpane .hd .x:hover { background: rgba(0,0,0,0.05); color: var(--ink); }
+
+  .cfg { display: flex; flex-wrap: wrap; gap: 6px 8px; }
+  .cchip {
+    display: inline-flex; align-items: baseline; gap: 6px;
+    padding: 4px 10px; border: 1px solid var(--rule-strong); border-radius: 999px;
+    background: transparent; cursor: pointer; font-size: 12.5px; color: var(--ink);
+  }
+  .cchip:hover { border-color: var(--ink); }
+  .cchip .k { color: var(--ink-faint); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; }
+  .cchip .v { color: var(--ink-strong); }
+  .cchip.empty .v { color: var(--ink-faint); font-style: italic; }
+  .cchip svg { stroke: currentColor; opacity: 0.5; }
+
+  .refs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .ref { display: grid; grid-template-columns: 28px 1fr auto; gap: 8px; padding: 4px 6px 4px 4px; border: 1px solid var(--rule); border-radius: 8px; background: var(--cream-elev); align-items: center; min-width: 230px; }
+  .ref .th { width: 28px; height: 28px; border-radius: 4px; background: var(--cream-sink); display: grid; place-items: center; color: var(--ink-soft); font-family: var(--display); font-size: 11px; }
+  .ref .dir { border: 0; outline: 0; background: transparent; font-size: 11.5px; color: var(--ink); }
+  .ref .dir::placeholder { color: var(--ink-faint); font-style: italic; }
+  .ref .x { color: var(--ink-faint); cursor: pointer; padding: 0 4px; font-size: 12px; }
+  .ref .x:hover { color: var(--ink); }
+  .ref.add { justify-content: center; border-style: dashed; min-width: 100px; padding: 6px 12px; color: var(--ink-faint); cursor: pointer; font-size: 12px; }
+  .ref.add:hover { color: var(--ink); border-color: var(--ink); }
+
+  /* prompt 输入 */
+  .pa { padding: 10px 14px 10px; }
+  .pa textarea { width: 100%; resize: none; border: 0; outline: 0; background: transparent; font-size: 14.5px; line-height: 1.65; color: var(--ink); min-height: 56px; max-height: 220px; }
+  .pa textarea::placeholder { color: var(--ink-faint); }
+  .row { display: flex; align-items: center; gap: 8px; padding: 4px 8px 8px; }
+  .row .l { display: flex; gap: 4px; align-items: center; flex: 1; }
+  .ib { width: 30px; height: 30px; border-radius: 6px; border: 0; background: transparent; cursor: pointer; color: var(--ink-soft); display: grid; place-items: center; }
+  .ib:hover { background: rgba(0,0,0,0.04); color: var(--ink); }
+  .mt { display: inline-flex; padding: 2px; background: rgba(0,0,0,0.04); border-radius: 999px; margin-left: 4px; }
+  .mt button { border: 0; background: transparent; padding: 4px 12px; border-radius: 999px; cursor: pointer; color: var(--ink-soft); font-size: 12.5px; }
+  .mt button.on { background: var(--cream); color: var(--ink-strong); box-shadow: 0 1px 0 var(--rule); }
+  .composer[data-mode="create"] .mt button.on { color: var(--ink-strong); }
+  .send { background: var(--ink-strong); color: var(--cream); border: 0; width: 32px; height: 32px; border-radius: 7px; cursor: pointer; display: grid; place-items: center; font-size: 14px; }
+  .send:hover { background: #000; }
+  .hint { max-width: 760px; margin: 8px auto 0; font-size: 11px; color: var(--ink-faint); text-align: center; font-family: var(--mono); }
+</style>
+</head>
+<body>
+  <!-- ===== titlebar ===== -->
+  <div class="tb">
+    <div class="l">
+      <div class="dots"><i></i><i></i><i></i></div>
+      <div class="brand">茶话 · Chaya</div>
+    </div>
+    <div class="m">海边小镇 · 黄昏插画</div>
+    <div class="r">
+      <span class="sb">● ws</span>
+      <button class="tbtn" title="历史">⌕</button>
+      <button class="tbtn" title="设置">⚙</button>
+    </div>
+  </div>
+
+  <div class="app">
+    <!-- ===== sidebar ===== -->
+    <aside class="side">
+      <button class="new"><span class="plus">＋</span><span>新会话</span></button>
+      <div class="search">
+        <span style="opacity:.6">⌕</span>
+        <input placeholder="搜索 / ⌘K" />
+      </div>
+
+      <div class="sec">今天</div>
+      <div class="convs">
+        <div class="conv active">
+          <div class="row1"><div class="t"><span class="dot c"></span>海边小镇 · 黄昏插画</div><div class="when">14:02</div></div>
+          <div class="p">把整体往暖橙拉一档，保留 #1 的安静笔触…</div>
+        </div>
+        <div class="conv">
+          <div class="row1"><div class="t"><span class="dot"></span>RAG 检索为什么 miss</div><div class="when">11:48</div></div>
+          <div class="p">ivfflat 列表数 100，召回提升明显</div>
+        </div>
+        <div class="conv">
+          <div class="row1"><div class="t"><span class="dot"></span>营销文案 · 春茶上新</div><div class="when">10:21</div></div>
+          <div class="p">换个含蓄的开头，避开"上新"二字</div>
+        </div>
+
+        <div class="sec" style="padding-left:10px;">本周</div>
+        <div class="conv">
+          <div class="row1"><div class="t"><span class="dot"></span>登录跳转 bug 复盘</div><div class="when">周三</div></div>
+          <div class="p">token refresh 在 401 时没清 stale</div>
+        </div>
+        <div class="conv">
+          <div class="row1"><div class="t"><span class="dot c"></span>字体配对的几个备选</div><div class="when">周二</div></div>
+          <div class="p">Young Serif + Inter 的组合再看一组</div>
+        </div>
+        <div class="conv">
+          <div class="row1"><div class="t"><span class="dot"></span>和小柚讨论会议纪要</div><div class="when">周一</div></div>
+          <div class="p">行动项分到 owner，下周三前</div>
+        </div>
+      </div>
+
+      <div class="agents">
+        <div class="hd">
+          <div class="l">Agents</div>
+          <button class="a" title="新建">＋</button>
+        </div>
+        <div class="lst">
+          <div class="agent primary active">
+            <div class="av">茶</div>
+            <div><div class="n">主・茶宴</div><div class="s">primary · MCP·3 · KB·2</div></div>
+            <div class="cfg">⋯</div>
+          </div>
+          <div class="agent">
+            <div class="av">绘</div>
+            <div><div class="n">画师・绘灯</div><div class="s">gemini · KB·画风手稿</div></div>
+            <div class="cfg">⋯</div>
+          </div>
+          <div class="agent">
+            <div class="av">史</div>
+            <div><div class="n">史官・修史</div><div class="s">claude · MCP·feishu</div></div>
+            <div class="cfg">⋯</div>
+          </div>
+          <div class="agent">
+            <div class="av">码</div>
+            <div><div class="n">码匠</div><div class="s">openai · MCP·gitlab</div></div>
+            <div class="cfg">⋯</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="me-row">
+        <div class="me">M</div>
+        <div class="who">mokk<small>1.2k tokens · 今天</small></div>
+        <button class="ibtn" title="设置">⚙</button>
+      </div>
+    </aside>
+
+    <!-- ===== chat ===== -->
+    <main class="chat">
+      <header class="chat-top">
+        <h2>海边小镇 · 黄昏插画</h2>
+        <span class="sub">绘灯</span>
+        <span class="modepin"><span class="dot"></span>创作</span>
+        <div class="right">
+          <button class="ic" title="搜索消息">⌕</button>
+          <button class="ic" title="分享">↗</button>
+          <button class="ic" title="更多">⋯</button>
+        </div>
+      </header>
+
+      <section class="stream">
+        <div class="msg-wrap">
+
+          <div class="msg user">
+            <div class="av">M</div>
+            <div class="body">
+              <div class="role">你</div>
+              <p>我想要一张海边小镇的黄昏插画，温暖的橙红，远处有灯塔。</p>
+            </div>
+          </div>
+
+          <div class="msg assistant">
+            <div class="av">绘</div>
+            <div class="body">
+              <div class="role">绘灯</div>
+              <p class="lead">理解了 — 我先按"黄昏暖橙 + 远处灯塔"出 4 张草图给你挑。</p>
+              <div class="imgs">
+                <div class="ph">#01</div>
+                <div class="ph">#02</div>
+                <div class="ph">#03</div>
+                <div class="ph">#04</div>
+              </div>
+              <div class="acts"><button>复制</button><button>引用</button><button>送入画廊</button></div>
+            </div>
+          </div>
+
+          <div class="msg user">
+            <div class="av">M</div>
+            <div class="body">
+              <div class="role">你</div>
+              <p>第 2 张构图不错，但灯笼有点冷。把整体往暖橙拉一档，保留这种安静的笔触。</p>
+            </div>
+          </div>
+
+          <div class="msg assistant">
+            <div class="av">绘</div>
+            <div class="body">
+              <div class="role">绘灯</div>
+              <p>好的，把 #02 作为参考重画一组，色温 +1，笔触保持柔和水彩。</p>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- composer -->
+      <div class="composer-wrap">
+        <div class="composer" data-mode="create">
+          <div class="shell">
+
+            <!-- 创作模式 → 上方配置面板 -->
+            <div class="cpane">
+              <div class="hd">
+                <span class="t">创作配置</span>
+                <span class="h">— 下方为正向提示词</span>
+                <button class="x" onclick="document.querySelector('.composer').dataset.mode='chat'">✕</button>
+              </div>
+              <div class="cfg">
+                <button class="cchip"><span class="k">风格</span><span class="v">柔和水彩 · 黄昏暖橙</span></button>
+                <button class="cchip"><span class="k">比例</span><span class="v">3:2</span></button>
+                <button class="cchip"><span class="k">数量</span><span class="v">4</span></button>
+                <button class="cchip"><span class="k">负面</span><span class="v">霓虹·过曝·锐利</span></button>
+                <button class="cchip empty"><span class="k">种子</span><span class="v">随机</span></button>
+              </div>
+              <div class="refs">
+                <div class="ref">
+                  <div class="th">#1</div>
+                  <input class="dir" value="保留构图，仅替换色温与人物剪影" />
+                  <span class="x">✕</span>
+                </div>
+                <div class="ref">
+                  <div class="th">#2</div>
+                  <input class="dir" placeholder="作为远景灯塔形状参考" />
+                  <span class="x">✕</span>
+                </div>
+                <div class="ref add">＋ 拖入或粘贴图片</div>
+              </div>
+            </div>
+
+            <!-- 正向 prompt -->
+            <div class="pa">
+              <textarea placeholder="描述你想要的画面…（即正向提示词）">把整体往暖橙拉一档，保留 #1 的安静笔触，远处灯塔参考 #2 的形状。海面反射柔一些。</textarea>
+            </div>
+            <div class="row">
+              <div class="l">
+                <button class="ib" title="附件">＋</button>
+                <button class="ib" title="语音">●</button>
+                <div class="mt">
+                  <button onclick="document.querySelector('.composer').dataset.mode='chat'">对话</button>
+                  <button class="on" onclick="document.querySelector('.composer').dataset.mode='create'">创作</button>
+                </div>
+              </div>
+              <button class="send" title="发送 ⌘↩">↑</button>
+            </div>
+
+          </div>
+          <div class="hint">⌘↩ 发送 · ⇧↩ 换行 · 拖入图片自动作为参考图 · 模型 / 密钥在「设置」管理</div>
+        </div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

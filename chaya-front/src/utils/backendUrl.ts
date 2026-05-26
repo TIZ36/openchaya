@@ -35,6 +35,11 @@ export function getBackendUrl(): string {
     if (protocol === 'file:' || !hostname) {
       return DEFAULT_HTTP_BACKEND;
     }
+    // 0.0.0.0 是 server bind 用地址，浏览器/Electron 当 client 时无法连接它；
+    // 这里规范化成 localhost 避免 ERR_CONNECTION_REFUSED。
+    if (hostname === '0.0.0.0') {
+      return `${protocol}//localhost:3002`;
+    }
     // 支持局域网访问：如果访问 http://192.168.x.x:5177，会自动使用 http://192.168.x.x:3002
     return `${protocol}//${hostname}:3002`;
   }

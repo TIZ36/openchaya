@@ -105,12 +105,25 @@ func extractMediaFromResponseMap(ctx context.Context, c *genai.Client, root map[
 	}
 	var media []MediaItem
 	var texts []string
+	// Collect finishReasons / blockReasons so we can return a meaningful
+	// error when Gemini produced nothing (safety refusal, prohibited
+	// content, recitation, etc). Otherwise the caller sees "media=[]" with
+	// no clue why.
+	var finishReasons []string
+	if pf, ok := root["promptFeedback"].(map[string]any); ok {
+		if br := strFrom(pf, "blockReason", "block_reason"); br != "" {
+			finishReasons = append(finishReasons, "promptBlocked:"+br)
+		}
+	}
 
 	cands, _ := root["candidates"].([]any)
 	for _, ca := range cands {
 		cmap, ok := ca.(map[string]any)
 		if !ok {
 			continue
+		}
+		if fr := strFrom(cmap, "finishReason", "finish_reason"); fr != "" && fr != "STOP" {
+			finishReasons = append(finishReasons, fr)
 		}
 		content, _ := cmap["content"].(map[string]any)
 		if content == nil {
@@ -163,6 +176,16 @@ func extractMediaFromResponseMap(ctx context.Context, c *genai.Client, root map[
 	}
 	if media == nil {
 		media = []MediaItem{}
+	}
+	// If we got no image AND Gemini set a non-STOP finish/block reason,
+	// surface it as an error so the UI can show why generation failed.
+	if len(media) == 0 && len(finishReasons) > 0 {
+		text := strings.TrimSpace(strings.Join(texts, "\n"))
+		msg := "Gemini 未返回图片 (" + strings.Join(finishReasons, ", ") + ")"
+		if text != "" {
+			msg += ": " + text
+		}
+		return media, text, fmt.Errorf("%s", msg)
 	}
 	return media, strings.Join(texts, "\n"), nil
 }

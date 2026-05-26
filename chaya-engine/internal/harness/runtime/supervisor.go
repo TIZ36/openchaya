@@ -82,6 +82,26 @@ func (s *Supervisor) GetActorByAgentID(agentID string) (*Actor, bool) {
 	return nil, false
 }
 
+// InvalidateConvHistory tells every live actor under this user to drop its
+// cached history for convID (next turn re-hydrates from the truncated DB).
+func (s *Supervisor) InvalidateConvHistory(convID string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.primary != nil && s.primary.Actor != nil {
+		s.primary.Actor.InvalidateHistoryFor(convID)
+	}
+	for _, h := range s.subActors {
+		if h.actor != nil {
+			h.actor.InvalidateHistoryFor(convID)
+		}
+	}
+	for _, h := range s.genericAgents {
+		if h.actor != nil {
+			h.actor.InvalidateHistoryFor(convID)
+		}
+	}
+}
+
 func NewSupervisor(ctx context.Context, userID string, hub *gateway.Hub, registry *provider.Registry, db *gorm.DB, orch *capability.Orchestrator, rdb *redis.Client) *Supervisor {
 	sCtx, sCancel := context.WithCancel(ctx)
 	return &Supervisor{

@@ -76,6 +76,26 @@ func loadOAuthAccessToken(rdb *redis.Client, tenantID, userID, mcpURLNorm string
 	return rec.AccessToken, nil
 }
 
+// oauthTokenState reports whether a usable token exists and, if not, whether
+// the cause is expiry (so the UI can distinguish "已过期 → 重新授权" from
+// "从未授权"). Unlike loadOAuthAccessToken it never returns an error for the
+// expired case — expiry is a normal, surfaceable state, not a failure.
+func oauthTokenState(rdb *redis.Client, tenantID, userID, mcpURLNorm string) (hasToken, expired bool) {
+	key := oauthTokenKey(tenantID, userID, mcpURLNorm)
+	raw, err := rdb.Get(context.Background(), key).Bytes()
+	if err != nil {
+		return false, false // redis.Nil (never authorized) or transient error
+	}
+	var rec oauthTokenRecord
+	if err := json.Unmarshal(raw, &rec); err != nil || rec.AccessToken == "" {
+		return false, false
+	}
+	if rec.ExpiresAt > 0 && time.Now().Unix() > rec.ExpiresAt {
+		return false, true // authorized once, but the access token lapsed
+	}
+	return true, false
+}
+
 // MCPOAuthAPI holds OAuth handlers for MCP streamable HTTP servers.
 // db + mcpReg are used after a successful token exchange to (a) look up the
 // server row by URL+tenant, then (b) clear its 5-minute cooldown so the
@@ -238,12 +258,12 @@ func (a *MCPOAuthAPI) tokenStatus(w http.ResponseWriter, r *http.Request) {
 		Fail(w, CodeBadRequest, "mcp_url 必填且需登录")
 		return
 	}
-	tok, err := loadOAuthAccessToken(a.rdb, tenantID, userID, mcpURL)
-	if err != nil {
-		Fail(w, CodeInternal, err.Error())
-		return
-	}
-	OK(w, map[string]any{"has_token": tok != "", "mcp_url": mcpURL})
+	hasToken, expired := oauthTokenState(a.rdb, tenantID, userID, mcpURL)
+	OK(w, map[string]any{
+		"has_token": hasToken,
+		"expired":   expired,
+		"mcp_url":   mcpURL,
+	})
 }
 
 func (a *MCPOAuthAPI) callbackGet(w http.ResponseWriter, r *http.Request) {

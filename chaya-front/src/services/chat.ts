@@ -109,6 +109,8 @@ export interface MessageExt {
   /** 用户对助手本条回复的评价（持久化在 messages.ext，供拓扑合并等使用） */
   assistant_feedback?: 'up' | 'down';
   assistant_feedback_at?: string;
+  /** 思考链（DeepSeek-Reasoner / o1 / Qwen-Thinking 等模型在正文前的推理流） */
+  reasoning?: string;
 }
 
 export interface Summary {
@@ -447,6 +449,18 @@ export async function deleteMessage(session_id: string, message_id: string): Pro
   });
   if (!response.ok) {
     throw new Error(`Failed to delete message: ${response.statusText}`);
+  }
+}
+
+/**
+ * 回退会话到某条消息：删除该条消息及其之后的所有消息（回退 / 回退并编辑用）。
+ * 后端按 created_at 截断，并失效在线 Actor 的缓存历史，使下一轮从 DB 重新装载。
+ */
+export async function truncateMessagesFrom(session_id: string, message_id: string): Promise<void> {
+  const url = `${API_BASE}/sessions/${encodeURIComponent(session_id)}/messages?from=${encodeURIComponent(message_id)}&inclusive=true`;
+  const response = await authFetch(url, { method: 'DELETE' });
+  if (!response.ok) {
+    throw new Error(`Failed to truncate messages: ${response.statusText}`);
   }
 }
 

@@ -305,6 +305,80 @@ func (r *Registry) AgentHarnessMCPServerIDs(agentID, tenantID string) map[string
 	return out
 }
 
+// MCPServerStatus describes why a bound MCP server is currently unusable.
+type MCPServerStatus struct {
+	ID        string
+	Name      string
+	Reason    string // human-readable, e.g. "access token 已过期，请重新授权"
+	NeedsAuth bool   // true when re-authorizing in the UI would fix it
+}
+
+// serverName resolves a server's display name from the DB; falls back to the ID.
+func (r *Registry) serverName(id string) string {
+	if r.db == nil {
+		return id
+	}
+	var name string
+	r.db.Model(&ServerConfig{}).Where("id = ?", id).Pluck("name", &name)
+	if name == "" {
+		return id
+	}
+	return name
+}
+
+// AgentBrokenMCPServers returns the agent's EXPLICITLY bound MCP servers that
+// currently can't serve tools, each with a human-readable reason. Cheap: OAuth
+// servers do a Redis token check (no network), static servers check in-memory
+// health. Returns nil when the agent has no explicit bindings — the tenant-wide
+// fallback is best-effort and not worth warning about. Lets callers tell the
+// user WHY a bound tool is silent instead of pretending it has no tools.
+func (r *Registry) AgentBrokenMCPServers(ctx context.Context, agentID, userID, tenantID string) []MCPServerStatus {
+	if r.db == nil {
+		return nil
+	}
+	bound := r.agentMCPServerIDs(agentID)
+	if len(bound) == 0 {
+		return nil
+	}
+	bound = r.FilterServerIDsByTenant(bound, tenantID)
+	if len(bound) == 0 {
+		return nil
+	}
+
+	r.mu.RLock()
+	clients := make(map[string]*Client, len(r.clients))
+	for id, c := range r.clients {
+		clients[id] = c
+	}
+	oauthMetas := make(map[string]*oauthServerMeta, len(r.oauthServers))
+	for id, m := range r.oauthServers {
+		oauthMetas[id] = m
+	}
+	r.mu.RUnlock()
+
+	var broken []MCPServerStatus
+	for id := range bound {
+		if meta, ok := oauthMetas[id]; ok {
+			tok, err := r.loadOAuthToken(ctx, tenantID, userID, meta.URL)
+			if err != nil {
+				broken = append(broken, MCPServerStatus{ID: id, Name: meta.Name, Reason: err.Error(), NeedsAuth: true})
+			} else if tok == "" {
+				broken = append(broken, MCPServerStatus{ID: id, Name: meta.Name, Reason: "尚未完成 OAuth 授权", NeedsAuth: true})
+			}
+			continue
+		}
+		if c, ok := clients[id]; ok {
+			if !c.Healthy() {
+				broken = append(broken, MCPServerStatus{ID: id, Name: c.Name, Reason: "无法连接到 MCP 服务", NeedsAuth: false})
+			}
+			continue
+		}
+		// Bound but not loaded into the registry (disabled or never connected).
+		broken = append(broken, MCPServerStatus{ID: id, Name: r.serverName(id), Reason: "MCP 服务未连接", NeedsAuth: false})
+	}
+	return broken
+}
+
 // ListToolsForHarness lists tools from MCP servers allowed for this agent and tenant.
 func (r *Registry) ListToolsForHarness(ctx context.Context, agentID string, timeout time.Duration, onProgress func(ToolsProgress), userID, tenantID string) []pkg.Tool {
 	allow := r.AgentHarnessMCPServerIDs(agentID, tenantID)

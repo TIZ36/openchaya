@@ -109,9 +109,12 @@ export const oauthApi = {
       '/api/mcp/oauth/authorize', body
     ),
 
-  /** Did the user complete the dance? Poll until has_token=true. */
+  /**
+   * Did the user complete the dance? Poll until has_token=true.
+   * `expired` distinguishes "授权过但 token 失效了 → 重新授权" from "从未授权".
+   */
   tokenStatus: (mcpUrl: string) =>
-    api.get<{ has_token: boolean; mcp_url: string }>(
+    api.get<{ has_token: boolean; expired?: boolean; mcp_url: string }>(
       `/api/mcp/oauth/token-status?mcp_url=${encodeURIComponent(mcpUrl)}`
     ),
 };

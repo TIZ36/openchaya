@@ -1,0 +1,1966 @@
+/* Chaya v2 — pure white minimal (ChatGPT desktop alignment).
+   Scoped to .chaya-v2 to coexist with the legacy Paper shell. */
+
+.chaya-v2 {
+  /* palette */
+  --c-bg:           #ffffff;
+  --c-sidebar:      #f9f9f9;
+  --c-ink:          #0d0d0d;
+  --c-ink-2:        #3c3c3c;
+  --c-ink-3:        #6e6e6e;
+  --c-ink-4:        #a4a4a4;
+  --c-hover:        #ececec;
+  --c-hover-soft:   #f2f2f2;
+  --c-selected:     #e6e6e6;
+  --c-rule:         #ececec;
+  --c-accent:       #0d0d0d;
+  --c-accent-strong:#000000;
+  --c-accent-bg:    #f0f0f0;
+  --c-danger:       #c2410c;
+  --c-danger-bg:    #fff7ed;
+  --c-success:      #2e7d52;
+  --c-success-bg:   rgba(40,200,120,0.16);
+  --c-warn:         #b45309;
+  --c-warn-bg:      rgba(245,158,11,0.18);
+  --c-ink-deep:     #000;        /* primary-button hover deepens */
+
+  /* type families */
+  --c-mono: ui-monospace, SFMono-Regular, 'JetBrains Mono', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* shadows — unified scale */
+  --c-shadow-card:  0 1px 2px rgba(0,0,0,0.03), 0 8px 24px rgba(0,0,0,0.05);
+  --c-shadow-modal: 0 1px 2px rgba(0,0,0,0.06), 0 20px 60px rgba(0,0,0,0.18);
+  --c-shadow-menu:  0 1px 2px rgba(0,0,0,0.04), 0 10px 28px rgba(0,0,0,0.10);
+  --c-scrollbar:    rgba(0,0,0,0.12);
+
+  /* shadows */
+  --c-shadow-soft:  0 1px 2px rgba(0, 0, 0, 0.04), 0 6px 16px rgba(0, 0, 0, 0.06);
+  --c-shadow-pill:  0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 6px rgba(0, 0, 0, 0.05);
+
+  /* radii — single scale, no ad-hoc values */
+  --c-radius-xs:    4px;   /* tiny chips, ✕ buttons */
+  --c-radius-sm:    6px;   /* secondary buttons, small chips */
+  --c-radius-md:    8px;   /* icon buttons, list rows */
+  --c-radius-lg:    10px;  /* cards, panels (= --c-radius-row) */
+  --c-radius-xl:    14px;  /* bubble, modal */
+  --c-radius-pill:  999px;
+  --c-radius-row:   10px;
+  --c-radius-box:   24px;
+
+  /* surfaces */
+  --c-surface:      #f4f4f4; /* secondary button bg on white surfaces */
+
+  /* motion */
+  --c-dur-fast:     120ms;
+  --c-dur:          160ms;
+  --c-dur-slow:     240ms;
+  --c-ease:         cubic-bezier(0.22, 1, 0.36, 1);
+  --c-ease-spring: cubic-bezier(0.34, 1.4, 0.5, 1);
+
+  /* type */
+  --c-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'PingFang SC', system-ui, sans-serif;
+
+  background: var(--c-bg);
+  color: var(--c-ink);
+  font-family: var(--c-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ============================================================
+   Appearance (data-mode) + color theme (data-theme) palettes.
+   Specificity ladder (low→high), so theme-dark beats theme-light
+   beats default-dark beats base:
+     .chaya-v2                              (base = default light)
+     .chaya-v2[data-mode="dark"]            default dark neutrals
+     .chaya-v2[data-theme="X"]              theme light
+     .chaya-v2[data-theme="X"][data-mode]   theme dark
+   Themes own bg/sidebar/ink ramp/hover/selected/rule + accent.
+   ============================================================ */
+
+/* ---- default (mono) dark ---- */
+.chaya-v2[data-mode="dark"] {
+  --c-bg: #1a1a1a; --c-sidebar: #1f1f1f;
+  --c-ink: #ececec; --c-ink-2: #c4c4c4; --c-ink-3: #969696; --c-ink-4: #6e6e6e;
+  --c-hover: #2a2a2a; --c-hover-soft: #232323; --c-selected: #343434; --c-rule: #2e2e2e;
+  --c-surface: #232323; --c-accent: #ececec; --c-accent-strong: #ffffff; --c-accent-bg: #2b2b2b;
+}
+
+/* ---- Anthropic — official ivory + Claude Orange #D97757 (deep Crail #C15F3C).
+   White-ish canvas, warmth in chrome. Slate ink #141413, Cloud grays. ---- */
+.chaya-v2[data-theme="anthropic"] {
+  --c-bg: #fdfcfa; --c-sidebar: #f4f1ea;
+  --c-ink: #141413; --c-ink-2: #46443d; --c-ink-3: #87867f; --c-ink-4: #b0aea5;
+  --c-hover: #f0eee6; --c-hover-soft: #f7f5ef; --c-selected: #f0e3d9; --c-rule: #e8e6dc;
+  --c-surface: #f0eee6; --c-accent: #d97757; --c-accent-strong: #c15f3c; --c-accent-bg: #f5e5de;
+}
+.chaya-v2[data-theme="anthropic"][data-mode="dark"] {
+  --c-bg: #1c1b19; --c-sidebar: #232220;
+  --c-ink: #faf9f5; --c-ink-2: #c2c0b6; --c-ink-3: #908e84; --c-ink-4: #6b695f;
+  --c-hover: #2c2a27; --c-hover-soft: #252420; --c-selected: #3a2d26; --c-rule: #34322e;
+  --c-surface: #252420; --c-accent: #e08a6e; --c-accent-strong: #d97757; --c-accent-bg: #3a2a24;
+}
+
+/* ---- Warm — letterpress paper, layered amber ---- */
+.chaya-v2[data-theme="warm"] {
+  --c-bg: #faf6ee; --c-sidebar: #f3ecdd;
+  --c-ink: #2a2218; --c-ink-2: #54493a; --c-ink-3: #7d7160; --c-ink-4: #a99d88;
+  --c-hover: #ece2cf; --c-hover-soft: #f3ecdc; --c-selected: #ebdcbf; --c-rule: #e6dac3;
+  --c-surface: #efe6d3; --c-accent: #c8923f; --c-accent-strong: #8a5824; --c-accent-bg: #f0e1c6;
+}
+.chaya-v2[data-theme="warm"][data-mode="dark"] {
+  --c-bg: #1d1810; --c-sidebar: #231d14;
+  --c-ink: #ece1cf; --c-ink-2: #c5b69e; --c-ink-3: #968871; --c-ink-4: #6b6051;
+  --c-hover: #2b2417; --c-hover-soft: #251f13; --c-selected: #38301f; --c-rule: #2f281a;
+  --c-surface: #251f13; --c-accent: #d39a55; --c-accent-strong: #e3b46f; --c-accent-bg: #2e2516;
+}
+
+/* ---- Cursor — Anysphere identity: warm near-black #181818, teal accent #82D2CE
+   (Cursor is monochrome, NOT blue; teal is its real editor UI accent). ---- */
+.chaya-v2[data-theme="cursor"] {
+  --c-bg: #fbfbfa; --c-sidebar: #f4f4f3;
+  --c-ink: #1a1a1a; --c-ink-2: #45454a; --c-ink-3: #76767c; --c-ink-4: #a6a6ac;
+  --c-hover: #eeeeec; --c-hover-soft: #f5f5f3; --c-selected: #dceeec; --c-rule: #e6e6e3;
+  --c-surface: #f1f1ef; --c-accent: #17968c; --c-accent-strong: #0f766e; --c-accent-bg: #def0ee;
+}
+.chaya-v2[data-theme="cursor"][data-mode="dark"] {
+  --c-bg: #181818; --c-sidebar: #141414;
+  --c-ink: #d6d6dd; --c-ink-2: #bfbfc4; --c-ink-3: #8a8a90; --c-ink-4: #6d6d6d;
+  --c-hover: #232323; --c-hover-soft: #1e1e1e; --c-selected: #21302f; --c-rule: #2a2a2a;
+  --c-surface: #1e1e1e; --c-accent: #82d2ce; --c-accent-strong: #a5e0dc; --c-accent-bg: #1f2e2d;
+}
+
+/* ---- Linear — #08090A near-black + brand indigo #5E6AD2 (hover #7170FF). ---- */
+.chaya-v2[data-theme="linear"] {
+  --c-bg: #ffffff; --c-sidebar: #f7f8f8;
+  --c-ink: #282a30; --c-ink-2: #3c4149; --c-ink-3: #6b7280; --c-ink-4: #a0a5b0;
+  --c-hover: #eef0f2; --c-hover-soft: #f5f6f7; --c-selected: #e9eafb; --c-rule: #e6e8eb;
+  --c-surface: #f3f4f5; --c-accent: #5e6ad2; --c-accent-strong: #434db0; --c-accent-bg: #ecedfb;
+}
+.chaya-v2[data-theme="linear"][data-mode="dark"] {
+  --c-bg: #08090a; --c-sidebar: #0f1011;
+  --c-ink: #f7f8f8; --c-ink-2: #d0d6e0; --c-ink-3: #8a8f98; --c-ink-4: #5c6066;
+  --c-hover: #1a1b1e; --c-hover-soft: #141518; --c-selected: #1f2142; --c-rule: #23252a;
+  --c-surface: #1a1b1e; --c-accent: #5e6ad2; --c-accent-strong: #7170ff; --c-accent-bg: #191b2e;
+}
+
+/* ===== font picker — data-font on <html> drives the v2 surface family =====
+   Slot ids are kept for LS-backward-compat; labels & fonts are formal. */
+html[data-font="rounded"]    .chaya-v2,           /* 现代 — Inter */
+html[data-font="rounded"]    .chaya-v2 textarea,
+html[data-font="rounded"]    .chaya-v2 input,
+html[data-font="rounded"]    .chaya-v2 button { font-family: 'Inter', 'PingFang SC', 'LXGW WenKai', system-ui, sans-serif; }
+
+html[data-font="pixel"]      .chaya-v2,           /* 衬线 — Source Serif 4 */
+html[data-font="pixel"]      .chaya-v2 textarea,
+html[data-font="pixel"]      .chaya-v2 input,
+html[data-font="pixel"]      .chaya-v2 button { font-family: 'Source Serif 4', 'Noto Serif SC', 'Songti SC', 'STSong', 'LXGW WenKai', ui-serif, Georgia, serif; }
+
+html[data-font="terminal"]   .chaya-v2,           /* 等宽 — JetBrains Mono */
+html[data-font="terminal"]   .chaya-v2 textarea,
+html[data-font="terminal"]   .chaya-v2 input,
+html[data-font="terminal"]   .chaya-v2 button { font-family: 'JetBrains Mono', ui-monospace, 'Menlo', 'PingFang SC', monospace; }
+
+html[data-font="dotgothic"]  .chaya-v2,           /* 经典 — Crimson Pro */
+html[data-font="dotgothic"]  .chaya-v2 textarea,
+html[data-font="dotgothic"]  .chaya-v2 input,
+html[data-font="dotgothic"]  .chaya-v2 button { font-family: 'Crimson Pro', 'Noto Serif SC', 'Songti SC', ui-serif, Georgia, serif; }
+
+html[data-font="silkscreen"] .chaya-v2,           /* 优雅 — Playfair Display */
+html[data-font="silkscreen"] .chaya-v2 textarea,
+html[data-font="silkscreen"] .chaya-v2 input,
+html[data-font="silkscreen"] .chaya-v2 button { font-family: 'Playfair Display', 'Noto Serif SC', 'Songti SC', ui-serif, Georgia, serif; }
+
+.chaya-v2 *, .chaya-v2 *::before, .chaya-v2 *::after { box-sizing: border-box; }
+
+/* 全局细条优雅滚动条：纤细、圆角、内缩，hover 加深。具体容器（.v2-stream /
+ * .v2-recents）有自己的 hover-reveal 规则，特异性更高会覆盖此处。 */
+.chaya-v2 * { scrollbar-width: thin; scrollbar-color: var(--c-scrollbar) transparent; }
+.chaya-v2 ::-webkit-scrollbar { width: 8px; height: 8px; }
+.chaya-v2 ::-webkit-scrollbar-track { background: transparent; }
+.chaya-v2 ::-webkit-scrollbar-thumb { background: var(--c-scrollbar); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; transition: background 160ms var(--c-ease); }
+.chaya-v2 ::-webkit-scrollbar-thumb:hover { background: var(--c-ink-4); background-clip: padding-box; }
+.chaya-v2 ::-webkit-scrollbar-corner { background: transparent; }
+.chaya-v2 button, .chaya-v2 input, .chaya-v2 textarea {
+  font: inherit; color: inherit; background: transparent; border: 0; outline: 0;
+}
+
+/* ===== app shell ===== */
+.chaya-v2 .v2-tb {
+  position: fixed; top: 0; left: 0; right: 0; height: 36px;
+  display: flex; align-items: center; padding: 0 14px;
+  -webkit-app-region: drag; z-index: 10;
+  pointer-events: none;
+}
+/* When running in Electron we use hiddenInset titleBarStyle so the OS draws
+   the lights; we only need a drag region. Outside Electron, show fake dots. */
+.chaya-v2 .v2-tb .v2-dots { display: flex; gap: 8px; -webkit-app-region: no-drag; pointer-events: auto; }
+.chaya-v2 .v2-tb .v2-dots i { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+.chaya-v2 .v2-tb .v2-dots i:nth-child(1) { background: #ff5f57; }
+.chaya-v2 .v2-tb .v2-dots i:nth-child(2) { background: #febc2e; }
+.chaya-v2 .v2-tb .v2-dots i:nth-child(3) { background: #28c840; }
+html[data-electron="true"] .chaya-v2 .v2-tb .v2-dots { display: none; }
+
+/* App shell — sidebar tone is the outer chrome, main is a rounded card
+ * floating on top of it. Header + body share the card so they read as a
+ * single unified surface (Codex / Linear pattern). */
+/* Sidebar 240px (narrower than the previous 272) so the main pane gets more
+ * breathing room. On very small windows the sidebar still wins its full
+ * width — user is expected to collapse it on tight viewports. */
+.chaya-v2 .v2-app { display: grid; grid-template-columns: 240px 1fr; height: 100vh; transition: grid-template-columns 240ms var(--c-ease); background: var(--c-sidebar); }
+.chaya-v2 .v2-app.collapsed { grid-template-columns: 0 1fr; }
+.chaya-v2 .v2-app.collapsed .v2-side { overflow: hidden; opacity: 0; pointer-events: none; transition: opacity 180ms var(--c-ease); width: 0; flex: 0 0 0; }
+.chaya-v2 .v2-side { transition: opacity 180ms var(--c-ease); }
+/* Permanent sidebar-toggle button. Lives at the top-left corner of the
+ * window, parked just right of the macOS traffic lights so it never moves
+ * and never overlaps them. Click toggles the sidebar in either direction.
+ * z-index needs to clear both .v2-tb (z:10) AND any sibling drag region of
+ * .v2-topbar inside .v2-main so Electron's app-region hit-test picks the
+ * no-drag region; otherwise mousedown is consumed as a window drag and the
+ * click never fires. */
+/* Center at y=22 — locked on the same axis as the macOS traffic lights
+ * (top=16, height=12 → center 22) and the topbar crumb (card margin-top=4
+ * + topbar 36/2 = 22). */
+.chaya-v2 .v2-shell-toggle {
+  position: fixed; z-index: 200; top: 6px; left: 14px;
+  width: 32px; height: 32px; border-radius: var(--c-radius-md);
+  background: transparent; color: var(--c-ink-3);
+  display: grid; place-items: center; cursor: pointer;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  transition: background 140ms var(--c-ease), color 140ms var(--c-ease), left 240ms var(--c-ease);
+}
+.chaya-v2 .v2-shell-toggle:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-shell-toggle:active { background: var(--c-selected); }
+.chaya-v2 .v2-shell-toggle svg { width: 18px; height: 18px; pointer-events: none; }
+/* On macOS the traffic lights claim the first ~70px. Park the toggle right
+ * after them so they never collide. */
+html[data-electron-platform="darwin"] .chaya-v2 .v2-shell-toggle { left: 80px; }
+
+/* ===== sidebar ===== */
+.chaya-v2 .v2-side {
+  background: var(--c-sidebar);
+  /* The vertical divider is now the gap between sidebar and main card, not
+   * a hairline. Drop the right border. */
+  display: flex; flex-direction: column;
+  min-height: 0; overflow: hidden;
+  /* Reserve room at top for the floating shell-toggle (top:6, h:32 → 38)
+   * + 6px breathing before the search box. */
+  padding-top: 44px;
+}
+/* Icon button used in dialogs (sidebar's own top reservation lives on .v2-side). */
+.chaya-v2 .v2-ibtn { width: 30px; height: 30px; border-radius: var(--c-radius-md); display: grid; place-items: center; cursor: pointer; color: var(--c-ink-2); transition: background 140ms var(--c-ease), transform 120ms var(--c-ease); }
+.chaya-v2 .v2-ibtn:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-ibtn:active { transform: scale(0.94); }
+.chaya-v2 .v2-ibtn svg { width: 18px; height: 18px; }
+
+.chaya-v2 .v2-search { flex: 0 0 auto; margin: 2px 12px 6px; padding: 4px 8px; border-radius: var(--c-radius-md); display: flex; align-items: center; gap: 6px; color: var(--c-ink-4); font-size: 12px; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-search svg { width: 14px; height: 14px; opacity: 0.7; }
+.chaya-v2 .v2-search:hover, .chaya-v2 .v2-search:focus-within { background: var(--c-hover-soft); color: var(--c-ink-2); }
+.chaya-v2 .v2-search input { flex: 1; font-size: 12px; }
+.chaya-v2 .v2-search input::placeholder { color: var(--c-ink-4); }
+
+.chaya-v2 .v2-nav { flex: 0 0 auto; padding: 0 8px; display: flex; flex-direction: column; gap: 1px; }
+.chaya-v2 .v2-nav .v2-row { display: grid; grid-template-columns: 20px 1fr; gap: 10px; align-items: center; padding: 5px 10px; border-radius: var(--c-radius-row); cursor: pointer; color: var(--c-ink); font-size: 13px; transition: background 140ms var(--c-ease), transform 100ms var(--c-ease); }
+.chaya-v2 .v2-nav .v2-row:hover { background: var(--c-hover-soft); }
+/* Codex-style: active row gets a tint only, no font-weight shift. The eye
+ * follows the fill, not the typographic emphasis. */
+.chaya-v2 .v2-nav .v2-row.active { background: var(--c-hover); }
+.chaya-v2 .v2-nav .v2-row:active { transform: scale(0.985); }
+.chaya-v2 .v2-nav .v2-row .v2-ic { width: 20px; height: 20px; display: grid; place-items: center; color: var(--c-ink-2); }
+.chaya-v2 .v2-nav .v2-row .v2-ic svg { width: 16px; height: 16px; }
+
+/* Section header — quiet, regular weight. Codex uses the gray label as a
+ * grouping cue, not a heading. */
+.chaya-v2 .v2-sec { flex: 0 0 auto; padding: 12px 18px 4px; font-size: 11px; color: var(--c-ink-4); font-weight: 400; letter-spacing: 0.02em; display: flex; align-items: center; }
+.chaya-v2 .v2-sec .v2-add { margin-left: auto; width: 22px; height: 22px; border-radius: var(--c-radius-sm); display: grid; place-items: center; cursor: pointer; color: var(--c-ink-3); opacity: 0; transition: opacity 140ms var(--c-ease), background 140ms var(--c-ease); }
+.chaya-v2 .v2-sec:hover .v2-add { opacity: 1; }
+.chaya-v2 .v2-sec .v2-add:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-sec .v2-add svg { width: 14px; height: 14px; }
+
+.chaya-v2 .v2-agents { flex: 0 0 auto; padding: 0 8px; display: flex; flex-direction: column; gap: 1px; }
+.chaya-v2 .v2-agents .v2-a { display: grid; grid-template-columns: 20px 1fr auto; gap: 10px; align-items: center; padding: 5px 10px; border-radius: var(--c-radius-row); cursor: pointer; font-size: 13px; color: var(--c-ink); transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-agents .v2-a:hover { background: var(--c-hover-soft); }
+.chaya-v2 .v2-agents .v2-a.active { background: var(--c-hover); }
+.chaya-v2 .v2-agents .v2-a .v2-ic { width: 20px; height: 20px; display: grid; place-items: center; color: var(--c-ink-2); }
+.chaya-v2 .v2-agents .v2-a .v2-ic svg { width: 16px; height: 16px; }
+.chaya-v2 .v2-agents .v2-a .v2-nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-agents .v2-a .v2-pri { font-size: 11px; color: var(--c-ink-4); margin-left: 6px; }
+.chaya-v2 .v2-agents .v2-a .v2-more,
+.chaya-v2 .v2-recents .v2-r .v2-more { opacity: 0; color: var(--c-ink-3); font-size: 16px; padding: 2px 6px; transition: opacity 140ms var(--c-ease), background 140ms var(--c-ease); line-height: 1; border-radius: var(--c-radius-xs); cursor: pointer; }
+.chaya-v2 .v2-agents .v2-a:hover .v2-more,
+.chaya-v2 .v2-recents .v2-r:hover .v2-more { opacity: 1; }
+.chaya-v2 .v2-agents .v2-a .v2-more:hover,
+.chaya-v2 .v2-recents .v2-r .v2-more:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-side-av { width: 20px; height: 20px; border-radius: var(--c-radius-xs); overflow: hidden; background: var(--c-hover-soft); display: grid; place-items: center; font-size: 10px; color: var(--c-ink-2); }
+.chaya-v2 .v2-side-av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* row menu */
+.chaya-v2 .v2-rowmenu { position: fixed; background: var(--c-bg); border-radius: var(--c-radius-lg); box-shadow: var(--c-shadow-menu); padding: 4px; min-width: 140px; z-index: 70; }
+.chaya-v2 .v2-rowmenu button { display: flex; width: 100%; padding: 7px 10px; border-radius: var(--c-radius-sm); font-size: 13px; color: var(--c-ink); cursor: pointer; }
+.chaya-v2 .v2-rowmenu button:hover { background: var(--c-hover); }
+.chaya-v2 .v2-rowmenu button.danger { color: var(--c-danger); }
+.chaya-v2 .v2-rowmenu button.danger:hover { background: var(--c-danger-bg); }
+/* Scope the unified v2-btn rules out inside the rowmenu — the menu's own
+ * `button` selector handles default rows; the edit footer's buttons opt-in
+ * via the v2-btn class. */
+.chaya-v2 .v2-rowmenu-edit { padding: 6px; display: flex; flex-direction: column; gap: 8px; min-width: 220px; }
+.chaya-v2 .v2-rowmenu-edit-foot { display: flex; gap: 6px; justify-content: flex-end; }
+.chaya-v2 .v2-rowmenu-edit .v2-btn { width: auto; padding: 6px 12px; }
+
+/* Shared text input — used in rowmenu rename, drawer fields, etc. */
+.chaya-v2 .v2-input {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--c-radius-md);
+  border: 1px solid var(--c-rule);
+  background: var(--c-bg);
+  color: var(--c-ink);
+  font-size: 13px; line-height: 1.4;
+  outline: none;
+  transition: border-color 140ms var(--c-ease), box-shadow 140ms var(--c-ease);
+}
+.chaya-v2 .v2-input:focus {
+  border-color: color-mix(in oklab, var(--c-ink) 30%, var(--c-rule));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--c-ink) 6%, transparent);
+}
+.chaya-v2 .v2-input::placeholder { color: var(--c-ink-4); }
+
+.chaya-v2 .v2-recents { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 1px; scrollbar-gutter: stable; }
+.chaya-v2 .v2-recents::-webkit-scrollbar { width: 8px; }
+.chaya-v2 .v2-recents::-webkit-scrollbar-thumb { background: transparent; border-radius: var(--c-radius-xs); }
+.chaya-v2 .v2-recents:hover::-webkit-scrollbar-thumb { background: var(--c-scrollbar); }
+.chaya-v2 .v2-recents .v2-r { position: relative; display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: var(--c-radius-row); font-size: 13px; color: var(--c-ink); cursor: pointer; transition: background 140ms var(--c-ease); min-width: 0; }
+.chaya-v2 .v2-recents .v2-r:hover { background: var(--c-hover-soft); }
+.chaya-v2 .v2-recents .v2-r.active { background: var(--c-hover); }
+.chaya-v2 .v2-recents .v2-r .v2-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-recents .v2-r .v2-more { flex: 0 0 auto; opacity: 0; color: var(--c-ink-3); padding: 0 2px; line-height: 1; font-size: 16px; transition: opacity 140ms var(--c-ease); }
+.chaya-v2 .v2-recents .v2-r:hover .v2-more { opacity: 1; }
+.chaya-v2 .v2-recents .v2-r.create::before { content: ''; flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%; background: var(--c-ink-2); opacity: 0.5; }
+
+/* Sidebar bottom — user pill. Sits in the sidebar's natural flow (no
+ * border-top divider, the sidebar tone already separates it from main).
+ * Compact, single-row, hover lifts. */
+.chaya-v2 .v2-me {
+  flex: 0 0 auto;
+  margin: 4px 8px 8px;
+  padding: 6px 8px;
+  display: grid; grid-template-columns: 24px 1fr 20px; gap: 8px;
+  align-items: center;
+  border-radius: var(--c-radius-md);
+  cursor: pointer;
+  transition: background 140ms var(--c-ease);
+}
+.chaya-v2 .v2-me:hover { background: var(--c-hover); }
+.chaya-v2 .v2-me .v2-av {
+  width: 24px; height: 24px; border-radius: 50%;
+  background: var(--c-ink); color: var(--c-bg);
+  display: grid; place-items: center;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+}
+.chaya-v2 .v2-me .v2-nm { font-size: 13px; color: var(--c-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.chaya-v2 .v2-me .v2-gear {
+  width: 20px; height: 20px; border-radius: var(--c-radius-xs);
+  display: grid; place-items: center;
+  color: var(--c-ink-4);
+  opacity: 0;
+  transition: opacity 140ms var(--c-ease), color 140ms var(--c-ease);
+}
+.chaya-v2 .v2-me:hover .v2-gear { opacity: 1; color: var(--c-ink-2); }
+.chaya-v2 .v2-me .v2-gear svg { width: 14px; height: 14px; }
+
+/* ===== main = rounded card ===== */
+/* The main pane is a single rounded white card floating on the sidebar tone.
+ * Header + body share its surface (no inner divider needed). The card has a
+ * small inset from window edges so the gray chrome breathes around it. */
+.chaya-v2 .v2-main {
+  display: flex; flex-direction: column;
+  min-height: 0; min-width: 0;
+  background: var(--c-bg);
+  border: 1px solid var(--c-rule);
+  border-radius: var(--c-radius-xl);
+  /* top margin 4 + topbar 36/2 = crumb optical center at y=22 — same axis
+   * as traffic lights and shell-toggle. */
+  margin: 4px 6px 6px 0;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+  position: relative;
+  transition: margin 240ms var(--c-ease);
+}
+/* When sidebar collapses, the card expands left to occupy the freed space
+ * while keeping a small margin from the window edge. */
+/* When the sidebar collapses, shrink the card to a 3:4 portrait and center
+ * it horizontally. We compute width explicitly because grid items with
+ * `aspect-ratio: 3/4 + width: auto` stretch to fill the track (the grid
+ * stretch rule wins over aspect-ratio derivation). The `min()` clamps so
+ * on narrow windows the card never overflows the viewport. */
+/* Collapsed: card fills the available space (sidebar is gone), keeping the
+ * same small inset from window edges so the gray chrome breathes on all
+ * four sides. Traffic lights / shell-toggle float above the card; the
+ * topbar inside gets extra left padding so the crumb doesn't slide under
+ * them — see `.v2-app.collapsed .v2-main .v2-topbar` below. */
+.chaya-v2 .v2-app.collapsed .v2-main {
+  margin: 4px 6px 6px 6px;
+}
+
+/* Topbar inside the card. A whisper-thin separator (75% rule alpha + inset
+ * 12px on both sides) gives the header its own surface without slicing the
+ * card visually. Height tuned so crumb optical center lines up with traffic
+ * light + shell-toggle (y=22, see .v2-main). */
+.chaya-v2 .v2-topbar {
+  height: 36px; padding: 0 12px;
+  display: flex; align-items: center; gap: 8px;
+  position: relative;
+  /* Intentionally NOT a drag region — Electron's `-webkit-app-region: drag`
+   * hit-test overrides `no-drag` siblings on `position: fixed` z-index in
+   * some cases, which was stealing mousedown from the shell-toggle when the
+   * sidebar collapsed. The `.v2-tb` strip up top already provides 36px of
+   * window drag (and on macOS hiddenInset gives a native drag handle in the
+   * lights row), so dropping drag here costs nothing. */
+  flex: 0 0 auto;
+  background: transparent;
+  transition: padding-left 240ms var(--c-ease);
+}
+/* Collapsed card is centered + narrow (3:4), so the shell-toggle (fixed at
+ * window-left) usually sits far from the card and no extra padding is
+ * needed inside the topbar. We keep a small bump just so the crumb doesn't
+ * jam the card's rounded corner. */
+/* The card fills the window when collapsed, so its topbar starts at x≈6.
+ * Push the crumb past the toggle (left:14 + w:32 = 46) on non-mac, and
+ * past the lights + toggle (~112) on macOS. */
+.chaya-v2 .v2-app.collapsed .v2-main .v2-topbar { padding-left: 52px; }
+html[data-electron-platform="darwin"] .chaya-v2 .v2-app.collapsed .v2-main .v2-topbar { padding-left: 116px; }
+/* Whisper-thin header rule — inset 14px on both sides so it doesn't run all
+ * the way into the card's rounded corners; uses ::after on the topbar so we
+ * don't touch the card's own border. */
+.chaya-v2 .v2-topbar::after {
+  content: '';
+  position: absolute;
+  left: 14px; right: 14px; bottom: 0;
+  height: 1px;
+  background: var(--c-rule);
+  opacity: 0.75;
+  pointer-events: none;
+}
+/* Topbar title — Codex-quiet: 14px medium, soft pill, ink-3 chevron. */
+.chaya-v2 .v2-crumb { display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px 5px 12px; border-radius: var(--c-radius-sm); font-size: 14px; font-weight: 500; color: var(--c-ink); cursor: pointer; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-crumb:hover { background: var(--c-hover); }
+.chaya-v2 .v2-crumb .v2-chev { color: var(--c-ink-4); font-size: 11px; margin-left: 2px; }
+.chaya-v2 .v2-topbar .v2-grow { flex: 1; }
+.chaya-v2 .v2-tbtn { padding: 7px 12px; border-radius: var(--c-radius-pill); background: var(--c-bg); box-shadow: var(--c-shadow-pill); color: var(--c-ink-2); cursor: pointer; display: inline-flex; gap: 6px; align-items: center; font-size: 13px; transition: box-shadow 140ms var(--c-ease), color 140ms var(--c-ease), transform 120ms var(--c-ease); }
+.chaya-v2 .v2-tbtn:hover { color: var(--c-ink); box-shadow: 0 1px 2px rgba(0,0,0,0.06), 0 2px 10px rgba(0,0,0,0.08); }
+.chaya-v2 .v2-tbtn:active { transform: translateY(0.5px); }
+.chaya-v2 .v2-tbtn svg { width: 16px; height: 16px; }
+
+.chaya-v2 .v2-stream { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 0 220px; }
+.chaya-v2 .v2-stream::-webkit-scrollbar { width: 10px; }
+.chaya-v2 .v2-stream::-webkit-scrollbar-thumb { background: transparent; border-radius: var(--c-radius-sm); }
+.chaya-v2 .v2-stream:hover::-webkit-scrollbar-thumb { background: var(--c-scrollbar); }
+.chaya-v2 .v2-msgs { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+/* Desktop has more horizontal room — give the chat thread a wider column. */
+html[data-electron="true"] .chaya-v2 .v2-msgs { max-width: 920px; }
+/* Avatar-less layout: the message body fills the row, role differentiation
+ * comes from the user's tinted bubble vs. the assistant's flat prose. */
+.chaya-v2 .v2-msg { display: flex; margin-bottom: 14px; animation: v2-fadeUp 220ms var(--c-ease) both; }
+.chaya-v2 .v2-msg.user { justify-content: flex-end; }
+.chaya-v2 .v2-msg.assistant { justify-content: flex-start; }
+.chaya-v2 .v2-msg .v2-body { min-width: 0; max-width: 100%; }
+.chaya-v2 .v2-msg.user .v2-body { max-width: 78%; }
+.chaya-v2 .v2-msg .v2-body p { font-size: 14px; color: var(--c-ink); line-height: 1.6; margin-bottom: 4px; }
+.chaya-v2 .v2-msg .v2-body p:last-child { margin-bottom: 0; }
+
+/* ===== Markdown surface (.v2-md) — typography for assistant prose ===== */
+.chaya-v2 .v2-md { font-size: 14px; line-height: 1.65; color: var(--c-ink); word-wrap: break-word; }
+.chaya-v2 .v2-md > *:first-child { margin-top: 0; }
+.chaya-v2 .v2-md > *:last-child { margin-bottom: 0; }
+.chaya-v2 .v2-md p { margin: 0 0 10px; font-size: 14px; line-height: 1.65; }
+.chaya-v2 .v2-md h1,
+.chaya-v2 .v2-md h2,
+.chaya-v2 .v2-md h3,
+.chaya-v2 .v2-md h4 { margin: 18px 0 8px; font-weight: 600; color: var(--c-ink); letter-spacing: -0.005em; line-height: 1.3; }
+.chaya-v2 .v2-md h1 { font-size: 18px; }
+.chaya-v2 .v2-md h2 { font-size: 16px; }
+.chaya-v2 .v2-md h3 { font-size: 15px; }
+.chaya-v2 .v2-md h4 { font-size: 14px; color: var(--c-ink-2); }
+.chaya-v2 .v2-md strong { font-weight: 600; color: var(--c-ink); }
+.chaya-v2 .v2-md em { font-style: italic; }
+.chaya-v2 .v2-md del { color: var(--c-ink-3); }
+.chaya-v2 .v2-md ul,
+.chaya-v2 .v2-md ol { margin: 0 0 10px; padding-left: 22px; }
+.chaya-v2 .v2-md li { margin: 2px 0; }
+.chaya-v2 .v2-md li::marker { color: var(--c-ink-4); }
+.chaya-v2 .v2-md li > p { margin: 0; }
+.chaya-v2 .v2-md ul ul, .chaya-v2 .v2-md ol ol,
+.chaya-v2 .v2-md ul ol, .chaya-v2 .v2-md ol ul { margin: 2px 0; }
+/* GFM task list */
+.chaya-v2 .v2-md input[type="checkbox"] { margin-right: 6px; accent-color: var(--c-ink); transform: translateY(1px); }
+/* Inline code */
+.chaya-v2 .v2-md :not(pre) > code {
+  font: 12.5px/1.4 var(--c-mono);
+  background: var(--c-hover-soft);
+  padding: 1px 6px;
+  border-radius: var(--c-radius-xs);
+  color: var(--c-ink);
+}
+/* Code block */
+.chaya-v2 .v2-md pre {
+  margin: 8px 0 12px;
+  padding: 12px 14px;
+  background: var(--c-sidebar);
+  border: 1px solid var(--c-rule);
+  border-radius: var(--c-radius-md);
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.chaya-v2 .v2-md pre code {
+  background: transparent;
+  padding: 0;
+  font-family: var(--c-mono);
+  color: var(--c-ink);
+}
+/* Blockquote — left rule, muted text */
+.chaya-v2 .v2-md blockquote {
+  margin: 8px 0;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--c-rule);
+  color: var(--c-ink-3);
+}
+.chaya-v2 .v2-md blockquote > * { margin-bottom: 4px; }
+/* Tables */
+/* Tables — rounded outer corners require `border-collapse: separate` + an
+ * outer border on the <table>; cells then only draw their right/bottom
+ * sides and the last column / last row drop those so we don't double-up
+ * at the rounded edge. */
+.chaya-v2 .v2-md table {
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 8px 0 12px;
+  font-size: 13px;
+  width: 100%;
+  table-layout: auto;
+  border: 1px solid var(--c-rule);
+  border-radius: var(--c-radius-md);
+  overflow: hidden;
+}
+.chaya-v2 .v2-md th,
+.chaya-v2 .v2-md td {
+  padding: 6px 12px;
+  text-align: left; vertical-align: top;
+  border-right: 1px solid var(--c-rule);
+  border-bottom: 1px solid var(--c-rule);
+}
+.chaya-v2 .v2-md th:last-child,
+.chaya-v2 .v2-md td:last-child { border-right: 0; }
+.chaya-v2 .v2-md tr:last-child td,
+.chaya-v2 .v2-md tr:last-child th { border-bottom: 0; }
+.chaya-v2 .v2-md th { background: var(--c-hover-soft); font-weight: 600; }
+/* Horizontal rule */
+.chaya-v2 .v2-md hr { border: 0; border-top: 1px solid var(--c-rule); margin: 16px 0; }
+/* Links */
+.chaya-v2 .v2-md a { color: var(--c-ink); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; text-decoration-color: var(--c-ink-4); transition: text-decoration-color 140ms var(--c-ease); }
+.chaya-v2 .v2-md a:hover { text-decoration-color: var(--c-ink); }
+/* Images inside markdown */
+.chaya-v2 .v2-md img { max-width: 100%; border-radius: var(--c-radius-md); }
+
+/* Streaming markdown wrapper — inline caret beside the last word. */
+.chaya-v2 .v2-stream-md { position: relative; }
+.chaya-v2 .v2-stream-md .v2-caret { display: inline-block; vertical-align: text-bottom; }
+.chaya-v2 .v2-msg .v2-body .v2-pending { font-size: 13px; color: var(--c-ink-4); font-style: italic; }
+.chaya-v2 .v2-msg .v2-body .v2-imgs { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 6px; margin-top: 8px; max-width: 580px; }
+/* User bubble — slightly darker than the page so the eye instantly separates
+ * "what I asked" from "what the assistant said" without needing avatars. */
+.chaya-v2 .v2-msg.user .v2-bubble {
+  background: var(--c-hover-soft);
+  border-radius: var(--c-radius-xl);
+  padding: 8px 14px;
+  transition: background 140ms var(--c-ease);
+}
+.chaya-v2 .v2-msg.user .v2-bubble p { white-space: pre-wrap; }
+/* Assistant prose has no bubble — full content width, no nested padding. */
+.chaya-v2 .v2-msg.assistant .v2-bubble { background: transparent; padding: 0; border-radius: 0; }
+/* Assistant body must claim the full row so the image grid actually has
+ * room to lay out — otherwise a body shrunk to min-content could collapse
+ * the grid track sizing in some flex contexts. */
+.chaya-v2 .v2-msg.assistant .v2-body { width: 100%; max-width: 100%; flex: 1 1 auto; min-width: 0; }
+/* Tile uses `position: relative` + an absolutely-positioned img so the img
+ * always fills the tile regardless of intrinsic dimensions. The old
+ * `display: grid` + `width/height: 100%` pattern produced 0-size images
+ * when the tile itself was sized by aspect-ratio inside another grid. */
+.chaya-v2 .v2-msg .v2-body .v2-imgs .v2-ph {
+  position: relative;
+  aspect-ratio: 1/1;
+  background: var(--c-surface);
+  border-radius: var(--c-radius-lg);
+  color: var(--c-ink-3); font-size: 13px; font-weight: 500;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 200ms var(--c-ease-spring), background 140ms var(--c-ease);
+  cursor: pointer;
+  overflow: hidden;
+}
+.chaya-v2 .v2-msg .v2-body .v2-imgs .v2-ph:hover { background: var(--c-hover); transform: translateY(-1px); }
+.chaya-v2 .v2-msg .v2-body .v2-imgs .v2-ph img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.chaya-v2 .v2-tokens { font-size: 11px; color: var(--c-ink-4); margin-top: 4px; font-family: var(--c-mono); letter-spacing: 0.04em; }
+
+/* ---- per-message hover actions: 回退 / 编辑 / 引用 ---- */
+.chaya-v2 .v2-msg-actions {
+  display: flex; gap: 2px; margin-top: 4px;
+  opacity: 0; transform: translateY(-2px);
+  transition: opacity 140ms var(--c-ease), transform 140ms var(--c-ease);
+  pointer-events: none;
+}
+.chaya-v2 .v2-msg.user .v2-msg-actions { justify-content: flex-end; }
+.chaya-v2 .v2-msg:hover .v2-msg-actions,
+.chaya-v2 .v2-msg-actions:focus-within { opacity: 1; transform: translateY(0); pointer-events: auto; }
+.chaya-v2 .v2-msg-act {
+  display: grid; place-items: center; width: 26px; height: 26px;
+  border-radius: var(--c-radius-sm); color: var(--c-ink-3); cursor: pointer;
+  transition: background 140ms var(--c-ease), color 140ms var(--c-ease);
+}
+.chaya-v2 .v2-msg-act:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-msg-act svg { width: 15px; height: 15px; }
+
+/* ---- quote citation chip shown on a message that carried a quote ---- */
+.chaya-v2 .v2-quote-cite {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
+  margin-bottom: 5px; padding: 3px 9px 3px 7px;
+  border-left: 2px solid var(--c-ink-4);
+  background: var(--c-hover-soft); border-radius: var(--c-radius-sm);
+  font-size: 12px; color: var(--c-ink-3);
+}
+.chaya-v2 .v2-msg.user .v2-quote-cite { margin-left: auto; }
+.chaya-v2 .v2-quote-cite svg { width: 13px; height: 13px; flex: none; }
+.chaya-v2 .v2-quote-cite-tag { font-weight: 600; flex: none; }
+.chaya-v2 .v2-quote-cite-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* @-referenced knowledge domains, shown on the user bubble ("引用了 域A 域B"). */
+.chaya-v2 .v2-domain-cite {
+  display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; max-width: 100%;
+  margin-bottom: 5px; font-size: 12px; color: var(--c-ink-3);
+}
+.chaya-v2 .v2-msg.user .v2-domain-cite { margin-left: auto; justify-content: flex-end; }
+.chaya-v2 .v2-domain-cite-tag { font-weight: 600; flex: none; }
+.chaya-v2 .v2-domain-cite-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 9px; border: 1px solid var(--c-rule); border-radius: 999px;
+  background: var(--c-bg); color: var(--c-ink-2); white-space: nowrap;
+}
+.chaya-v2 .v2-domain-cite-pill .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--c-accent, #6e6e6e); }
+
+/* ---- composer quote bar (queued reference for the next send) ---- */
+.chaya-v2 .v2-quote-bar {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+  padding: 6px 8px 6px 10px;
+  border-left: 2px solid var(--c-ink-3);
+  background: var(--c-hover-soft); border-radius: var(--c-radius-md);
+  font-size: 12px; color: var(--c-ink-2);
+  animation: v2-fadeUp 160ms var(--c-ease) both;
+}
+.chaya-v2 .v2-quote-tag { font-weight: 600; color: var(--c-ink); flex: none; }
+.chaya-v2 .v2-quote-text { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-quote-x {
+  flex: none; width: 18px; height: 18px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 11px; color: var(--c-ink-3);
+  cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease);
+}
+.chaya-v2 .v2-quote-x:hover { background: var(--c-hover); color: var(--c-ink); }
+
+/* ---- destructive rewind confirm dialog ---- */
+.chaya-v2 .v2-confirm-backdrop {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(0,0,0,0.28);
+  display: grid; place-items: center;
+}
+.chaya-v2 .v2-confirm {
+  width: min(380px, calc(100vw - 48px));
+  background: var(--c-bg); border-radius: var(--c-radius-xl);
+  box-shadow: var(--c-shadow-menu); padding: 20px;
+  animation: v2-fadeUp 180ms var(--c-ease-spring) both;
+}
+.chaya-v2 .v2-confirm-title { font-size: 15px; font-weight: 650; color: var(--c-ink); margin-bottom: 10px; }
+.chaya-v2 .v2-confirm-quote {
+  font-size: 13px; color: var(--c-ink-2); font-style: italic;
+  border-left: 2px solid var(--c-ink-4); padding: 4px 10px; margin-bottom: 10px;
+  background: var(--c-hover-soft); border-radius: var(--c-radius-sm);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chaya-v2 .v2-confirm-body { font-size: 13px; color: var(--c-ink-3); line-height: 1.6; margin-bottom: 16px; }
+.chaya-v2 .v2-confirm-body strong { color: var(--c-danger); font-weight: 600; }
+.chaya-v2 .v2-confirm-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+@keyframes v2-fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes v2-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+@keyframes v2-caret { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+.chaya-v2 .v2-caret { display: inline-block; margin-left: 2px; color: var(--c-ink-3); animation: v2-caret 1s steps(2, end) infinite; font-weight: 200; }
+.chaya-v2 .v2-shimmer-tile { display: block; width: 100%; height: 100%; background: linear-gradient(90deg, var(--c-surface), var(--c-hover-soft), var(--c-surface)); background-size: 200% 100%; animation: v2-shimmer 1.4s linear infinite; }
+
+/* ===== reasoning ("Thinking") — borderless, minimal =====
+ * No card, no monospace, no emoji. A tiny chevron summary in muted ink-3;
+ * when expanded, the body indents under a hairline left rule that matches
+ * the rest of the app's subtle divider language. Auto-collapses once the
+ * answer arrives so the eye stays on content. */
+.chaya-v2 .v2-think { margin: 0 0 6px; background: transparent; border: 0; }
+.chaya-v2 .v2-think > summary {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 4px; margin-left: -4px;
+  font-size: 12px; color: var(--c-ink-3); cursor: pointer; user-select: none; list-style: none;
+  border-radius: var(--c-radius-sm);
+  transition: color 140ms var(--c-ease), background 140ms var(--c-ease);
+}
+.chaya-v2 .v2-think > summary:hover { color: var(--c-ink-2); background: var(--c-hover-soft); }
+.chaya-v2 .v2-think > summary::-webkit-details-marker { display: none; }
+/* Chevron rendered from CSS — rotates open. The icon span sent from React
+ * is hidden so we don't need to touch JSX to swap visuals. */
+.chaya-v2 .v2-think .v2-think-ic { display: none; }
+.chaya-v2 .v2-think > summary::before {
+  content: ''; width: 6px; height: 6px;
+  border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor;
+  transform: rotate(-45deg); transition: transform 160ms var(--c-ease);
+  margin-right: 2px;
+}
+.chaya-v2 .v2-think[open] > summary::before { transform: rotate(45deg); }
+.chaya-v2 .v2-think .v2-think-len {
+  margin-left: 4px; padding-left: 6px;
+  font-size: 11px; color: var(--c-ink-4);
+  border-left: 1px solid var(--c-rule);
+  font-variant-numeric: tabular-nums;
+}
+.chaya-v2 .v2-think-body {
+  margin-top: 4px; padding: 2px 0 4px 10px;
+  border-left: 1px solid var(--c-rule);
+  font-size: 13px; line-height: 1.6; color: var(--c-ink-3);
+  white-space: pre-wrap;
+  max-height: 240px; overflow-y: auto;
+  animation: v2-think-reveal 200ms var(--c-ease) both;
+}
+@keyframes v2-think-reveal { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: translateY(0); } }
+.chaya-v2 .v2-msg.assistant.streaming .v2-body p { animation: v2-text-fade-in 180ms var(--c-ease) both; }
+@keyframes v2-text-fade-in { from { opacity: 0.6; } to { opacity: 1; } }
+
+/* ===== composer ===== */
+.chaya-v2 .v2-composer-wrap { position: absolute; left: 0; right: 0; bottom: 14px; padding: 0 24px; display: flex; justify-content: center; pointer-events: none; }
+.chaya-v2 .v2-composer { width: 100%; max-width: 740px; pointer-events: auto; }
+/* Keep the composer aligned with the wider desktop chat column (+20px gutter). */
+html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
+/* `overflow: hidden` was clipping the cbar-inner's drop shadow into a hard
+ * rectangle visible at the bottom edge. `clip-path` with a negative inset
+ * lets the shadow breathe sideways/upward while we still clip vertically
+ * for the collapse animation. */
+.chaya-v2 .v2-cbar {
+  max-height: 0; opacity: 0;
+  overflow: hidden;
+  clip-path: inset(-32px -32px 0 -32px);
+  transition: max-height 260ms var(--c-ease), opacity 220ms var(--c-ease), margin 220ms var(--c-ease);
+}
+.chaya-v2 .v2-composer[data-mode="create"] .v2-cbar { max-height: 420px; opacity: 1; margin-bottom: 8px; }
+/* Collapsed cbar: same component, just compressed to header height so the
+ * fold/unfold toggle stays clickable. */
+.chaya-v2 .v2-composer.cbar-collapsed .v2-cbar { max-height: 44px; opacity: 1; margin-bottom: 6px; }
+.chaya-v2 .v2-composer.cbar-collapsed .v2-cbar .v2-cbar-inner { padding: 6px 12px; }
+.chaya-v2 .v2-composer.cbar-collapsed .v2-cbar .v2-hd { margin-bottom: 0; }
+.chaya-v2 .v2-composer.cbar-collapsed .v2-cbar .v2-chips,
+.chaya-v2 .v2-composer.cbar-collapsed .v2-cbar .v2-refs { display: none; }
+.chaya-v2 .v2-composer.cbar-collapsed .v2-cbar > .v2-cbar-inner > :nth-child(n+3) { display: none; }
+/* When folded, drop the verbose helper text/warning and surface the live config
+ * as spec chips — identical look to the sent CreateSpecCard. */
+.chaya-v2 .v2-composer.cbar-collapsed .v2-cbar .v2-hd .v2-h,
+.chaya-v2 .v2-composer.cbar-collapsed .v2-cbar .v2-hd .v2-h-warn { display: none; }
+.chaya-v2 .v2-cbar-summary { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+
+/* ===== create spec card (user-side message in the chat stream) ===== */
+.chaya-v2 .v2-bubble.v2-spec { padding: 8px 14px; }
+.chaya-v2 .v2-spec-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chaya-v2 .v2-spec-chip {
+  display: inline-flex; align-items: center;
+  padding: 2px 9px; border-radius: 999px;
+  font-size: 11px; color: var(--c-ink-2);
+  background: var(--c-bg); border: 1px solid var(--c-rule);
+  white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+}
+.chaya-v2 .v2-spec-chip svg { width: 12px; height: 12px; margin-right: 4px; flex: 0 0 auto; color: var(--c-ink-3); }
+.chaya-v2 .v2-spec-refs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chaya-v2 .v2-spec-ref { width: 56px; height: 56px; border-radius: var(--c-radius-md); overflow: hidden; background: var(--c-surface); flex: 0 0 auto; }
+.chaya-v2 .v2-spec-ref img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.chaya-v2 .v2-spec-ref { cursor: zoom-in; transition: transform 160ms var(--c-ease); }
+.chaya-v2 .v2-spec-ref:hover { transform: translateY(-1px); }
+
+/* Clickable chat-image (BatchView + persisted assistant media). */
+.chaya-v2 .v2-msg .v2-body .v2-imgs .v2-ph.clickable { cursor: zoom-in; }
+
+/* Fullscreen image preview with a download chip. */
+.chaya-v2 .v2-imgpreview {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(0,0,0,0.72);
+  display: grid; place-items: center;
+  animation: v2-imgpreview-fade 140ms var(--c-ease);
+  -webkit-app-region: no-drag;
+}
+@keyframes v2-imgpreview-fade { from { opacity: 0; } to { opacity: 1; } }
+.chaya-v2 .v2-imgpreview img { max-width: 92vw; max-height: 86vh; object-fit: contain; border-radius: var(--c-radius-lg); box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+.chaya-v2 .v2-imgpreview-close {
+  position: absolute; top: 18px; right: 18px;
+  width: 36px; height: 36px; border-radius: 50%;
+  background: rgba(255,255,255,0.14); color: #fff; font-size: 16px;
+  display: grid; place-items: center; cursor: pointer;
+  transition: background 140ms var(--c-ease);
+}
+.chaya-v2 .v2-imgpreview-close:hover { background: rgba(255,255,255,0.24); }
+.chaya-v2 .v2-imgpreview-dl {
+  position: absolute; top: 18px; left: 18px;
+  padding: 8px 16px; border-radius: 999px;
+  background: rgba(255,255,255,0.92); color: #1a1a1a;
+  font-size: 13px; font-weight: 500; cursor: pointer;
+  transition: background 140ms var(--c-ease), transform 120ms var(--c-ease);
+}
+.chaya-v2 .v2-imgpreview-dl:hover { background: #fff; transform: translateY(-1px); }
+/* Same Codex-style card as .v2-box — hairline border + a single soft drop.
+ * Triple-stack shadows were what made the clipped bottom edge look "square"
+ * and harsh against the page. */
+.chaya-v2 .v2-cbar-inner {
+  background: var(--c-bg);
+  border-radius: var(--c-radius-xl);
+  border: 1px solid var(--c-rule);
+  box-shadow: var(--c-shadow-card);
+  padding: 12px 14px;
+}
+.chaya-v2 .v2-cbar .v2-h-warn { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; background: var(--c-danger-bg); color: var(--c-danger); font-size: 11px; letter-spacing: 0.02em; }
+.chaya-v2 .v2-cbar .v2-hd { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.chaya-v2 .v2-cbar .v2-hd .v2-t { font-size: 13px; font-weight: 600; color: var(--c-ink); }
+.chaya-v2 .v2-cbar .v2-hd .v2-h { font-size: 12px; color: var(--c-ink-3); }
+.chaya-v2 .v2-cbar .v2-hd .v2-x { width: 22px; height: 22px; border-radius: var(--c-radius-sm); display: grid; place-items: center; color: var(--c-ink-3); cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-cbar .v2-hd .v2-x:hover { background: var(--c-hover); color: var(--c-ink); }
+/* Expand/collapse toggle — a chevron that rotates between down (展开 → 收起)
+   and right (收起 → 展开). margin-left:auto pushes it + the ✕ to the right. */
+.chaya-v2 .v2-cbar .v2-hd .v2-cbar-toggle { margin-left: auto; width: 24px; height: 24px; border-radius: var(--c-radius-sm); display: grid; place-items: center; color: var(--c-ink-4); cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-cbar .v2-hd .v2-cbar-toggle:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-cbar .v2-hd .v2-cbar-toggle svg { width: 16px; height: 16px; transform: rotate(-90deg); transition: transform 200ms var(--c-ease); }
+.chaya-v2 .v2-cbar .v2-hd .v2-cbar-toggle.open svg { transform: rotate(0deg); }
+.chaya-v2 .v2-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chaya-v2 .v2-chip { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 12px; border-radius: var(--c-radius-pill); background: var(--c-surface); color: var(--c-ink); font-size: 12px; cursor: pointer; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-chip:hover { background: var(--c-hover); }
+.chaya-v2 .v2-chip .v2-k { color: var(--c-ink-3); font-size: 11px; }
+.chaya-v2 .v2-chip.empty { color: var(--c-ink-3); }
+.chaya-v2 .v2-refs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.chaya-v2 .v2-ref { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: center; padding: 6px 10px 6px 6px; background: var(--c-hover-soft); border-radius: var(--c-radius-lg); min-width: 280px; }
+.chaya-v2 .v2-ref:hover { background: var(--c-surface); }
+.chaya-v2 .v2-ref .v2-th { width: 64px; height: 64px; border-radius: var(--c-radius-md); background: var(--c-hover); display: grid; place-items: center; color: var(--c-ink-3); font-size: 11px; font-weight: 600; overflow: hidden; }
+.chaya-v2 .v2-ref .v2-th img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
+.chaya-v2 .v2-ref input.v2-dir { font-size: 12px; color: var(--c-ink-2); width: 100%; padding: 4px 0; }
+.chaya-v2 .v2-ref input.v2-dir::placeholder { color: var(--c-ink-4); font-style: italic; }
+.chaya-v2 .v2-ref .v2-x { color: var(--c-ink-4); cursor: pointer; padding: 0 4px; font-size: 12px; align-self: start; padding-top: 4px; transition: color 140ms var(--c-ease); }
+.chaya-v2 .v2-ref .v2-x:hover { color: var(--c-ink); }
+.chaya-v2 .v2-ref.add { justify-content: center; border: 1px dashed #d8d8d8; background: transparent; min-width: 130px; min-height: 76px; color: var(--c-ink-3); cursor: pointer; font-size: 12px; padding: 6px 12px; transition: border-color 140ms var(--c-ease), color 140ms var(--c-ease), background 140ms var(--c-ease); display: grid; place-items: center; }
+.chaya-v2 .v2-ref.add:hover { border-color: var(--c-ink-2); color: var(--c-ink); background: var(--c-hover-soft); }
+
+/* ===== chip / inline-expand panel inside cbar ===== */
+.chaya-v2 .v2-chip.active { background: var(--c-selected); color: var(--c-ink); font-weight: 500; }
+.chaya-v2 .v2-panel {
+  margin-top: 10px;
+  border-top: 1px solid var(--c-rule);
+  padding-top: 12px;
+  animation: v2-popUp 200ms var(--c-ease) both;
+}
+.chaya-v2 .v2-panel-hd { font-size: 11px; color: var(--c-ink-3); margin-bottom: 8px; letter-spacing: 0.04em; }
+.chaya-v2 .v2-panel .v2-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
+.chaya-v2 .v2-panel .v2-opt { padding: 8px 12px; border-radius: var(--c-radius-md); cursor: pointer; font-size: 13px; color: var(--c-ink); background: var(--c-surface); transition: background 140ms var(--c-ease); display: flex; align-items: baseline; gap: 6px; }
+.chaya-v2 .v2-panel .v2-opt:hover { background: var(--c-hover); }
+.chaya-v2 .v2-panel .v2-opt.active { background: var(--c-ink); color: var(--c-bg); font-weight: 500; }
+.chaya-v2 .v2-panel .v2-opt small { color: var(--c-ink-4); font-size: 11px; letter-spacing: 0.06em; margin-left: auto; }
+.chaya-v2 .v2-panel .v2-opt.active small { color: color-mix(in oklab, var(--c-bg) 62%, transparent); }
+.chaya-v2 .v2-panel .v2-opt { position: relative; }
+.chaya-v2 .v2-panel .v2-opt .v2-opt-del { position: absolute; top: 2px; right: 4px; width: 18px; height: 18px; display: grid; place-items: center; color: var(--c-ink-4); border-radius: var(--c-radius-xs); opacity: 0; transition: opacity 140ms var(--c-ease), background 140ms var(--c-ease); cursor: pointer; font-size: 11px; }
+.chaya-v2 .v2-panel .v2-opt:hover .v2-opt-del { opacity: 1; }
+.chaya-v2 .v2-panel .v2-opt .v2-opt-del:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-panel .v2-opt.active .v2-opt-del { color: color-mix(in oklab, var(--c-bg) 70%, transparent); }
+.chaya-v2 .v2-panel .v2-opt.active .v2-opt-del:hover { background: color-mix(in oklab, var(--c-bg) 16%, transparent); color: var(--c-bg); }
+.chaya-v2 .v2-panel .v2-opt .v2-opt-custom { font-size: 10px; padding: 0 4px; border-radius: var(--c-radius-xs); background: var(--c-hover-soft); color: var(--c-ink-3); margin-left: 4px; letter-spacing: 0.08em; }
+.chaya-v2 .v2-panel .v2-opt.active .v2-opt-custom { background: color-mix(in oklab, var(--c-bg) 18%, transparent); color: var(--c-bg); }
+.chaya-v2 .v2-panel .v2-row-input { display: flex; gap: 6px; margin-top: 10px; }
+.chaya-v2 .v2-panel .v2-row-input input,
+.chaya-v2 .v2-panel .v2-row-input textarea { flex: 1; padding: 8px 12px; border-radius: var(--c-radius-md); background: var(--c-surface); font-size: 13px; color: var(--c-ink); resize: none; min-height: 36px; }
+.chaya-v2 .v2-panel .v2-row-input input:focus,
+.chaya-v2 .v2-panel .v2-row-input textarea:focus { background: var(--c-bg); box-shadow: 0 0 0 2px var(--c-ink); }
+.chaya-v2 .v2-panel .v2-row-input button { padding: 8px 14px; border-radius: var(--c-radius-md); background: var(--c-ink); color: var(--c-bg); cursor: pointer; font-size: 13px; }
+.chaya-v2 .v2-panel .v2-row-input button:hover { background: var(--c-ink-deep); }
+.chaya-v2 .v2-panel .v2-row-input button.ghost { background: var(--c-surface); color: var(--c-ink); }
+.chaya-v2 .v2-panel .v2-row-input button.ghost:hover { background: var(--c-hover); }
+@keyframes v2-popUp { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ===== unified modal (model picker / agent settings / future) ===== */
+.chaya-v2 .v2-ib.on { background: var(--c-selected); color: var(--c-ink); }
+.chaya-v2 .v2-modal-mask {
+  position: fixed; inset: 0; background: rgba(15,15,15,0.30);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  z-index: 100; display: grid; place-items: center;
+  animation: v2-fadeIn 180ms var(--c-ease) both;
+  padding: 40px 24px;
+}
+.chaya-v2 .v2-modal {
+  background: var(--c-bg); border-radius: var(--c-radius-xl);
+  border: 1px solid var(--c-rule);
+  box-shadow: var(--c-shadow-modal);
+  width: 100%; max-width: 480px;
+  max-height: min(82vh, 720px);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  /* 安静入场：淡入 + 轻微上浮，无弹跳缩放（letterpress：落在纸上，而非弹出）。 */
+  animation: v2-modalIn 200ms var(--c-ease) both;
+}
+.chaya-v2 .v2-modal.wide { max-width: 560px; }
+@keyframes v2-modalIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+.chaya-v2 .v2-modal-hd { display: flex; align-items: center; gap: 10px; padding: 16px 20px 12px; border-bottom: 1px solid var(--c-rule); }
+.chaya-v2 .v2-modal-hd h3 { font-size: 15px; font-weight: 600; color: var(--c-ink); }
+.chaya-v2 .v2-modal-hd .v2-modal-sub { font-size: 12px; color: var(--c-ink-3); }
+.chaya-v2 .v2-modal-hd .x { margin-left: auto; width: 28px; height: 28px; border-radius: var(--c-radius-md); display: grid; place-items: center; color: var(--c-ink-3); cursor: pointer; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-modal-hd .x:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-modal-body { padding: 14px 20px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+.chaya-v2 .v2-modal-foot { padding: 12px 20px; border-top: 1px solid var(--c-rule); display: flex; gap: 8px; justify-content: flex-end; }
+.chaya-v2 .v2-modal-foot .v2-mbtn { padding: 7px 14px; border-radius: var(--c-radius-md); font-size: 13px; cursor: pointer; color: var(--c-ink-3); transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-modal-foot .v2-mbtn:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-modal-foot .v2-mbtn.primary { background: var(--c-ink); color: var(--c-bg); }
+.chaya-v2 .v2-modal-foot .v2-mbtn.primary:hover { background: var(--c-ink-deep); }
+.chaya-v2 .v2-modal-foot .v2-mbtn:disabled { opacity: 0.5; cursor: progress; }
+.chaya-v2 .v2-modal .v2-modal-sec { margin-bottom: 16px; }
+.chaya-v2 .v2-modal .v2-modal-sec:last-child { margin-bottom: 0; }
+.chaya-v2 .v2-modal .v2-modal-sec .lab { font-size: 11px; color: var(--c-ink-3); margin-bottom: 6px; letter-spacing: 0.04em; }
+.chaya-v2 .v2-modal .v2-modal-sec input,
+.chaya-v2 .v2-modal .v2-modal-sec textarea { width: 100%; padding: 10px 12px; border-radius: var(--c-radius-lg); background: var(--c-surface); font-size: 14px; color: var(--c-ink); resize: vertical; transition: background 140ms var(--c-ease), box-shadow 140ms var(--c-ease); }
+.chaya-v2 .v2-modal .v2-modal-sec input:focus,
+.chaya-v2 .v2-modal .v2-modal-sec textarea:focus { background: var(--c-bg); box-shadow: 0 0 0 2px var(--c-ink); }
+.chaya-v2 .v2-modal .v2-modal-sec textarea { min-height: 100px; line-height: 1.55; }
+.chaya-v2 .v2-modal .v2-modal-note { font-size: 12px; color: var(--c-ink-4); margin-top: 6px; line-height: 1.5; }
+.chaya-v2 .v2-ctxpop-list { display: flex; flex-direction: column; gap: 2px; }
+
+/* ===== settings modal (sidebar tabs) ===== */
+.chaya-v2 .v2-modal-settings { max-width: 860px; width: 100%; max-height: min(86vh, 760px); display: flex; flex-direction: column; }
+.chaya-v2 .v2-modal-settings .v2-modal-hd { padding: 18px 26px 14px; }
+.chaya-v2 .v2-modal-settings .v2-modal-hd h3 { font-size: 16px; letter-spacing: -0.01em; }
+.chaya-v2 .v2-settings-body { display: grid; grid-template-columns: 196px 1fr; min-height: 0; flex: 1 1 auto; }
+.chaya-v2 .v2-settings-nav { padding: 18px 14px; border-right: 1px solid var(--c-rule); display: flex; flex-direction: column; gap: 2px; overflow-y: auto; background: var(--c-sidebar); }
+.chaya-v2 .v2-settings-nav-group { display: flex; flex-direction: column; gap: 2px; }
+.chaya-v2 .v2-settings-nav-group + .v2-settings-nav-group { margin-top: 20px; }
+.chaya-v2 .v2-settings-nav-head { display: flex; flex-direction: column; gap: 1px; padding: 4px 12px 8px; }
+.chaya-v2 .v2-settings-nav-head .grp { font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; color: var(--c-ink-4); text-transform: uppercase; }
+.chaya-v2 .v2-settings-nav-head .hint { font-size: 11px; color: var(--c-ink-4); opacity: 0.8; }
+.chaya-v2 .v2-settings-nav-item { position: relative; text-align: left; padding: 7px 12px; border-radius: var(--c-radius-md); cursor: pointer; font-size: 13px; color: var(--c-ink-3); transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-settings-nav-item:hover { background: var(--c-hover-soft); color: var(--c-ink); }
+.chaya-v2 .v2-settings-nav-item.active { background: var(--c-hover); color: var(--c-ink); font-weight: 500; }
+/* 唯一的强调：当前项左侧一道墨痕（sparing accent） */
+.chaya-v2 .v2-settings-nav-item.active::before { content: ''; position: absolute; left: 3px; top: 7px; bottom: 7px; width: 2px; border-radius: 1px; background: var(--c-accent); }
+.chaya-v2 .v2-settings-pane { padding: 24px 30px 28px; overflow-y: auto; min-height: 0; }
+
+.chaya-v2 .v2-set-sec { margin-bottom: 30px; }
+.chaya-v2 .v2-set-sec:last-child { margin-bottom: 0; }
+.chaya-v2 .v2-set-sec-hd { margin-bottom: 6px; display: flex; align-items: flex-start; gap: 14px; }
+.chaya-v2 .v2-set-sec-hd > div:first-child { flex: 1; min-width: 0; }
+.chaya-v2 .v2-set-sec-hd .t { font-size: 15px; font-weight: 600; color: var(--c-ink); letter-spacing: -0.01em; }
+.chaya-v2 .v2-set-sec-hd .h { font-size: 12px; color: var(--c-ink-4); margin-top: 3px; line-height: 1.5; }
+.chaya-v2 .v2-set-sec-trail { flex-shrink: 0; }
+.chaya-v2 .v2-set-group { margin-bottom: 14px; }
+.chaya-v2 .v2-set-group-hd { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--c-ink-3); padding: 4px 4px 8px; }
+/* 行 = 细线分隔的账本式列表（editorial、安静；靠 1px 鳞次划分，不靠 hover 底色） */
+.chaya-v2 .v2-set-sec-body { display: flex; flex-direction: column; }
+.chaya-v2 .v2-set-row { display: flex; align-items: center; gap: 14px; padding: 13px 2px; border-bottom: 1px solid var(--c-rule); }
+.chaya-v2 .v2-set-row:last-child { border-bottom: 0; }
+.chaya-v2 .v2-set-row-l { flex: 1; min-width: 0; }
+.chaya-v2 .v2-set-row-l .lab { font-size: 13.5px; color: var(--c-ink); }
+.chaya-v2 .v2-set-row-l .sub { font-size: 11.5px; color: var(--c-ink-4); margin-top: 3px; line-height: 1.5; }
+.chaya-v2 .v2-set-row-r { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.chaya-v2 .v2-set-val { font-size: 13px; color: var(--c-ink-2); display: flex; align-items: center; gap: 6px; }
+.chaya-v2 .v2-set-empty { font-size: 13px; color: var(--c-ink-3); padding: 14px 12px; }
+.chaya-v2 .v2-pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; background: var(--c-surface); color: var(--c-ink-2); letter-spacing: 0.04em; }
+.chaya-v2 .v2-pill.ok { background: rgba(40,200,120,0.16); color: var(--c-success); }
+.chaya-v2 .v2-pill.mute { background: var(--c-surface); color: var(--c-ink-3); }
+.chaya-v2 .v2-pill.solid { background: var(--c-ink); color: var(--c-bg); font-weight: 500; }
+.chaya-v2 .v2-pill.warn { background: var(--c-warn-bg); color: var(--c-warn); }
+.chaya-v2 .v2-pill.soft { background: var(--c-accent-bg); color: var(--c-ink-3); }
+
+.chaya-v2 .v2-switch { width: 36px; height: 22px; border-radius: 999px; background: var(--c-selected); position: relative; cursor: pointer; transition: background 200ms var(--c-ease); padding: 0; }
+.chaya-v2 .v2-switch .thumb { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.18); transition: left 200ms var(--c-ease-spring); }
+.chaya-v2 .v2-switch.on { background: var(--c-ink); }
+.chaya-v2 .v2-switch.on .thumb { left: 16px; }
+
+.chaya-v2 .v2-set-select { padding: 6px 10px; border-radius: var(--c-radius-md); background: var(--c-surface); font-size: 13px; color: var(--c-ink); cursor: pointer; }
+.chaya-v2 .v2-set-select:focus { background: var(--c-bg); box-shadow: 0 0 0 2px var(--c-ink); }
+/* Unified button system. Shared across dialogs/drawers/modals.
+ *   .v2-btn          — default secondary (gray surface)
+ *   .v2-btn.primary  — filled dark (call to action)
+ *   .v2-btn.ghost    — transparent until hovered (cancel / tertiary)
+ *   .v2-btn.danger   — destructive (delete / discard)
+ * `.v2-set-btn` / `.v2-set-danger` are kept as aliases for existing markup
+ * but route to the same visuals. */
+.chaya-v2 .v2-btn,
+.chaya-v2 .v2-set-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 6px 12px; border-radius: var(--c-radius-md);
+  background: var(--c-surface); color: var(--c-ink);
+  font-size: 12px; font-weight: 500; line-height: 1.3;
+  cursor: pointer; user-select: none;
+  transition: background 140ms var(--c-ease), color 140ms var(--c-ease), opacity 140ms var(--c-ease);
+}
+.chaya-v2 .v2-btn:hover,
+.chaya-v2 .v2-set-btn:hover { background: var(--c-hover); }
+.chaya-v2 .v2-btn.primary,
+.chaya-v2 .v2-set-btn.primary { background: var(--c-ink); color: var(--c-bg); }
+.chaya-v2 .v2-btn.primary:hover,
+.chaya-v2 .v2-set-btn.primary:hover { background: var(--c-ink-deep); }
+.chaya-v2 .v2-btn.ghost { background: transparent; color: var(--c-ink-2); }
+.chaya-v2 .v2-btn.ghost:hover { background: var(--c-hover-soft); color: var(--c-ink); }
+.chaya-v2 .v2-btn.danger,
+.chaya-v2 .v2-set-danger {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 6px 12px; border-radius: var(--c-radius-md);
+  background: var(--c-danger-bg); color: var(--c-danger);
+  font-size: 12px; font-weight: 500;
+  cursor: pointer;
+  transition: background 140ms var(--c-ease);
+}
+.chaya-v2 .v2-btn.danger:hover,
+.chaya-v2 .v2-set-danger:hover { background: #ffedd5; }
+.chaya-v2 .v2-btn:disabled,
+.chaya-v2 .v2-set-btn:disabled,
+.chaya-v2 .v2-btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+
+.chaya-v2 .v2-set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+.chaya-v2 .v2-set-card { padding: 10px 12px; border-radius: var(--c-radius-md); background: var(--c-surface); border: 1px solid transparent; cursor: pointer; display: flex; flex-direction: column; gap: 2px; align-items: flex-start; transition: background 140ms var(--c-ease), border-color 140ms var(--c-ease), box-shadow 140ms var(--c-ease); min-height: 58px; }
+.chaya-v2 .v2-set-card:hover { background: var(--c-hover-soft); }
+/* 选中 = accent 描边（与主题色块一致的"沉静强调"，不再用墨块反白） */
+.chaya-v2 .v2-set-card.active { background: var(--c-accent-bg); border-color: var(--c-accent); box-shadow: inset 0 0 0 1px var(--c-accent); }
+.chaya-v2 .v2-set-card .t { font-size: 15px; font-weight: 500; line-height: 1.15; color: var(--c-ink); }
+.chaya-v2 .v2-set-card .s { font-size: 11px; color: var(--c-ink-4); }
+.chaya-v2 .v2-set-card.active .t { color: var(--c-accent-strong); }
+.chaya-v2 .v2-set-card.active .s { color: var(--c-ink-3); }
+
+.chaya-v2 .v2-set-card-row { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: var(--c-radius-lg); background: var(--c-hover-soft); margin-bottom: 6px; border: 1px solid transparent; transition: background 160ms var(--c-ease), border-color 160ms var(--c-ease), box-shadow 160ms var(--c-ease); }
+.chaya-v2 .v2-set-card-row.is-default { background: var(--c-accent-bg); border-color: var(--c-accent); box-shadow: inset 3px 0 0 var(--c-accent-strong); }
+.chaya-v2 .v2-set-card-row .l { flex: 1; min-width: 0; }
+.chaya-v2 .v2-set-card-row .l .t { font-size: 13px; color: var(--c-ink); display: flex; align-items: baseline; gap: 6px; }
+.chaya-v2 .v2-set-card-row .l .t small { color: var(--c-ink-3); font-size: 11px; }
+.chaya-v2 .v2-set-card-row .l .s { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+.chaya-v2 .v2-set-card-row .r { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* ---- appearance: segmented control ---- */
+.chaya-v2 .v2-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--c-radius-md); background: var(--c-hover-soft); }
+.chaya-v2 .v2-seg-item { display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; border-radius: 6px; background: transparent; border: 0; cursor: pointer; font-size: 12.5px; color: var(--c-ink-3); transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-seg-item .ic { font-size: 13px; line-height: 1; }
+.chaya-v2 .v2-seg-item:hover { color: var(--c-ink); }
+.chaya-v2 .v2-seg-item.active { background: var(--c-bg); color: var(--c-ink); font-weight: 500; box-shadow: var(--c-shadow-pill); }
+
+/* ---- color theme picker — compact horizontal chips ---- */
+.chaya-v2 .v2-theme-row { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.chaya-v2 .v2-theme-chip { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 5px; border-radius: 9px; background: transparent; border: 1px solid transparent; cursor: pointer; transition: border-color 140ms var(--c-ease), background 140ms var(--c-ease); }
+.chaya-v2 .v2-theme-chip:hover { background: var(--c-hover-soft); }
+.chaya-v2 .v2-theme-chip.active { border-color: var(--c-accent); background: var(--c-accent-bg); }
+.chaya-v2 .v2-theme-chip .sw { width: 44px; height: 30px; border-radius: 6px; border: 1px solid var(--c-rule); display: flex; align-items: center; justify-content: center; gap: 3px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.02); }
+.chaya-v2 .v2-theme-chip .sw i { width: 7px; height: 7px; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0,0,0,0.05); }
+.chaya-v2 .v2-theme-chip .nm { font-size: 11px; color: var(--c-ink-3); letter-spacing: 0.01em; }
+.chaya-v2 .v2-theme-chip.active .nm { color: var(--c-ink); font-weight: 500; }
+
+.chaya-v2 .v2-set-add { padding: 10px 14px; border-radius: var(--c-radius-lg); background: transparent; border: 1px dashed #d8d8d8; cursor: pointer; font-size: 13px; color: var(--c-ink-3); width: 100%; margin-top: 6px; transition: border-color 140ms var(--c-ease), color 140ms var(--c-ease), background 140ms var(--c-ease); }
+.chaya-v2 .v2-set-add:hover { border-color: var(--c-ink-2); color: var(--c-ink); background: var(--c-hover-soft); }
+
+.chaya-v2 .v2-set-form { padding: 12px; border-radius: var(--c-radius-lg); background: var(--c-hover-soft); margin-top: 8px; }
+.chaya-v2 .v2-set-form .lab { font-size: 11px; color: var(--c-ink-3); margin-bottom: 4px; }
+.chaya-v2 .v2-set-form input,
+.chaya-v2 .v2-set-form select { width: 100%; padding: 8px 10px; border-radius: var(--c-radius-md); background: var(--c-surface); font-size: 13px; }
+.chaya-v2 .v2-set-form input:focus { background: var(--c-bg); box-shadow: 0 0 0 2px var(--c-ink); }
+.chaya-v2 .v2-set-form-foot { display: flex; gap: 6px; justify-content: flex-end; margin-top: 12px; }
+.chaya-v2 .v2-ctxpop-item { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 8px 10px; border-radius: var(--c-radius-md); cursor: pointer; transition: background 140ms var(--c-ease); align-items: center; }
+.chaya-v2 .v2-ctxpop-item:hover { background: var(--c-hover); }
+.chaya-v2 .v2-ctxpop-item.active { background: var(--c-selected); }
+.chaya-v2 .v2-ctxpop-item .nm { font-size: 13px; color: var(--c-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-ctxpop-item .nm small { color: var(--c-ink-4); font-size: 11px; margin-left: 6px; letter-spacing: 0.04em; }
+.chaya-v2 .v2-ctxpop-item .tag { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--c-surface); color: var(--c-ink-3); letter-spacing: 0.04em; white-space: nowrap; }
+.chaya-v2 .v2-ctxpop-item.active .tag { background: var(--c-ink); color: var(--c-bg); }
+.chaya-v2 .v2-ctxpop-empty { padding: 14px 4px; color: var(--c-ink-3); font-size: 13px; }
+
+/* ===== agent settings drawer ===== */
+.chaya-v2 .v2-drawer-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.18); z-index: 80; backdrop-filter: blur(4px); animation: v2-fadeIn 200ms var(--c-ease) both; }
+.chaya-v2 .v2-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 420px; background: var(--c-bg); z-index: 90; box-shadow: -10px 0 30px rgba(0,0,0,0.08); padding: 18px 22px; overflow-y: auto; animation: v2-drawerIn 260ms var(--c-ease) both; }
+@keyframes v2-fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes v2-drawerIn { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+.chaya-v2 .v2-drawer-hd { display: flex; align-items: center; padding-top: 24px; padding-bottom: 12px; }
+.chaya-v2 .v2-drawer-hd h3 { font-size: 17px; font-weight: 600; color: var(--c-ink); }
+.chaya-v2 .v2-drawer-hd .x { margin-left: auto; width: 32px; height: 32px; border-radius: var(--c-radius-md); display: grid; place-items: center; color: var(--c-ink-3); cursor: pointer; }
+.chaya-v2 .v2-drawer-hd .x:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-drawer-sec { margin-top: 18px; }
+.chaya-v2 .v2-drawer-sec .lab { font-size: 11px; color: var(--c-ink-3); margin-bottom: 6px; letter-spacing: 0.05em; }
+.chaya-v2 .v2-drawer-sec input,
+.chaya-v2 .v2-drawer-sec textarea { width: 100%; padding: 10px 12px; border-radius: var(--c-radius-lg); background: var(--c-surface); font-size: 14px; color: var(--c-ink); resize: vertical; }
+.chaya-v2 .v2-drawer-sec input:focus,
+.chaya-v2 .v2-drawer-sec textarea:focus { background: var(--c-bg); box-shadow: 0 0 0 2px var(--c-ink); }
+.chaya-v2 .v2-drawer-sec textarea { min-height: 100px; line-height: 1.55; }
+.chaya-v2 .v2-drawer-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+.chaya-v2 .v2-drawer-btn { padding: 8px 14px; border-radius: var(--c-radius-md); font-size: 13px; cursor: pointer; color: var(--c-ink-3); }
+.chaya-v2 .v2-drawer-btn:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-drawer-btn.primary { background: var(--c-ink); color: var(--c-bg); }
+.chaya-v2 .v2-drawer-btn.primary:hover { background: var(--c-ink-deep); }
+.chaya-v2 .v2-drawer-note { font-size: 12px; color: var(--c-ink-4); margin-top: 6px; line-height: 1.5; }
+.chaya-v2 .v2-avatar-row { display: flex; gap: 14px; align-items: flex-start; }
+.chaya-v2 .v2-avatar-lg { width: 64px; height: 64px; border-radius: var(--c-radius-xl); background: var(--c-surface); display: grid; place-items: center; cursor: pointer; overflow: hidden; flex: 0 0 64px; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-avatar-lg:hover { background: var(--c-hover); }
+.chaya-v2 .v2-avatar-lg img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.chaya-v2 .v2-avatar-lg span { font-size: 24px; color: var(--c-ink-3); font-weight: 600; }
+.chaya-v2 .v2-drawer-wide { width: 720px; max-width: 92vw; padding: 0; }
+.chaya-v2 .v2-drawer-wide .v2-drawer-hd { padding: 16px 22px 10px; border-bottom: 1px solid var(--c-rule); gap: 14px; }
+.chaya-v2 .v2-drawer-wide .v2-drawer-hd h3 { font-size: 16px; }
+.chaya-v2 .v2-tabs { display: inline-flex; padding: 2px; background: var(--c-surface); border-radius: var(--c-radius-pill); margin-left: 14px; }
+.chaya-v2 .v2-tabs button { padding: 5px 12px; border-radius: var(--c-radius-pill); cursor: pointer; color: var(--c-ink-3); font-size: 12px; transition: color 140ms var(--c-ease), background 140ms var(--c-ease); }
+.chaya-v2 .v2-tabs button.on { background: var(--c-bg); color: var(--c-ink); box-shadow: 0 1px 2px rgba(0,0,0,0.06); font-weight: 500; }
+
+/* legacy-wrap: contain the old letterpress-styled pages inside v2 surfaces.
+   Resets paper background so they read on white. */
+.chaya-v2 .v2-legacy-wrap { background: var(--c-bg); color: var(--c-ink); }
+.chaya-v2 .v2-legacy-wrap .app-frame,
+.chaya-v2 .v2-legacy-wrap [class*="paper"],
+.chaya-v2 .v2-legacy-wrap [class*="Paper"] { background: transparent !important; }
+
+/* Empty-state — centered, quiet. */
+.chaya-v2 .v2-empty { margin-top: 18vh; text-align: center; color: var(--c-ink-3); }
+.chaya-v2 .v2-empty-title { font-size: 17px; font-weight: 500; color: var(--c-ink-2); margin-bottom: 4px; letter-spacing: -0.01em; }
+.chaya-v2 .v2-empty-sub { font-size: 12px; color: var(--c-ink-4); }
+
+/* Codex-style composer: hairline border + a single soft drop, no triple
+ * shadow stack. Focus deepens the border a hair rather than blooming. */
+.chaya-v2 .v2-box {
+  position: relative; /* anchor for the @域 mention popover */
+  background: var(--c-bg);
+  border-radius: var(--c-radius-xl);
+  border: 1px solid var(--c-rule);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03), 0 8px 28px rgba(0,0,0,0.05);
+  padding: 12px 14px 8px;
+  transition: border-color 160ms var(--c-ease), box-shadow 160ms var(--c-ease);
+}
+.chaya-v2 .v2-box:focus-within {
+  border-color: color-mix(in oklab, var(--c-ink) 22%, var(--c-rule));
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 10px 30px rgba(0,0,0,0.07);
+}
+.chaya-v2 .v2-box textarea { width: 100%; resize: none; min-height: 28px; max-height: 220px; font-size: 15px; line-height: 1.55; color: var(--c-ink); display: block; }
+.chaya-v2 .v2-box textarea::placeholder { color: var(--c-ink-4); }
+.chaya-v2 .v2-attaches { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.chaya-v2 .v2-att { position: relative; width: 48px; height: 48px; border-radius: var(--c-radius-md); overflow: hidden; background: var(--c-surface); }
+.chaya-v2 .v2-att img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.chaya-v2 .v2-att .x { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; background: rgba(0,0,0,0.6); color: #fff; display: grid; place-items: center; font-size: 10px; cursor: pointer; }
+.chaya-v2 .v2-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.chaya-v2 .v2-row .v2-l { display: flex; align-items: center; gap: 2px; flex: 1; }
+.chaya-v2 .v2-row .v2-ib { width: 30px; height: 30px; border-radius: var(--c-radius-md); cursor: pointer; color: var(--c-ink-2); display: grid; place-items: center; transition: background 140ms var(--c-ease), color 140ms var(--c-ease), transform 100ms var(--c-ease); }
+.chaya-v2 .v2-row .v2-ib:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-row .v2-ib:active { transform: scale(0.92); }
+.chaya-v2 .v2-row .v2-ib svg { width: 18px; height: 18px; }
+
+.chaya-v2 .v2-modepills { position: relative; display: inline-flex; padding: 2px; background: var(--c-surface); border-radius: var(--c-radius-pill); margin-left: 6px; }
+.chaya-v2 .v2-modepills button { position: relative; z-index: 1; padding: 5px 14px; border-radius: var(--c-radius-pill); cursor: pointer; color: var(--c-ink-3); font-size: 12px; transition: color 140ms var(--c-ease); }
+.chaya-v2 .v2-modepills button.on { color: var(--c-ink); font-weight: 500; }
+.chaya-v2 .v2-modepills .v2-indicator { position: absolute; top: 2px; bottom: 2px; background: var(--c-bg); border-radius: var(--c-radius-pill); box-shadow: 0 1px 2px rgba(0,0,0,0.06); transition: left 240ms var(--c-ease-spring), width 240ms var(--c-ease-spring); z-index: 0; }
+
+.chaya-v2 .v2-mic { width: 32px; height: 32px; border-radius: var(--c-radius-pill); display: grid; place-items: center; color: var(--c-ink-2); cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-mic:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-modelbadge { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 12px; border-radius: var(--c-radius-pill); background: var(--c-surface); color: var(--c-ink); font-size: 12px; cursor: pointer; transition: background 140ms var(--c-ease); max-width: 200px; }
+.chaya-v2 .v2-modelbadge:hover { background: var(--c-hover); }
+.chaya-v2 .v2-modelbadge .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 110px; }
+.chaya-v2 .v2-modelbadge .sub { font-size: 11px; color: var(--c-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 80px; }
+.chaya-v2 .v2-send { width: 32px; height: 32px; border-radius: 50%; background: var(--c-ink); color: var(--c-bg); display: grid; place-items: center; cursor: pointer; transition: background 140ms var(--c-ease), transform 140ms var(--c-ease-spring); }
+.chaya-v2 .v2-send:hover { background: var(--c-ink-deep); transform: translateY(-1px); }
+.chaya-v2 .v2-send:active { transform: scale(0.92); }
+.chaya-v2 .v2-send svg { width: 16px; height: 16px; }
+
+/* ===== knowledge view (v2) ===== */
+.chaya-v2 .v2-kb-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+
+/* knowledge domains (知识域) bar */
+.chaya-v2 .v2-kb-domains { max-width: 1080px; margin: 12px auto 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chaya-v2 .v2-kb-dom {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border-radius: var(--c-radius-pill);
+  background: var(--c-surface); color: var(--c-ink-2); font-size: 13px; cursor: pointer;
+  border: 1px solid transparent; transition: background 140ms var(--c-ease), color 140ms var(--c-ease), border-color 140ms var(--c-ease);
+}
+.chaya-v2 .v2-kb-dom:hover { background: var(--c-hover); }
+.chaya-v2 .v2-kb-dom.on { background: var(--c-ink); color: var(--c-bg); }
+.chaya-v2 .v2-kb-dom.on .dot { box-shadow: 0 0 0 1.5px var(--c-bg); }
+.chaya-v2 .v2-kb-dom .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.chaya-v2 .v2-kb-dom.add { color: var(--c-ink-3); border: 1px dashed var(--c-rule); background: transparent; }
+.chaya-v2 .v2-kb-dom.add svg { width: 13px; height: 13px; }
+.chaya-v2 .v2-kb-dom-hint { margin-left: 10px; font-size: 12px; color: var(--c-ink-4); align-self: center; }
+.chaya-v2 .v2-kb-dom-hint code { font-family: var(--c-mono); background: var(--c-surface); padding: 1px 5px; border-radius: 4px; }
+.chaya-v2 .v2-kb-swatches { display: flex; gap: 8px; }
+.chaya-v2 .v2-kb-swatch { width: 26px; height: 26px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
+.chaya-v2 .v2-kb-swatch.on { border-color: var(--c-ink); box-shadow: 0 0 0 2px var(--c-bg) inset; }
+
+/* composer: picked-domain chips + @mention popover */
+.chaya-v2 .v2-dom-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.chaya-v2 .v2-dom-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 6px 3px 9px; border-radius: var(--c-radius-pill);
+  background: var(--c-hover-soft); font-size: 12px; color: var(--c-ink-2);
+}
+.chaya-v2 .v2-dom-chip .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.chaya-v2 .v2-dom-chip .x { width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; color: var(--c-ink-3); cursor: pointer; }
+.chaya-v2 .v2-dom-chip .x:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-dom-pop {
+  position: absolute; left: 12px; bottom: calc(100% + 6px); min-width: 240px; max-width: 360px;
+  background: var(--c-bg); border-radius: var(--c-radius-lg); box-shadow: var(--c-shadow-menu);
+  padding: 5px; z-index: 30; animation: v2-fadeUp 140ms var(--c-ease) both;
+}
+.chaya-v2 .v2-dom-pop-hd { font-size: 11px; color: var(--c-ink-4); padding: 5px 8px 6px; }
+.chaya-v2 .v2-dom-pop-empty { font-size: 12px; color: var(--c-ink-4); padding: 6px 9px 8px; }
+.chaya-v2 .v2-dom-pop-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 9px; border-radius: var(--c-radius-sm); cursor: pointer; text-align: left; color: var(--c-ink);
+}
+.chaya-v2 .v2-dom-pop-item.on, .chaya-v2 .v2-dom-pop-item:hover { background: var(--c-hover); }
+.chaya-v2 .v2-dom-pop-item .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.chaya-v2 .v2-dom-pop-item .nm { font-size: 13px; font-weight: 500; flex: none; }
+.chaya-v2 .v2-dom-pop-item .ds { font-size: 12px; color: var(--c-ink-4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-kb-conn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--c-ink-3); padding: 4px 10px; border-radius: 999px; background: var(--c-surface); }
+/* Centered 1080 column so the pill left-aligns with the header (matches
+ * .v2-view-head / .v2-kb-domains). The pill stays inline-flex and hugs its
+ * buttons — an inline-flex with margin:auto can't center, which is why it used
+ * to drop to the window's left edge on wide / fullscreen layouts. */
+.chaya-v2 .v2-kb-tabs-row { max-width: 1080px; margin: 0 auto 18px; display: flex; align-items: center; position: sticky; top: 4px; z-index: 2; }
+.chaya-v2 .v2-kb-tabs { display: inline-flex; padding: 2px; background: var(--c-surface); border-radius: var(--c-radius-pill); }
+.chaya-v2 .v2-kb-tabs button { padding: 6px 16px; border-radius: var(--c-radius-pill); cursor: pointer; color: var(--c-ink-3); font-size: 13px; transition: color 140ms var(--c-ease); }
+.chaya-v2 .v2-kb-tabs button.on { background: var(--c-bg); color: var(--c-ink); box-shadow: 0 1px 2px rgba(0,0,0,0.06); font-weight: 500; }
+.chaya-v2 .v2-kb-body { max-width: 1080px; margin: 0 auto; }
+.chaya-v2 .v2-kb-toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+.chaya-v2 .v2-kb-filters { display: flex; gap: 6px; flex-wrap: wrap; }
+.chaya-v2 .v2-kb-pill { padding: 4px 11px; border-radius: 999px; background: var(--c-surface); color: var(--c-ink-2); font-size: 12px; cursor: pointer; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-kb-pill:hover { background: var(--c-hover); }
+.chaya-v2 .v2-kb-pill.on { background: var(--c-ink); color: var(--c-bg); }
+.chaya-v2 .v2-kb-search { flex: 1; min-width: 200px; max-width: 360px; }
+.chaya-v2 .v2-kb-search input { width: 100%; padding: 9px 13px; border-radius: var(--c-radius-md); background: var(--c-surface); border: 1px solid transparent; font-size: 13px; transition: background var(--c-dur) var(--c-ease), border-color var(--c-dur) var(--c-ease), box-shadow var(--c-dur) var(--c-ease); }
+.chaya-v2 .v2-kb-search input:focus { background: var(--c-bg); border-color: var(--c-rule); box-shadow: 0 0 0 3px var(--c-accent-bg); }
+.chaya-v2 .v2-kb-search-bar { display: flex; gap: 8px; margin-bottom: 14px; }
+.chaya-v2 .v2-kb-search-bar input { flex: 1; padding: 12px 18px; border-radius: var(--c-radius-xl); background: var(--c-surface); border: 1px solid transparent; font-size: 15px; transition: background var(--c-dur) var(--c-ease), border-color var(--c-dur) var(--c-ease), box-shadow var(--c-dur) var(--c-ease); }
+.chaya-v2 .v2-kb-search-bar input:focus { background: var(--c-bg); border-color: var(--c-rule); box-shadow: 0 0 0 3px var(--c-accent-bg); }
+/* 2-column card grid; rows grow with content. align-items:start keeps each card
+   its natural height (no stretching to the row's tallest). Collapses to a single
+   column on narrow windows. */
+.chaya-v2 .v2-kb-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
+@media (max-width: 720px) { .chaya-v2 .v2-kb-list { grid-template-columns: 1fr; } }
+/* .even (documents): every card the same height. grid-auto-rows:1fr equalizes
+   all rows to the tallest; align-items:stretch fills each cell; the footer is
+   pushed to the bottom so the extra space reads as intentional. */
+.chaya-v2 .v2-kb-list.even { grid-auto-rows: 1fr; align-items: stretch; }
+.chaya-v2 .v2-kb-list.even .v2-kb-card { display: flex; flex-direction: column; }
+.chaya-v2 .v2-kb-list.even .v2-kb-card .ft { margin-top: auto; }
+/* .fixed (document-chunk search results): uniform fixed-height cards. Don't show
+   the whole chunk — clamp the body to the lines that fit; the rest is implied.
+   header pinned top, footer pinned bottom, so every card lines up edge-to-edge. */
+.chaya-v2 .v2-kb-list.fixed { grid-auto-rows: 184px; align-items: stretch; }
+.chaya-v2 .v2-kb-list.fixed .v2-kb-card { display: flex; flex-direction: column; overflow: hidden; }
+.chaya-v2 .v2-kb-list.fixed .v2-kb-card .hd { flex: 0 0 auto; }
+.chaya-v2 .v2-kb-list.fixed .v2-kb-card .body {
+  flex: 1 1 auto; min-height: 0; overflow: hidden;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4;
+}
+.chaya-v2 .v2-kb-list.fixed .v2-kb-card .ft { flex: 0 0 auto; margin-top: auto; }
+/* A memory is a card pressed onto the page: hairline rule, no flat-gray fill, lifts on hover. */
+.chaya-v2 .v2-kb-card { background: var(--c-bg); border: 1px solid var(--c-rule); border-radius: var(--c-radius-lg); padding: 14px 16px; transition: border-color var(--c-dur) var(--c-ease), box-shadow var(--c-dur) var(--c-ease); position: relative; }
+.chaya-v2 .v2-kb-card:hover { border-color: var(--c-ink-4); box-shadow: var(--c-shadow-soft); }
+/* pinned: a warm marginal rule pressed into the left edge (the "marginalia" highlight) */
+.chaya-v2 .v2-kb-card.pinned { box-shadow: inset 3px 0 0 var(--c-warn); }
+.chaya-v2 .v2-kb-card.pinned:hover { box-shadow: inset 3px 0 0 var(--c-warn), var(--c-shadow-soft); }
+.chaya-v2 .v2-kb-card .hd { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 9px; }
+.chaya-v2 .v2-kb-card .hd .grow { flex: 1; }
+/* card actions stay out of sight until the card is hovered (or pinned) — quiet by default */
+.chaya-v2 .v2-kb-card .hd .acts { display: inline-flex; gap: 2px; opacity: 0; transition: opacity var(--c-dur) var(--c-ease); }
+.chaya-v2 .v2-kb-card:hover .hd .acts,
+.chaya-v2 .v2-kb-card:focus-within .hd .acts,
+.chaya-v2 .v2-kb-card.pinned .hd .acts { opacity: 1; }
+.chaya-v2 .v2-kb-card .hd .iconbtn { width: 28px; height: 28px; border-radius: var(--c-radius-sm); display: grid; place-items: center; cursor: pointer; color: var(--c-ink-4); transition: background var(--c-dur) var(--c-ease), color var(--c-dur) var(--c-ease); }
+.chaya-v2 .v2-kb-card .hd .iconbtn svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-kb-card .hd .iconbtn:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-kb-card .hd .iconbtn.on { color: var(--c-warn); opacity: 1; }
+.chaya-v2 .v2-kb-card .hd .iconbtn.danger:hover { background: var(--c-danger-bg); color: var(--c-danger); }
+.chaya-v2 .v2-kb-card .body { font-size: 14px; line-height: 1.62; color: var(--c-ink); white-space: pre-wrap; word-break: break-word; cursor: text; }
+.chaya-v2 .v2-kb-card .body.doc-name { display: flex; align-items: center; gap: 8px; font-weight: 500; white-space: normal; }
+.chaya-v2 .v2-kb-card .body.doc-name .doc-ic { display: inline-grid; place-items: center; color: var(--c-ink-3); flex: 0 0 auto; }
+.chaya-v2 .v2-kb-card .body.doc-name .doc-ic svg { width: 16px; height: 16px; }
+.chaya-v2 .v2-kb-card .ft { display: flex; gap: 14px; margin-top: 11px; padding-top: 9px; border-top: 1px solid var(--c-rule); font-size: 11px; color: var(--c-ink-4); }
+.chaya-v2 .v2-kb-empty { padding: 60px 20px; text-align: center; color: var(--c-ink-3); }
+.chaya-v2 .v2-kb-empty .t { font-size: 16px; color: var(--c-ink-2); font-weight: 500; margin-bottom: 6px; }
+.chaya-v2 .v2-kb-empty .h { font-size: 13px; line-height: 1.6; }
+.chaya-v2 .v2-kb-warn { padding: 10px 14px; border-radius: var(--c-radius-lg); background: var(--c-danger-bg); color: var(--c-danger); font-size: 12px; margin-bottom: 12px; }
+
+/* ===== gallery view ===== */
+.chaya-v2 .v2-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px 28px 60px; }
+.chaya-v2 .v2-view-head { max-width: 1080px; margin: 12px auto 18px; }
+.chaya-v2 .v2-view-head h2 { font-size: 22px; font-weight: 600; color: var(--c-ink); margin-bottom: 4px; }
+.chaya-v2 .v2-view-head p { font-size: 13px; color: var(--c-ink-3); }
+.chaya-v2 .v2-gallery { max-width: 1080px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.chaya-v2 .v2-gallery .v2-gtile { aspect-ratio: 1/1; background: #f5f5f5; border-radius: var(--c-radius-lg); overflow: hidden; cursor: zoom-in; position: relative; transition: transform 200ms var(--c-ease-spring); }
+.chaya-v2 .v2-gallery .v2-gtile:hover { transform: translateY(-2px); }
+.chaya-v2 .v2-gallery .v2-gtile img, .chaya-v2 .v2-gallery .v2-gtile video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.chaya-v2 .v2-gallery .v2-gtile .v2-vidbadge { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,0.6); color: #fff; font-size: 10px; padding: 2px 6px; border-radius: var(--c-radius-xs); letter-spacing: 0.08em; }
+.chaya-v2 .v2-gallery .v2-gtile .v2-meta { position: absolute; bottom: 0; left: 0; right: 0; padding: 18px 10px 8px; color: #fff; font-size: 11px; background: linear-gradient(to top, rgba(0,0,0,0.55), transparent); opacity: 0; transition: opacity 160ms var(--c-ease); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.chaya-v2 .v2-gallery .v2-gtile:hover .v2-meta { opacity: 1; }
+.chaya-v2 .v2-gallery-empty { max-width: 720px; margin: 20vh auto; text-align: center; color: var(--c-ink-3); }
+.chaya-v2 .v2-gallery-empty .h { font-size: 18px; color: var(--c-ink-2); margin-bottom: 6px; }
+
+/* lightbox */
+.chaya-v2 .v2-lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 40px; animation: v2-popUp 200ms var(--c-ease) both; }
+.chaya-v2 .v2-lightbox img, .chaya-v2 .v2-lightbox video { max-width: 100%; max-height: 100%; border-radius: var(--c-radius-sm); }
+.chaya-v2 .v2-lightbox .v2-lb-close { position: absolute; top: 20px; right: 24px; width: 36px; height: 36px; background: rgba(255,255,255,0.12); color: #fff; border-radius: 50%; display: grid; place-items: center; cursor: pointer; font-size: 18px; }
+.chaya-v2 .v2-lightbox .v2-lb-close:hover { background: rgba(255,255,255,0.2); }
+
+/* ===== login (single-screen vertical column) ===== */
+.chaya-v2 .v2-login-page {
+  height: 100vh; width: 100vw;
+  display: flex; align-items: center; justify-content: center;
+  padding: 36px 24px 24px; /* room for traffic lights */
+  background: var(--c-bg);
+}
+.chaya-v2 .v2-login-col {
+  width: 100%; max-width: 320px;
+  display: flex; flex-direction: column; gap: 20px;
+  animation: v2-fadeUp 360ms var(--c-ease) both;
+}
+.chaya-v2 .v2-login-brand { font-size: 22px; font-weight: 600; color: var(--c-ink); letter-spacing: -0.005em; text-align: center; }
+.chaya-v2 .v2-login-tag { font-size: 13px; color: var(--c-ink-3); text-align: center; margin-top: -14px; }
+.chaya-v2 .v2-login-form { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; }
+.chaya-v2 .v2-field { display: flex; flex-direction: column; gap: 6px; }
+.chaya-v2 .v2-field span { font-size: 12px; color: var(--c-ink-3); padding-left: 2px; }
+.chaya-v2 .v2-field input { width: 100%; padding: 11px 14px; border-radius: var(--c-radius-lg); background: var(--c-surface); font-size: 14px; color: var(--c-ink); transition: background 140ms var(--c-ease), box-shadow 140ms var(--c-ease); }
+.chaya-v2 .v2-field input::placeholder { color: var(--c-ink-4); }
+.chaya-v2 .v2-field input:hover { background: var(--c-hover); }
+.chaya-v2 .v2-field input:focus { background: var(--c-bg); box-shadow: 0 0 0 2px var(--c-ink); }
+.chaya-v2 .v2-login-err { font-size: 12px; color: var(--c-danger); background: var(--c-danger-bg); border-radius: var(--c-radius-md); padding: 8px 12px; }
+.chaya-v2 .v2-login-submit { margin-top: 4px; width: 100%; padding: 12px 16px; border-radius: var(--c-radius-lg); background: var(--c-ink); color: var(--c-bg); font-size: 14px; font-weight: 500; cursor: pointer; transition: background 140ms var(--c-ease), transform 120ms var(--c-ease); }
+.chaya-v2 .v2-login-submit:hover:not(:disabled) { background: #000; }
+.chaya-v2 .v2-login-submit:active:not(:disabled) { transform: scale(0.985); }
+.chaya-v2 .v2-login-submit:disabled { opacity: 0.55; cursor: progress; }
+.chaya-v2 .v2-login-switch { font-size: 13px; color: var(--c-ink-3); text-align: center; }
+.chaya-v2 .v2-login-switch button { color: var(--c-ink); font-weight: 500; cursor: pointer; padding: 0 2px; }
+.chaya-v2 .v2-login-switch button:hover { text-decoration: underline; }
+.chaya-v2 .v2-login-foot { font-size: 11px; color: var(--c-ink-4); text-align: center; margin-top: 8px; }
+
+/* ===== Local Agents ===== */
+/* 布局参考 Codex/Claude Code：项目树放主侧栏，对话时间线放主区。配色全用 Chaya token。 */
+.chaya-v2 .v2-la-empty { display: grid; place-items: center; height: 100%; color: var(--c-ink-3); font-size: 14px; }
+
+/* ---- 主侧栏内的项目树（常驻；按内容高度，最多 42vh 后项目列表自身滚动） ---- */
+.chaya-v2 .v2-la-tree { flex: 0 1 auto; min-height: 0; max-height: 42vh; display: flex; flex-direction: column; }
+.chaya-v2 .v2-la-add { margin-left: auto; width: 22px; height: 22px; border-radius: var(--c-radius-sm); display: grid; place-items: center; color: var(--c-ink-3); cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-la-add:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-la-add svg { width: 14px; height: 14px; }
+.chaya-v2 .v2-la-projlist { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 1px; }
+.chaya-v2 .v2-la-hint { padding: 8px 12px; font-size: 12px; color: var(--c-ink-4); line-height: 1.6; }
+
+/* 品牌行 + PROJECTS 段头 */
+/* Left inset (18px) + icon box (20px) + gap (10px) match .v2-nav .v2-row exactly
+ * so the Local Agents icon lines up vertically with the nav icons above it. */
+.chaya-v2 .v2-la-brand { padding: 10px 14px 6px 18px; align-items: center; gap: 10px; }
+.chaya-v2 .v2-la-brand-ic { width: 20px; height: 20px; flex: 0 0 auto; color: var(--c-ink-2); display: grid; place-items: center; }
+.chaya-v2 .v2-la-brand-ic svg { width: 16px; height: 16px; }
+.chaya-v2 .v2-la-title { font-size: 13px; font-weight: 600; color: var(--c-ink); letter-spacing: -0.01em; text-transform: none; cursor: pointer; }
+.chaya-v2 .v2-la-title:hover { color: var(--c-ink-deep); }
+.chaya-v2 .v2-la-projsec { padding-top: 4px; }
+
+/* 当前 provider 彩色徽标（claude 橙 / codex 靛蓝 / gemini 彩）；切换在设置里 */
+.chaya-v2 .v2-la-badge { margin-left: auto; flex: 0 0 auto; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px; border-radius: var(--c-radius-pill); font-size: 11px; font-weight: 500; cursor: pointer; color: #fff; transition: filter 140ms var(--c-ease), transform 120ms var(--c-ease); }
+.chaya-v2 .v2-la-badge:hover { filter: brightness(1.05); }
+.chaya-v2 .v2-la-badge:active { transform: scale(0.96); }
+.chaya-v2 .v2-la-badge .ic { display: inline-flex; align-items: center; }
+.chaya-v2 .v2-la-badge .ck { font-size: 10px; line-height: 1; }
+.chaya-v2 .v2-la-badge.prov-claude { background: #d97757; }            /* Claude 橙 */
+.chaya-v2 .v2-la-badge.prov-codex  { background: #4f46e5; }            /* Codex 靛蓝 */
+.chaya-v2 .v2-la-badge.prov-gemini { background: linear-gradient(95deg, #4285f4 0%, #9b72cb 50%, #d96570 100%); } /* Gemini 彩 */
+
+/* loading 动画 */
+.chaya-v2 .v2-la-loading { display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-size: 12px; color: var(--c-ink-4); }
+.chaya-v2 .v2-la-spinner { width: 13px; height: 13px; flex: 0 0 auto; border-radius: 50%; border: 2px solid var(--c-rule); border-top-color: var(--c-ink-3); animation: v2-la-spin 0.7s linear infinite; }
+.chaya-v2 .v2-la-badge .v2-la-spinner.sm { width: 10px; height: 10px; border-width: 1.5px; border-color: rgba(255,255,255,0.4); border-top-color: #fff; }
+@keyframes v2-la-spin { to { transform: rotate(360deg); } }
+.chaya-v2 .v2-la-hint.sub { padding: 5px 12px 5px 32px; }
+.chaya-v2 .v2-la-hint.center { text-align: center; margin: auto; }
+
+.chaya-v2 .v2-la-proj-row { display: flex; align-items: center; gap: 5px; padding: 6px 8px; border-radius: var(--c-radius-row); cursor: pointer; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-la-proj-row:hover { background: var(--c-hover-soft); }
+.chaya-v2 .v2-la-proj-row.active { background: var(--c-hover); }
+.chaya-v2 .v2-la-caret { width: 14px; height: 14px; display: grid; place-items: center; color: var(--c-ink-4); flex: 0 0 auto; }
+.chaya-v2 .v2-la-caret svg { width: 12px; height: 12px; transform: rotate(-90deg); transition: transform 180ms var(--c-ease); }
+.chaya-v2 .v2-la-caret.open svg { transform: rotate(0deg); }
+.chaya-v2 .v2-la-proj-ic { width: 15px; height: 15px; color: var(--c-ink-3); flex: 0 0 auto; display: grid; place-items: center; }
+.chaya-v2 .v2-la-proj-ic svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-la-proj-nm { font-size: 13px; color: var(--c-ink); flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chaya-v2 .v2-la-proj-acts { display: flex; gap: 1px; opacity: 0; flex: 0 0 auto; transition: opacity 140ms var(--c-ease); }
+.chaya-v2 .v2-la-proj-row:hover .v2-la-proj-acts { opacity: 1; }
+.chaya-v2 .v2-la-proj-acts button { width: 20px; height: 20px; border-radius: var(--c-radius-sm); display: grid; place-items: center; color: var(--c-ink-4); cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-la-proj-acts button:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-la-proj-acts svg { width: 12px; height: 12px; }
+
+.chaya-v2 .v2-la-sessions { display: flex; flex-direction: column; gap: 1px; margin: 1px 0 4px; }
+.chaya-v2 .v2-la-sess { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 30px; border-radius: var(--c-radius-row); cursor: pointer; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-la-sess:hover { background: var(--c-hover-soft); }
+.chaya-v2 .v2-la-sess.active { background: var(--c-hover); }
+/* 在后台标签里打开（非当前）：左侧细标，提示"已打开" */
+.chaya-v2 .v2-la-sess.open { box-shadow: inset 2px 0 0 var(--c-rule); }
+.chaya-v2 .v2-la-sess .t { font-size: 12.5px; color: var(--c-ink-2); flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chaya-v2 .v2-la-sess.active .t { color: var(--c-ink); }
+.chaya-v2 .v2-la-sess .m { font-size: 11px; color: var(--c-ink-4); flex: 0 0 auto; }
+/* 删除：hover 出垃圾桶；时间与垃圾桶占同一槽位（hover 时换成桶） */
+.chaya-v2 .v2-la-sess:hover .m { display: none; }
+.chaya-v2 .v2-la-sess-del { flex: 0 0 auto; width: 20px; height: 20px; display: none; place-items: center; border-radius: var(--c-radius-sm); color: var(--c-ink-4); cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-la-sess:hover .v2-la-sess-del { display: grid; }
+.chaya-v2 .v2-la-sess-del:hover { background: var(--c-danger-bg); color: var(--c-danger); }
+.chaya-v2 .v2-la-sess-del svg { width: 13px; height: 13px; }
+/* 两步确认：行内删除 / 取消 */
+.chaya-v2 .v2-la-sess.confirming { background: var(--c-danger-bg); }
+.chaya-v2 .v2-la-sess-confirm { flex: 0 0 auto; display: inline-flex; gap: 4px; }
+.chaya-v2 .v2-la-sess-confirm button { font-size: 11px; padding: 2px 8px; border-radius: var(--c-radius-sm); cursor: pointer; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-la-sess-confirm .del { background: var(--c-danger); color: #fff; }
+.chaya-v2 .v2-la-sess-confirm .del:hover { filter: brightness(1.05); }
+.chaya-v2 .v2-la-sess-confirm .cancel { color: var(--c-ink-3); }
+.chaya-v2 .v2-la-sess-confirm .cancel:hover { background: var(--c-hover); color: var(--c-ink); }
+
+/* 空状态：沿用 v2-empty 字号体系 */
+.chaya-v2 .v2-la-welcome { max-width: 430px; margin: 14vh auto 0; text-align: center; color: var(--c-ink-3); padding: 0 20px; }
+.chaya-v2 .v2-la-welcome svg { width: 30px; height: 30px; color: var(--c-ink-4); margin-bottom: 14px; }
+.chaya-v2 .v2-la-welcome h3 { font-size: 17px; font-weight: 500; color: var(--c-ink-2); margin-bottom: 6px; letter-spacing: -0.01em; }
+.chaya-v2 .v2-la-welcome p { font-size: 12px; color: var(--c-ink-4); line-height: 1.6; margin-bottom: 6px; }
+.chaya-v2 .v2-la-welcome p.warn { color: var(--c-warn); }
+.chaya-v2 .v2-la-pick { margin-top: 14px; padding: 9px 18px; border-radius: var(--c-radius-lg); background: var(--c-ink); color: var(--c-bg); font-size: 13px; font-weight: 500; cursor: pointer; transition: background 140ms var(--c-ease), transform 120ms var(--c-ease); }
+.chaya-v2 .v2-la-pick:hover { background: var(--c-ink-deep); }
+.chaya-v2 .v2-la-pick:active { transform: scale(0.985); }
+
+/* ---- 标签栏（类浏览器）：并入顶栏一行，下划线指示激活，坐在顶栏底线上 ---- */
+.chaya-v2 .v2-topbar-tabs { padding-top: 0; padding-bottom: 0; }
+/* 顶栏的 .v2-tb 是 z:10 的拖拽区，会吞掉 mousedown；标签须 no-drag + 抬到其之上，
+   否则只有底部 2px 能点中（拖拽区盖住了上半部分）。 */
+.chaya-v2 .v2-la-tabs { flex: 1 1 auto; display: flex; align-items: stretch; height: 100%; min-width: 0; overflow-x: auto; scrollbar-width: none; position: relative; z-index: 11; -webkit-app-region: no-drag; }
+.chaya-v2 .v2-la-tabs::-webkit-scrollbar { display: none; }
+.chaya-v2 .v2-la-tabs-empty { display: inline-flex; align-items: center; font-size: 14px; font-weight: 500; color: var(--c-ink); padding: 0 4px; }
+.chaya-v2 .v2-la-tab { display: inline-flex; align-items: center; gap: 6px; max-width: 260px; padding: 0 12px; cursor: pointer; color: var(--c-ink-3); font-size: 13px; border-bottom: 2px solid transparent; transition: background 140ms var(--c-ease), color 140ms var(--c-ease), border-color 140ms var(--c-ease); }
+.chaya-v2 .v2-la-tab:hover { background: var(--c-hover-soft); color: var(--c-ink-2); }
+.chaya-v2 .v2-la-tab.active { color: var(--c-ink); border-bottom-color: var(--c-ink); }
+.chaya-v2 .v2-la-tab .proj { font-weight: 500; flex: 0 0 auto; }
+.chaya-v2 .v2-la-tab .sep { color: var(--c-ink-4); flex: 0 0 auto; }
+.chaya-v2 .v2-la-tab .sess { color: var(--c-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.chaya-v2 .v2-la-tab.active .sess { color: var(--c-ink-2); }
+.chaya-v2 .v2-la-tab .rundot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-warn); flex: 0 0 auto; animation: v2-la-breathe 1.2s var(--c-ease) infinite; }
+.chaya-v2 .v2-la-tab .x { flex: 0 0 auto; width: 16px; height: 16px; display: grid; place-items: center; border-radius: var(--c-radius-xs); color: var(--c-ink-4); font-size: 11px; opacity: 0; transition: opacity 140ms var(--c-ease), background 140ms var(--c-ease); }
+.chaya-v2 .v2-la-tab:hover .x, .chaya-v2 .v2-la-tab.active .x { opacity: 1; }
+.chaya-v2 .v2-la-tab .x:hover { background: var(--c-hover); color: var(--c-ink); }
+
+/* ---- 标签分组（类 Chrome 标签组）：彩色容器把组员裹在一起，chip 可折叠 ---- */
+.chaya-v2 .v2-la-group { display: inline-flex; align-items: stretch; flex: 0 0 auto;
+  height: calc(100% - 8px); align-self: center;   /* 不撑破 36px 顶栏 */
+  border-radius: var(--c-radius-md); margin: 0 3px; padding: 0 2px;
+  background: color-mix(in oklab, var(--g) 14%, var(--c-bg));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--g) 40%, transparent); }
+.chaya-v2 .v2-la-group.collapsed { padding: 0; }
+.chaya-v2 .v2-la-group-chip { display: inline-flex; align-items: center; gap: 5px; padding: 0 9px 0 4px; height: 100%; cursor: pointer;
+  color: color-mix(in oklab, var(--g) 60%, var(--c-ink)); font-size: 12px; font-weight: 600; border-radius: var(--c-radius-md);
+  -webkit-app-region: no-drag; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-la-group-chip:hover { background: color-mix(in oklab, var(--g) 16%, transparent); }
+/* 左侧小按钮：折叠/展开（不改主区显示内容）。 */
+.chaya-v2 .v2-la-group-chip .caret { flex: 0 0 auto; width: 16px; height: 16px; display: grid; place-items: center; font-size: 9px; border-radius: var(--c-radius-xs); color: color-mix(in oklab, var(--g) 55%, var(--c-ink-3)); cursor: pointer; }
+.chaya-v2 .v2-la-group-chip .caret:hover { background: color-mix(in oklab, var(--g) 24%, transparent); }
+.chaya-v2 .v2-la-group-chip .gdot { width: 9px; height: 9px; border-radius: 50%; background: var(--g); flex: 0 0 auto; }
+.chaya-v2 .v2-la-group-chip .gname { white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.chaya-v2 .v2-la-group-chip .gcnt { font-size: 11px; font-weight: 600; color: var(--c-bg); background: var(--g); border-radius: 9px; padding: 0 6px; line-height: 16px; }
+.chaya-v2 .v2-la-group-chip .gname-input { width: 100px; font-size: 12px; font-weight: 600; color: var(--c-ink); background: var(--c-bg);
+  border: 1px solid var(--g); border-radius: var(--c-radius-xs); padding: 1px 5px; outline: none; }
+/* 组内标签去掉自己的色点（组色已表达归属），底部细标改用组色 */
+.chaya-v2 .v2-la-group .v2-la-tab { margin: 0; position: relative; }
+.chaya-v2 .v2-la-group .v2-la-tab.active { border-bottom-color: var(--g); }
+.chaya-v2 .v2-la-group-chip { cursor: grab; }
+.chaya-v2 .v2-la-group-chip:active { cursor: grabbing; }
+/* 展开后：组员标签之间用一道组色细分割线（chip↔首个标签、标签↔标签）。 */
+.chaya-v2 .v2-la-group .v2-la-group-chip + .v2-la-tab::before,
+.chaya-v2 .v2-la-group .v2-la-tab + .v2-la-tab::before {
+  content: ''; position: absolute; left: 0; top: 7px; bottom: 7px; width: 1px;
+  background: color-mix(in oklab, var(--g) 45%, transparent);
+}
+/* 分组重排：放置锚点左侧出现一道竖直指示条。 */
+.chaya-v2 .v2-la-tab.dropbefore, .chaya-v2 .v2-la-group.dropbefore { box-shadow: inset 2px 0 0 0 var(--c-accent); }
+.chaya-v2 .v2-la-tabs-end { flex: 1 1 auto; min-width: 24px; align-self: stretch; }
+.chaya-v2 .v2-la-tabs-end.dropbefore { box-shadow: inset 2px 0 0 0 var(--c-accent); }
+
+/* 右键菜单：标签/分组操作。安静的纸面浮层，与设置面板同语言。 */
+.chaya-v2 .v2-la-menu { position: fixed; z-index: 200; min-width: 168px; padding: 5px; display: flex; flex-direction: column; gap: 1px;
+  background: var(--c-bg); border: 1px solid var(--c-rule); border-radius: var(--c-radius-lg); box-shadow: var(--c-shadow-menu);
+  animation: v2-popUp 140ms var(--c-ease) both; }
+.chaya-v2 .v2-la-menu button { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: var(--c-radius-sm);
+  font-size: 12.5px; color: var(--c-ink-2); text-align: left; cursor: pointer; transition: background 120ms var(--c-ease), color 120ms var(--c-ease); }
+.chaya-v2 .v2-la-menu button:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-la-menu button.danger:hover { color: var(--c-danger); }
+.chaya-v2 .v2-la-menu button .sw { width: 11px; height: 11px; border-radius: 50%; flex: 0 0 auto; }
+.chaya-v2 .v2-la-menu .sec { font-size: 10.5px; color: var(--c-ink-4); padding: 5px 9px 2px; letter-spacing: 0.03em; }
+.chaya-v2 .v2-la-menu .div { height: 1px; background: var(--c-rule); margin: 4px 2px; }
+.chaya-v2 .v2-la-swatches { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; padding: 2px 7px 4px; }
+.chaya-v2 .v2-la-swatches .sw { width: 15px; height: 15px; border-radius: 50%; cursor: pointer; transition: transform 100ms var(--c-ease); }
+.chaya-v2 .v2-la-swatches .sw:hover { transform: scale(1.18); }
+.chaya-v2 .v2-la-swatches .sw.on { box-shadow: 0 0 0 2px var(--c-bg), 0 0 0 3.5px var(--c-ink); }
+
+/* ---- 对话：轮次制（user 右气泡 / agent 左带头像），与主聊天同一身份语言 ---- *
+ * 对齐聊天 .v2-msgs 宽度；.v2-stream 已留底部 composer 空间。 */
+/* 略比输入框宽 ~20px（Electron 下 .v2-composer=940 → 列宽 960），给工具/代码多点横向空间。 */
+.chaya-v2 .v2-la-tl { max-width: 960px; margin: 0 auto; padding: 8px 24px 0; overflow-x: clip; }
+
+/* CLI 是信息稀疏、低关注度的对话：整体比主聊天更紧凑（字号小、行距密、留白少）。 */
+.chaya-v2 .v2-la-turn { display: flex; margin: 0 0 15px; animation: v2-fadeUp 220ms var(--c-ease) both; }
+
+/* 用户轮：右对齐柔色气泡（同主聊天 .v2-msg.user .v2-bubble，略小） */
+.chaya-v2 .v2-la-turn.user { justify-content: flex-end; }
+.chaya-v2 .v2-la-ubub { max-width: 78%; min-width: 0; background: var(--c-hover-soft); border-radius: var(--c-radius-lg); padding: 7px 13px; }
+/* 长无空格串（路径/URL）也要换行，别撑出水平滚动条 */
+.chaya-v2 .v2-la-ubub p { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font-size: 13px; color: var(--c-ink); line-height: 1.5; }
+
+/* agent 轮：左对齐，provider 头像锚定身份 + 正文列 */
+.chaya-v2 .v2-la-turn.agent { gap: 12px; }
+.chaya-v2 .v2-la-ava { width: 26px; height: 26px; flex: 0 0 auto; border-radius: 50%; display: grid; place-items: center; margin-top: 1px; }
+.chaya-v2 .v2-la-ava svg { width: 15px; height: 15px; }
+/* 头像底色用 provider 品牌色的淡淡一层（sparing accent：只够认出身份） */
+.chaya-v2 .v2-la-ava.prov-claude { background: rgba(217,119,87,0.14); color: #b8502e; }
+.chaya-v2 .v2-la-ava.prov-codex  { background: rgba(79,70,229,0.13); color: #4f46e5; }
+.chaya-v2 .v2-la-ava.prov-gemini { background: rgba(130,120,200,0.16); color: #6b5fc7; }
+.chaya-v2 .v2-la-turn-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 7px; padding-top: 1px; }
+/* 连续折叠的工具一行排紧一点，像一组操作而非一堆卡片 */
+.chaya-v2 .v2-la-turn-body > .v2-la-tool:not(.open) + .v2-la-tool:not(.open) { margin-top: -3px; }
+/* 每个块都收在列宽内：宽代码块在自己内部横向滚动，不外溢成页面水平条 */
+.chaya-v2 .v2-la-turn-body > * { min-width: 0; max-width: 100%; }
+.chaya-v2 .v2-la-prose, .chaya-v2 .v2-la-prose .v2-md { min-width: 0; max-width: 100%; }
+.chaya-v2 .v2-la-prose .v2-md pre { max-width: 100%; }
+
+/* agent 正文：裸排版散文，比主聊天更紧凑（13px / 1.5），信息稀疏故收紧。 */
+.chaya-v2 .v2-la-prose { font-size: 13px; color: var(--c-ink); line-height: 1.5; overflow-wrap: anywhere; }
+.chaya-v2 .v2-la-prose .v2-md,
+.chaya-v2 .v2-la-prose .v2-md p,
+.chaya-v2 .v2-la-prose .v2-md li { font-size: 13px; line-height: 1.5; }
+.chaya-v2 .v2-la-prose .v2-md p { margin-bottom: 7px; }
+.chaya-v2 .v2-la-prose .v2-md ul, .chaya-v2 .v2-la-prose .v2-md ol { margin-bottom: 7px; }
+.chaya-v2 .v2-la-prose .v2-md h1 { font-size: 16px; }
+.chaya-v2 .v2-la-prose .v2-md h2 { font-size: 14.5px; }
+.chaya-v2 .v2-la-prose .v2-md h3 { font-size: 13.5px; }
+.chaya-v2 .v2-la-prose .v2-md h4 { font-size: 13px; }
+/* Live stream caret — a terminal block cursor at the end of the streaming text,
+ * so the tail always reads as alive/distinct (opacity blink only, no motion). */
+.chaya-v2 .v2-la-prose.live .v2-md > :last-child::after {
+  content: ''; display: inline-block;
+  width: 0.5em; height: 1.05em; margin-left: 3px; vertical-align: -0.15em;
+  background: var(--c-accent); border-radius: 1px; opacity: 0.85;
+  animation: v2-la-caret 1.05s steps(1, end) infinite;
+}
+@keyframes v2-la-caret { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .chaya-v2 .v2-la-prose.live .v2-md > :last-child::after { animation: none; opacity: 0.6; }
+}
+
+/* 思考：弱化——比正文更小更淡、不带强调色，像安静的页边批注 */
+.chaya-v2 .v2-la-think { font-size: 12px; opacity: 0.88; }
+.chaya-v2 .v2-la-think summary { cursor: pointer; color: var(--c-ink-4); font-family: var(--c-serif, Georgia, serif); font-style: italic; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; list-style: none; transition: color 140ms var(--c-ease); }
+.chaya-v2 .v2-la-think summary:hover { color: var(--c-ink-3); }
+.chaya-v2 .v2-la-think summary::-webkit-details-marker { display: none; }
+.chaya-v2 .v2-la-think summary .ic { color: var(--c-ink-4); font-style: normal; font-size: 10px; }
+.chaya-v2 .v2-la-think .bd { margin-top: 5px; padding-left: 12px; border-left: 1.5px solid var(--c-rule); color: var(--c-ink-4); font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 进行中：三点呼吸 */
+/* Single calm line — quiet italic text that gently breathes (opacity only, no
+ * bounce), matching the main chat's "正在思考…" tone. */
+.chaya-v2 .v2-la-pulse {
+  font-size: 13px; font-style: italic; color: var(--c-ink-3);
+  padding: 2px 0; line-height: 1.6;
+  animation: v2-la-think 1.8s ease-in-out infinite;
+}
+@keyframes v2-la-think { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.95; } }
+@keyframes v2-la-breathe { 0%,100% { opacity: 0.3; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-1px); } }
+@media (prefers-reduced-motion: reduce) {
+  .chaya-v2 .v2-la-pulse { animation: none; opacity: 0.7; }
+}
+
+.chaya-v2 .v2-la-note { font-size: 12px; padding: 4px 0 8px 38px; }
+.chaya-v2 .v2-la-note.err { color: var(--c-danger); }
+
+/* 需介入项锚定在输入框上方：列布局、与输入框同宽、可独立滚动、绝不随对话流走 */
+.chaya-v2 .v2-la-composer-wrap { flex-direction: column; align-items: center; gap: 8px; }
+.chaya-v2 .v2-la-anchor { width: 100%; max-width: 940px; pointer-events: auto; max-height: 52vh; overflow-y: auto; animation: v2-fadeUp 200ms var(--c-ease) both; }
+.chaya-v2 .v2-la-anchor .v2-la-perm, .chaya-v2 .v2-la-anchor .v2-la-q { margin: 0; }
+/* 轻脉冲：只用 accent 描边的呼吸，提示“agent 在等你”，不打扰 */
+.chaya-v2 .v2-la-anchor .v2-la-perm { animation: v2-la-anchorpulse 2.4s var(--c-ease) infinite; }
+@keyframes v2-la-anchorpulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); } 50% { box-shadow: 0 0 0 3px var(--c-accent-bg); } }
+
+/* ================================================================== *
+ * 窗格 / 多窗格网格 —— 至多 4 个会话同时平铺，各自独立（像 Wave/终端）。
+ * 单窗与网格共用 <LocalAgentPane>：流在上、输入框在下（in-flow，不再浮动）。
+ * ================================================================== */
+.chaya-v2 .v2-la-single { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.chaya-v2 .v2-la-single.empty { overflow-y: auto; }   /* 欢迎页：整页可滚 */
+
+.chaya-v2 .v2-la-pane { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column; position: relative; }
+.chaya-v2 .v2-la-pane-stream { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 0 4px; }
+.chaya-v2 .v2-la-pane-stream::-webkit-scrollbar { width: 10px; }
+.chaya-v2 .v2-la-pane-stream::-webkit-scrollbar-thumb { background: transparent; border-radius: var(--c-radius-sm); }
+.chaya-v2 .v2-la-pane-stream:hover::-webkit-scrollbar-thumb { background: var(--c-scrollbar); }
+
+/* Pane 内输入框回到文档流（覆盖全局 .v2-composer-wrap 的 absolute 浮动） */
+.chaya-v2 .v2-la-pane .v2-composer-wrap { position: static; left: auto; right: auto; bottom: auto; padding: 4px 16px 12px; }
+
+/* 窗格头部：中性配色（不染内部文字/底）。颜色只靠左侧小圆点 + 窗格边框表达。 */
+.chaya-v2 .v2-la-pane-hd { display: flex; align-items: center; gap: 7px; padding: 7px 8px 7px 12px; font-size: 12px; cursor: grab; user-select: none; flex: 0 0 auto;
+  background: var(--c-bg);
+  border-bottom: 1px solid var(--c-rule);
+  color: var(--c-ink-3); }
+.chaya-v2 .v2-la-pane-hd:active { cursor: grabbing; }
+.chaya-v2 .v2-la-pane-hd .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pane); flex: 0 0 auto; }
+.chaya-v2 .v2-la-pane-hd b { font-weight: 600; color: var(--c-ink-2); flex: 0 0 auto; max-width: 40%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chaya-v2 .v2-la-pane-hd .sess { color: var(--c-ink-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.chaya-v2 .v2-la-pane-hd .run { width: 6px; height: 6px; border-radius: 50%; background: var(--c-warn); flex: 0 0 auto; animation: v2-la-breathe 1.2s var(--c-ease) infinite; }
+.chaya-v2 .v2-la-pane-hd .x { flex: 0 0 auto; width: 18px; height: 18px; display: grid; place-items: center; border-radius: var(--c-radius-xs); color: var(--c-ink-4); font-size: 11px; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-la-pane-hd .x:hover { background: var(--c-hover); color: var(--c-ink); }
+
+/* 分屏树：递归 split 容器 + 1px 可拖拽分隔线。叶子窗格自适应填充。 */
+.chaya-v2 .v2-la-grid-root { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; }
+/* 非焦点窗格：不染色（窗格间靠 1px 分隔线区分）。颜色只留给当前焦点窗格。 */
+.chaya-v2 .v2-la-grid-root .v2-la-pane { background: var(--c-bg); }
+.chaya-v2 .v2-la-split { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; }
+.chaya-v2 .v2-la-split.row { flex-direction: row; }
+.chaya-v2 .v2-la-split.col { flex-direction: column; }
+.chaya-v2 .v2-la-split-a { display: flex; min-width: 0; min-height: 0; flex: 0 0 auto; overflow: hidden; }
+.chaya-v2 .v2-la-split-b { display: flex; min-width: 0; min-height: 0; flex: 1 1 auto; overflow: hidden; }
+.chaya-v2 .v2-la-split-a > *, .chaya-v2 .v2-la-split-b > * { flex: 1 1 auto; min-width: 0; min-height: 0; }
+.chaya-v2 .v2-la-divider { flex: 0 0 1px; background: var(--c-rule); position: relative; z-index: 5; touch-action: none; }
+.chaya-v2 .v2-la-divider.row { cursor: col-resize; }
+.chaya-v2 .v2-la-divider.col { cursor: row-resize; }
+.chaya-v2 .v2-la-divider::after { content: ''; position: absolute; }   /* 加宽命中区 */
+.chaya-v2 .v2-la-divider.row::after { top: 0; bottom: 0; left: -4px; right: -4px; }
+.chaya-v2 .v2-la-divider.col::after { left: 0; right: 0; top: -4px; bottom: -4px; }
+.chaya-v2 .v2-la-divider:hover, .chaya-v2 body.v2-la-resizing .v2-la-divider { background: var(--c-accent); }
+body.v2-la-resizing { user-select: none; }
+/* 分屏里内容列不再钉死 960，跟随窗格宽度自适应。 */
+.chaya-v2 .v2-la-grid-root .v2-la-tl { max-width: none; padding: 8px 16px 0; }
+.chaya-v2 .v2-la-grid-root .v2-la-pane .v2-composer { max-width: none; }
+.chaya-v2 .v2-la-grid-root .v2-la-anchor { max-width: none; }
+
+/* 焦点窗格：边框染窗格色 + 顶部 header 染同色（浅玻璃），一眼看出谁在接收输入。 */
+.chaya-v2 .v2-la-grid-root .v2-la-pane.focused {
+  background: var(--c-bg);
+  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--pane) 72%, transparent);
+}
+.chaya-v2 .v2-la-grid-root .v2-la-pane.focused .v2-la-pane-hd {
+  background: color-mix(in oklab, var(--pane) 16%, var(--c-bg));
+  border-bottom-color: color-mix(in oklab, var(--pane) 40%, var(--c-rule));
+  color: color-mix(in oklab, var(--pane) 38%, var(--c-ink-2));
+}
+.chaya-v2 .v2-la-grid-root .v2-la-pane.focused .v2-la-pane-hd b { color: color-mix(in oklab, var(--pane) 42%, var(--c-ink-2)); }
+
+/* 拖窗格/标签的落点预览：在最近一条边的半区画块虚线高亮，提示新窗格落处。 */
+.chaya-v2 .v2-la-drop { position: absolute; z-index: 6; background: color-mix(in oklab, var(--pane) 14%, transparent); border: 2px dashed color-mix(in oklab, var(--pane) 60%, var(--c-ink-4)); border-radius: var(--c-radius-md); pointer-events: none; animation: v2-fadeUp 120ms var(--c-ease) both; }
+.chaya-v2 .v2-la-drop.left   { top: 6px; bottom: 6px; left: 6px;  width: calc(50% - 9px); }
+.chaya-v2 .v2-la-drop.right  { top: 6px; bottom: 6px; right: 6px; width: calc(50% - 9px); }
+.chaya-v2 .v2-la-drop.top    { left: 6px; right: 6px; top: 6px;    height: calc(50% - 9px); }
+.chaya-v2 .v2-la-drop.bottom { left: 6px; right: 6px; bottom: 6px; height: calc(50% - 9px); }
+/* 拖到欢迎页：整块高亮。 */
+.chaya-v2 .v2-la-single.over { outline: 2px dashed var(--c-accent); outline-offset: -6px; border-radius: var(--c-radius-md); }
+
+/* 已平铺标记。 */
+.chaya-v2 .v2-la-tab.ingrid .sess { opacity: 0.8; }
+
+/* ---- 分屏窗格里的「类终端」精简输入框：单条、细、密，腾出竖向空间给会话。 ---- */
+.chaya-v2 .v2-la-pane.ingrid .v2-composer-wrap { padding: 2px 10px 8px; }
+.chaya-v2 .v2-la-slim .v2-box { display: flex; align-items: center; gap: 6px; padding: 3px 8px; min-height: 0; border-radius: var(--c-radius-md); }
+.chaya-v2 .v2-la-slim .v2-la-prompt { flex: 0 0 auto; color: var(--c-ink-4); font-weight: 700; font-size: 13px; line-height: 1; }
+/* 单行高度，不随内容增高（多行则在这一行内纵向滚动）。 */
+.chaya-v2 .v2-la-slim textarea { flex: 1 1 auto; min-height: 0; height: 20px; max-height: 20px; padding: 1px 0; font-size: 12.5px; line-height: 18px; overflow-y: auto; }
+.chaya-v2 .v2-la-slim .v2-row { flex: 0 0 auto; width: auto; margin: 0; gap: 4px; }
+/* 精简态：上下文/模式收成最小，发送按钮缩小，整体一条线。 */
+.chaya-v2 .v2-la-slim .v2-row .v2-la-ctx { display: none; }
+.chaya-v2 .v2-la-slim .v2-row .v2-la-mode { padding: 1px 7px; font-size: 10.5px; }
+.chaya-v2 .v2-la-slim .v2-send { width: 22px; height: 22px; }
+.chaya-v2 .v2-la-slim .v2-send svg { width: 14px; height: 14px; }
+/* 精简态斜杠弹层浮在细条上方，不撑高输入条。 */
+.chaya-v2 .v2-la-slim .v2-la-slash { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); margin: 0; z-index: 20; }
+
+/* agent 权限/批准弹窗 —— 安静但醒目，accent 描边提示“需要你” */
+.chaya-v2 .v2-la-perm { margin: 6px 0 14px; border: 1px solid var(--c-accent); border-radius: var(--c-radius-lg); background: var(--c-accent-bg); padding: 12px 14px; animation: v2-fadeUp 200ms var(--c-ease) both; }
+.chaya-v2 .v2-la-perm-hd { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+.chaya-v2 .v2-la-perm-hd .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c-accent); align-self: center; flex: 0 0 auto; }
+.chaya-v2 .v2-la-perm-hd b { font-weight: 600; color: var(--c-ink); }
+.chaya-v2 .v2-la-perm-hd .t { color: var(--c-ink-2); }
+.chaya-v2 .v2-la-perm-body { margin: 8px 0 10px; }
+.chaya-v2 .v2-la-perm-body .cmd { font-family: var(--c-mono); font-size: 12px; color: var(--c-ink); background: var(--c-bg); border: 1px solid var(--c-rule); border-radius: var(--c-radius-md); padding: 8px 10px; white-space: pre-wrap; word-break: break-word; margin: 0; }
+.chaya-v2 .v2-la-perm-body .file { font-family: var(--c-mono); font-size: 12px; color: var(--c-ink-2); }
+.chaya-v2 .v2-la-perm-body .desc { font-size: 13px; color: var(--c-ink-2); line-height: 1.55; }
+.chaya-v2 .v2-la-perm-body .plan { max-height: 320px; overflow: auto; font-size: 13px; }
+.chaya-v2 .v2-la-perm-acts { display: flex; gap: 8px; }
+.chaya-v2 .v2-la-perm-acts button { font-size: 12.5px; padding: 6px 14px; border-radius: var(--c-radius-md); cursor: pointer; transition: filter 140ms var(--c-ease), background 140ms var(--c-ease); }
+.chaya-v2 .v2-la-perm-acts .allow { background: var(--c-accent); color: var(--c-bg); font-weight: 500; }
+.chaya-v2 .v2-la-perm-acts .allow:hover { filter: brightness(1.08); }
+.chaya-v2 .v2-la-perm-acts .always { background: var(--c-bg); color: var(--c-accent-strong); border: 1px solid var(--c-accent); }
+.chaya-v2 .v2-la-perm-acts .always:hover { background: var(--c-accent-bg); }
+.chaya-v2 .v2-la-perm-acts .deny { background: transparent; color: var(--c-ink-3); }
+.chaya-v2 .v2-la-perm-acts .deny:hover { background: var(--c-hover); color: var(--c-ink); }
+
+/* AskUserQuestion 选择卡片（仿 VSCode 插件：单选/多选 + 描述 + 提交） */
+.chaya-v2 .v2-la-q { margin: 6px 0 14px; border: 1px solid var(--c-accent); border-radius: var(--c-radius-lg); background: var(--c-bg); padding: 14px 16px; box-shadow: var(--c-shadow-card); animation: v2-fadeUp 200ms var(--c-ease) both; }
+.chaya-v2 .v2-la-q-block { margin-bottom: 12px; }
+.chaya-v2 .v2-la-q-head { display: inline-block; font-size: 12px; font-weight: 600; color: var(--c-accent-strong); padding-bottom: 4px; border-bottom: 2px solid var(--c-accent); margin-bottom: 10px; }
+/* 多问题：横向分页 tab（省高度，不破坏信息密度）。答完的 tab 打勾。 */
+.chaya-v2 .v2-la-q-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--c-rule); }
+.chaya-v2 .v2-la-q-tab { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: var(--c-radius-pill); font-size: 12px; color: var(--c-ink-3); background: var(--c-surface); cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-la-q-tab:hover { color: var(--c-ink); }
+.chaya-v2 .v2-la-q-tab.active { background: var(--c-accent-bg); color: var(--c-accent-strong); font-weight: 500; }
+.chaya-v2 .v2-la-q-tab .i { width: 16px; height: 16px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; font-size: 10px; background: var(--c-bg); color: var(--c-ink-4); }
+.chaya-v2 .v2-la-q-tab.done .i { background: var(--c-success); color: #fff; }
+.chaya-v2 .v2-la-q-tab.active.done .i { background: var(--c-accent); }
+.chaya-v2 .v2-la-q-title { font-size: 14px; font-weight: 600; color: var(--c-ink); margin-bottom: 10px; line-height: 1.5; }
+.chaya-v2 .v2-la-q-opts { display: flex; flex-direction: column; gap: 4px; }
+.chaya-v2 .v2-la-q-opt { display: flex; align-items: flex-start; gap: 10px; padding: 9px 12px; border-radius: var(--c-radius-md); cursor: pointer; text-align: left; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-la-q-opt:hover { background: var(--c-hover-soft); }
+.chaya-v2 .v2-la-q-opt.on { background: var(--c-accent-bg); }
+.chaya-v2 .v2-la-q-opt .mk { width: 16px; height: 16px; flex: 0 0 auto; margin-top: 1px; border-radius: 50%; border: 1.5px solid var(--c-ink-4); transition: border-color 140ms var(--c-ease); position: relative; }
+.chaya-v2 .v2-la-q-opt.multi .mk { border-radius: 4px; }
+.chaya-v2 .v2-la-q-opt.on .mk { border-color: var(--c-accent); }
+.chaya-v2 .v2-la-q-opt.on .mk::after { content: ''; position: absolute; inset: 3px; border-radius: inherit; background: var(--c-accent); }
+.chaya-v2 .v2-la-q-opt .body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.chaya-v2 .v2-la-q-opt .lab { font-size: 13.5px; font-weight: 600; color: var(--c-ink); }
+.chaya-v2 .v2-la-q-opt .desc { font-size: 12.5px; color: var(--c-ink-3); line-height: 1.5; }
+.chaya-v2 .v2-la-q-opt.other { cursor: default; }
+.chaya-v2 .v2-la-q-opt.other input { flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--c-ink); background: transparent; }
+.chaya-v2 .v2-la-q-opt.other input::placeholder { color: var(--c-ink-4); }
+.chaya-v2 .v2-la-q-acts { display: flex; gap: 8px; margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--c-rule); }
+.chaya-v2 .v2-la-q-acts .submit { font-size: 13px; padding: 7px 16px; border-radius: var(--c-radius-md); background: var(--c-accent); color: var(--c-bg); font-weight: 500; cursor: pointer; transition: filter 140ms var(--c-ease); }
+.chaya-v2 .v2-la-q-acts .submit:hover:not(:disabled) { filter: brightness(1.08); }
+.chaya-v2 .v2-la-q-acts .submit:disabled { opacity: 0.45; cursor: not-allowed; }
+.chaya-v2 .v2-la-q-acts .cancel { font-size: 13px; padding: 7px 14px; border-radius: var(--c-radius-md); color: var(--c-ink-3); cursor: pointer; }
+.chaya-v2 .v2-la-q-acts .cancel:hover { background: var(--c-hover); color: var(--c-ink); }
+
+/* 工具卡片 */
+.chaya-v2 .v2-la-tool { font-size: 13px; }
+/* 紧凑一行：状态点 + 动词 + 目标 + 折叠箭头；点击整行展开/收起。默认折叠，安静。 */
+.chaya-v2 .v2-la-tool-hd { display: flex; align-items: center; gap: 8px; line-height: 1.5; padding: 3px 8px; margin: 0 -8px; border-radius: var(--c-radius-sm); }
+.chaya-v2 .v2-la-tool-hd.clickable { cursor: pointer; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-la-tool-hd.clickable:hover { background: var(--c-hover-soft); }
+.chaya-v2 .v2-la-tool-hd b { font-weight: 600; color: var(--c-ink-2); flex: 0 0 auto; }
+.chaya-v2 .v2-la-tool-hd code.file { font-family: var(--c-mono); font-size: 12px; color: var(--c-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.chaya-v2 .v2-la-tool-hd .desc { color: var(--c-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.chaya-v2 .v2-la-tool-hd .sub { font-size: 11px; color: var(--c-ink-4); flex: 0 0 auto; }
+.chaya-v2 .v2-la-tool-chev { margin-left: auto; font-size: 9px; color: var(--c-ink-4); flex: 0 0 auto; order: 9; }
+.chaya-v2 .v2-la-tool-body { margin-top: 6px; }
+/* 折叠态行内结果预览：弱（mono、ink-4），让过程默认可扫读而不必点开 */
+.chaya-v2 .v2-la-tool-hd .prev { font-family: var(--c-mono); font-size: 11.5px; color: var(--c-ink-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 auto; opacity: 0.85; }
+
+/* 很长的 agent 轮：折叠较早项的入口 */
+.chaya-v2 .v2-la-earlier { align-self: flex-start; font-size: 12px; color: var(--c-ink-3); padding: 3px 0; cursor: pointer; }
+.chaya-v2 .v2-la-earlier:hover { color: var(--c-ink); text-decoration: underline; }
+
+/* 子 agent（Task）分组卡片：醒目可识别 + 步数；展开看内部活动（左侧引注线缩进） */
+.chaya-v2 .v2-la-sub { border: 1px solid var(--c-rule); border-radius: var(--c-radius-md); background: var(--c-surface); overflow: hidden; }
+.chaya-v2 .v2-la-sub-hd { display: flex; align-items: center; gap: 8px; padding: 7px 10px; cursor: pointer; font-size: 13px; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-la-sub-hd:hover { background: var(--c-hover-soft); }
+.chaya-v2 .v2-la-sub-hd .ic { width: 15px; height: 15px; flex: 0 0 auto; color: var(--c-accent-strong); display: grid; place-items: center; }
+.chaya-v2 .v2-la-sub-hd .ic svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-la-sub-hd b { font-weight: 600; color: var(--c-ink); flex: 0 0 auto; }
+.chaya-v2 .v2-la-sub-hd .lab { color: var(--c-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.chaya-v2 .v2-la-sub-hd .cnt { margin-left: auto; flex: 0 0 auto; font-size: 11px; color: var(--c-accent-strong); background: var(--c-accent-bg); border-radius: 999px; padding: 1px 8px; }
+.chaya-v2 .v2-la-sub-hd .chev { flex: 0 0 auto; font-size: 9px; color: var(--c-ink-4); }
+.chaya-v2 .v2-la-sub-body { padding: 8px 10px 10px 14px; margin-left: 10px; border-top: 1px solid var(--c-rule); border-left: 2px solid var(--c-accent-bg); display: flex; flex-direction: column; gap: 7px; }
+/* 并行子 agent 并排（每张自适应，窄了自动换行） */
+.chaya-v2 .v2-la-subrow { display: flex; flex-wrap: wrap; gap: 8px; }
+.chaya-v2 .v2-la-subrow > .v2-la-sub { flex: 1 1 300px; min-width: 0; }
+/* 子 agent 「当前在做什么」实时一行（不展开也看得到进度，弱、mono、轻呼吸） */
+.chaya-v2 .v2-la-sub-live { display: flex; align-items: center; gap: 6px; padding: 2px 10px 7px 33px; font-family: var(--c-mono); font-size: 11.5px; color: var(--c-ink-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chaya-v2 .v2-la-sub-live .arr { color: var(--c-accent-strong); flex: 0 0 auto; animation: v2-la-breathe 1.4s var(--c-ease) infinite; }
+/* 工具状态点（功能性：进行中/成功/出错） */
+.chaya-v2 .v2-la-tdot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; align-self: center; }
+.chaya-v2 .v2-la-tdot.ok { background: var(--c-success); }
+.chaya-v2 .v2-la-tdot.err { background: var(--c-danger); }
+.chaya-v2 .v2-la-tdot.pending { background: var(--c-warn); animation: v2-la-breathe 1.2s var(--c-ease) infinite; }
+
+/* Bash IN/OUT（参考截图） */
+.chaya-v2 .v2-la-io { margin-top: 6px; border: 1px solid var(--c-rule); border-radius: var(--c-radius-md); overflow: hidden; background: var(--c-surface); }
+.chaya-v2 .v2-la-io .row { display: flex; gap: 10px; padding: 8px 12px; }
+.chaya-v2 .v2-la-io .row + .row { border-top: 1px solid var(--c-rule); }
+.chaya-v2 .v2-la-io .lbl { font-size: 10px; font-family: var(--c-mono); letter-spacing: 0.08em; color: var(--c-ink-4); padding-top: 2px; flex: 0 0 26px; }
+.chaya-v2 .v2-la-io code { font-family: var(--c-mono); font-size: 12px; color: var(--c-ink); white-space: pre-wrap; word-break: break-word; flex: 1 1 auto; }
+.chaya-v2 .v2-la-io .outbody { flex: 1 1 auto; min-width: 0; }
+.chaya-v2 .v2-la-io .out.err .lbl { color: var(--c-danger); }
+.chaya-v2 .v2-la-io pre { font-family: var(--c-mono); font-size: 12px; color: var(--c-ink-2); white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; }
+.chaya-v2 .v2-la-io .out.err pre { color: var(--c-danger); }
+
+/* 代码预览（复用 MD 高亮，融入项目代码风格） */
+.chaya-v2 .v2-la-code { margin-top: 6px; min-width: 0; max-width: 100%; }
+.chaya-v2 .v2-la-code .v2-md, .chaya-v2 .v2-la-code .v2-md pre { min-width: 0; max-width: 100%; }
+.chaya-v2 .v2-la-code .v2-md pre { margin: 0; }
+.chaya-v2 .v2-la-tool, .chaya-v2 .v2-la-io { min-width: 0; max-width: 100%; }
+
+/* 宽表格：包一层横向滚动容器，局部滑动，不外溢 */
+.chaya-v2 .v2-la-xscroll { max-width: 100%; overflow-x: auto; margin: 8px 0 12px; }
+.chaya-v2 .v2-la-xscroll > table { margin: 0; width: max-content; min-width: 100%; }
+.chaya-v2 .v2-la-more { margin-top: 4px; font-size: 11px; color: var(--c-ink-3); cursor: pointer; padding: 2px 0; }
+.chaya-v2 .v2-la-more:hover { color: var(--c-ink); text-decoration: underline; }
+
+/* Todo 列表 */
+.chaya-v2 .v2-la-todos { margin-top: 6px; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.chaya-v2 .v2-la-todos li { font-size: 12.5px; color: var(--c-ink-2); display: flex; gap: 7px; }
+.chaya-v2 .v2-la-todos li .mk { color: var(--c-ink-4); flex: 0 0 auto; }
+.chaya-v2 .v2-la-todos li.completed { color: var(--c-ink-4); text-decoration: line-through; }
+.chaya-v2 .v2-la-todos li.completed .mk { color: var(--c-success); }
+.chaya-v2 .v2-la-todos li.in_progress { color: var(--c-ink); }
+
+/* 输入框 */
+.chaya-v2 .v2-la-ctx { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--c-ink-3); padding: 3px 9px; border-radius: var(--c-radius-pill); background: var(--c-surface); }
+.chaya-v2 .v2-la-ctx svg { width: 13px; height: 13px; color: var(--c-ink-4); }
+/* danger bg is a constant dark red in both modes, so its glyph stays light
+ * (var(--c-bg) would turn dark-on-dark in dark mode). */
+.chaya-v2 .v2-send.stop { background: var(--c-danger); color: #fff; }
+
+/* 权限模式 pill（Tab 切换；按模式上色） */
+.chaya-v2 .v2-la-mode { display: inline-flex; align-items: center; font-size: 11px; font-weight: 500; padding: 3px 9px; border-radius: var(--c-radius-pill); cursor: pointer; transition: filter 140ms var(--c-ease), background 140ms var(--c-ease); }
+.chaya-v2 .v2-la-mode:hover { filter: brightness(0.97); }
+.chaya-v2 .v2-la-mode.tone-default { background: var(--c-surface); color: var(--c-ink-2); }                  /* Default 灰 */
+.chaya-v2 .v2-la-mode.tone-plan   { background: rgba(59,130,246,0.16); color: #2f6fed; }                    /* Plan 蓝 */
+.chaya-v2 .v2-la-mode.tone-edit   { background: rgba(217,119,87,0.18); color: #c2562f; }                    /* Accept Edits 橙 */
+.chaya-v2 .v2-la-mode.tone-bypass { background: rgba(216,120,150,0.20); color: #b05a7a; }                   /* Bypass 雾粉 */
+
+/* 斜杠命令弹层（参考创作延伸面板风格） */
+.chaya-v2 .v2-la-slash { margin-bottom: 8px; padding: 6px; border: 1px solid var(--c-rule); border-radius: var(--c-radius-lg); background: var(--c-bg); box-shadow: var(--c-shadow-menu); max-height: 280px; overflow-y: auto; animation: v2-popUp 160ms var(--c-ease) both; }
+.chaya-v2 .v2-la-slash-hd { font-size: 10px; color: var(--c-ink-4); padding: 4px 8px 6px; letter-spacing: 0.02em; }
+.chaya-v2 .v2-la-slash-empty { padding: 8px 10px; font-size: 12px; color: var(--c-ink-4); }
+.chaya-v2 .v2-la-slash-item { width: 100%; display: flex; align-items: baseline; gap: 8px; padding: 7px 10px; border-radius: var(--c-radius-md); cursor: pointer; text-align: left; transition: background 120ms var(--c-ease); }
+.chaya-v2 .v2-la-slash-item.active { background: var(--c-hover); }
+.chaya-v2 .v2-la-slash-item .nm { font-family: var(--c-mono); font-size: 12.5px; color: var(--c-ink); flex: 0 0 auto; }
+.chaya-v2 .v2-la-slash-item .ds { font-size: 12px; color: var(--c-ink-4); flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chaya-v2 .v2-la-slash-item .sc { font-size: 10px; color: var(--c-ink-4); background: var(--c-surface); border-radius: 999px; padding: 1px 6px; flex: 0 0 auto; }
+
+/* 设置里的 provider 选择小圆点 + soon 标 */
+.chaya-v2 .v2-la-set-seg .v2-la-setdot { width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; display: inline-block; vertical-align: middle; }
+.chaya-v2 .v2-la-setdot.prov-claude { background: #d97757; }
+.chaya-v2 .v2-la-setdot.prov-codex { background: #4f46e5; }
+.chaya-v2 .v2-la-setdot.prov-gemini { background: linear-gradient(95deg, #4285f4, #9b72cb, #d96570); }
+.chaya-v2 .v2-la-soon { font-size: 9px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--c-ink-4); margin-left: 6px; }
+
+/* ===========================================================================
+   Frosted glass / vibrancy — per-zone toggles + global intensity.
+   Root carries:  data-glass="<zone> <zone> …"   e.g. "composer menu modal"
+                  data-glass-i="subtle|standard|strong"
+   Each zone matches via [data-glass~="zone"]. ClientShell auto-appends
+   "ambient" whenever sidebar/topbar is on — their vibrancy only reads when
+   there's a tinted wash behind the blur, not a flat white wall.
+
+   Tasteful rules: glass lives on floating / chrome surfaces only. Body prose
+   and the settings-modal PANEL stay solid (only its scrim frosts). The tint
+   flips with light/dark mode (and warms for ivory themes) so ink keeps
+   contrast — a light glass in dark mode would wash text out.
+   =========================================================================== */
+.chaya-v2 {
+  --glass-rgb: 255, 255, 255;        /* translucent surface tint (light) */
+  --glass-hairline: 0, 0, 0;         /* border tint */
+  --glass-hairline-a: 0.06;
+  --glass-blur: 20px;
+  --glass-alpha: 0.66;
+  --glass-sat: 150%;
+}
+.chaya-v2[data-mode="dark"] {
+  --glass-rgb: 32, 32, 34;
+  --glass-hairline: 255, 255, 255;   /* light hairline lifts dark glass edges */
+  --glass-hairline-a: 0.10;
+}
+/* warm ivory themes → warm glass so it doesn't read as a cold gray patch */
+.chaya-v2[data-theme="anthropic"]                   { --glass-rgb: 250, 247, 242; }
+.chaya-v2[data-theme="warm"]                        { --glass-rgb: 250, 246, 238; }
+.chaya-v2[data-theme="anthropic"][data-mode="dark"] { --glass-rgb: 38, 36, 33; }
+.chaya-v2[data-theme="warm"][data-mode="dark"]      { --glass-rgb: 40, 34, 24; }
+
+/* global intensity (applies to every enabled zone) */
+.chaya-v2[data-glass-i="subtle"]   { --glass-blur: 12px; --glass-alpha: 0.56; --glass-sat: 145%; }
+.chaya-v2[data-glass-i="standard"] { --glass-blur: 20px; --glass-alpha: 0.66; --glass-sat: 150%; }
+.chaya-v2[data-glass-i="strong"]   { --glass-blur: 30px; --glass-alpha: 0.74; --glass-sat: 165%; }
+
+/* ---- composer (chat input + create bar) — the prime surface ---- */
+.chaya-v2[data-glass~="composer"] .v2-box,
+.chaya-v2[data-glass~="composer"] .v2-cbar-inner {
+  background: rgba(var(--glass-rgb), var(--glass-alpha));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border-color: rgba(var(--glass-hairline), calc(var(--glass-hairline-a) + 0.04));
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05), 0 14px 44px rgba(0,0,0,0.12);
+}
+.chaya-v2[data-glass~="composer"] .v2-box:focus-within {
+  border-color: rgba(var(--glass-hairline), calc(var(--glass-hairline-a) + 0.16));
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06), 0 16px 50px rgba(0,0,0,0.15);
+}
+
+/* ---- popover menu + side drawer (floating) ---- */
+.chaya-v2[data-glass~="menu"] .v2-rowmenu {
+  background: rgba(var(--glass-rgb), calc(var(--glass-alpha) + 0.12));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border: 1px solid rgba(var(--glass-hairline), calc(var(--glass-hairline-a) + 0.02));
+}
+.chaya-v2[data-glass~="menu"] .v2-drawer {
+  background: rgba(var(--glass-rgb), calc(var(--glass-alpha) + 0.10));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+}
+
+/* ---- modal scrim frosts; the panel itself stays solid for form legibility ---- */
+.chaya-v2[data-glass~="modal"] .v2-modal-mask {
+  background: rgba(15, 15, 15, 0.24);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.7)) saturate(130%);
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.7)) saturate(130%);
+}
+
+/* ---- user message bubble (慎用：正文区，强度自动减半) ---- */
+.chaya-v2[data-glass~="bubble"] .v2-msg.user .v2-bubble {
+  background: rgba(var(--glass-rgb), calc(var(--glass-alpha) - 0.12));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.6)) saturate(var(--glass-sat));
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.6)) saturate(var(--glass-sat));
+  border: 1px solid rgba(var(--glass-hairline), calc(var(--glass-hairline-a) + 0.03));
+}
+
+/* ---- sidebar vibrancy (reads thanks to the ambient wash below) ---- */
+.chaya-v2[data-glass~="sidebar"] .v2-side {
+  background: rgba(var(--glass-rgb), calc(var(--glass-alpha) - 0.06));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+}
+
+/* ---- topbar vibrancy: overlay the card's top edge so content scrolls UNDER
+        it. Both scroll containers (.v2-stream = chat/local-agent,
+        .v2-view = gallery/kb) get top padding so nothing hides behind it. ---- */
+.chaya-v2[data-glass~="topbar"] .v2-topbar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 6;
+  background: rgba(var(--glass-rgb), calc(var(--glass-alpha) - 0.06));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border-bottom: 1px solid rgba(var(--glass-hairline), calc(var(--glass-hairline-a) + 0.02));
+}
+.chaya-v2[data-glass~="topbar"] .v2-stream { padding-top: 46px; }
+.chaya-v2[data-glass~="topbar"] .v2-view   { padding-top: 46px; }
+
+/* ---- ambient wash (auto-added with sidebar/topbar) so the blur has tint to
+        sample instead of falling flat on a solid canvas ---- */
+.chaya-v2[data-glass~="ambient"] {
+  background-image:
+    radial-gradient(58vw 52vh at 0% 0%,     rgba(217, 119, 87, 0.055), transparent 68%),
+    radial-gradient(54vw 56vh at 100% 100%, rgba(94, 106, 210, 0.05),  transparent 70%);
+  background-attachment: fixed;
+}
+
+/* honor "reduce transparency": drop every blur, fall back to solid surfaces */
+@media (prefers-reduced-transparency: reduce) {
+  .chaya-v2[data-glass] .v2-box,
+  .chaya-v2[data-glass] .v2-cbar-inner,
+  .chaya-v2[data-glass] .v2-rowmenu,
+  .chaya-v2[data-glass] .v2-drawer,
+  .chaya-v2[data-glass] .v2-side,
+  .chaya-v2[data-glass] .v2-topbar,
+  .chaya-v2[data-glass] .v2-msg.user .v2-bubble {
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+  .chaya-v2[data-glass~="composer"] .v2-box,
+  .chaya-v2[data-glass~="composer"] .v2-cbar-inner,
+  .chaya-v2[data-glass~="menu"] .v2-rowmenu,
+  .chaya-v2[data-glass~="menu"] .v2-drawer { background: var(--c-bg); }
+  .chaya-v2[data-glass~="sidebar"] .v2-side,
+  .chaya-v2[data-glass~="topbar"] .v2-topbar { background: var(--c-sidebar); }
+  .chaya-v2[data-glass~="bubble"] .v2-msg.user .v2-bubble { background: var(--c-hover-soft); }
+}

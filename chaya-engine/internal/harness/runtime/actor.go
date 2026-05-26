@@ -67,6 +67,11 @@ type Actor struct {
 
 	topoMatchMu             sync.Mutex
 	lastTopologyIntentLabel string // Consult 命中意图 label（本回合，用于拓扑学习轨迹）
+
+	// mcpWarned dedups the user-visible "bound MCP unavailable" execution-log
+	// warning to once per server per actor lifetime, so it doesn't spam the log
+	// stream on every turn. The LLM system note is still injected each turn.
+	mcpWarned map[string]struct{}
 }
 
 func newBaseActor(id, agentID, userID string, cfg ActorConfig, llm provider.LLMProvider, hub *gateway.Hub, db *gorm.DB, orch *capability.Orchestrator, reg *provider.Registry) *Actor {
@@ -449,6 +454,13 @@ func (a *Actor) streamChat(ctx context.Context, env *envelope.Envelope) string {
 	if block := extractKnowledgeBlock(env.Data); block != "" {
 		userForLLM = block + "\n\n---\n\n" + env.Body
 	}
+	// A quoted message (ext.quote) is folded in as context for THIS turn only,
+	// prepended above everything else. The raw quote also lives in the persisted
+	// user-message ext (see extractPersistableExt) so the chip survives reload,
+	// but the LLM-facing copy is what makes the reference salient.
+	if q := extractQuoteBlock(env.Data); q != "" {
+		userForLLM = q + "\n\n---\n\n" + userForLLM
+	}
 
 	// Hydrate prior conversation from DB if this is the first envelope
 	// for this convID after construction (server restart, idle reaper, or
@@ -469,9 +481,41 @@ func (a *Actor) streamChat(ctx context.Context, env *envelope.Envelope) string {
 	copy(messages, a.history)
 	a.mu.Unlock()
 
-	messages, _ = a.enrichMessagesWithCapabilities(ctx, convID, env.Body, messages, nil, false)
+	// toolCallMode=true: when the agent has bound MCP tools we feed them to
+	// the LLM as function-calling definitions (handled in streamChatWithTools),
+	// so the prose tool list is redundant and only burns prompt tokens. For
+	// agents with zero MCP tools this is byte-identical to the old false path —
+	// FormatSystemPromptAdditions only gates the tool prose on this flag.
+	messages, mcpTools := a.enrichMessagesWithCapabilities(ctx, convID, env.Body, messages, nil, true)
 
-	full := a.streamAssistantResponse(ctx, convID, messages)
+	// Mirror the SubActor task path: when the user pasted an external link,
+	// hand the agent a web_fetch fallback so it can read URLs no bound MCP
+	// tool covers. Available even to agents with zero MCP bound — a pasted
+	// link alone is enough to route into the tool-calling path below.
+	if containsExternalLink(env.Body) {
+		mcpTools = append(mcpTools, webFetchTool())
+	}
+
+	// A bound MCP whose OAuth token expired (or that's unreachable) silently
+	// yields zero tools — the user then wonders why the agent "can't use" it.
+	// Detect explicitly-bound-but-broken servers and (a) warn in the log stream
+	// and (b) tell the LLM so it guides the user to re-authorize instead of
+	// pretending it called the tool.
+	if a.Orchestrator != nil && a.Orchestrator.MCPRegistry != nil {
+		if broken := a.Orchestrator.MCPRegistry.AgentBrokenMCPServers(ctx, a.AgentID, a.UserID, a.resolvedTenantID()); len(broken) > 0 {
+			messages = a.warnBrokenMCP(convID, messages, broken)
+		}
+	}
+
+	// Direct tool calling: an agent bound to MCP servers can now invoke them
+	// itself instead of relying on the PrimaryAgent's delegate decision. When
+	// no tools are available we keep the original pure-streaming path.
+	var full string
+	if len(mcpTools) > 0 {
+		full = a.streamChatWithTools(ctx, convID, messages, mcpTools)
+	} else {
+		full = a.streamAssistantResponse(ctx, convID, messages)
+	}
 
 	a.mu.Lock()
 	a.history = append(a.history, provider.Message{
@@ -603,6 +647,66 @@ func extractKnowledgeBlock(data json.RawMessage) string {
 	return b.String()
 }
 
+// extractQuoteBlock renders ext.quote ({role, content}) into a markdown
+// blockquote prepended to the user's turn, so the referenced message is
+// front-and-center for the model. Empty if no quote was attached.
+func extractQuoteBlock(data json.RawMessage) string {
+	if len(data) == 0 {
+		return ""
+	}
+	var payload struct {
+		Quote *struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"quote"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil || payload.Quote == nil {
+		return ""
+	}
+	return formatQuoteBlock(payload.Quote.Role, payload.Quote.Content)
+}
+
+// formatQuoteBlock builds the "[引用 · …]" blockquote shared by the agent and
+// teahouse paths so quoting reads identically regardless of chat type.
+func formatQuoteBlock(role, content string) string {
+	c := strings.TrimSpace(content)
+	if c == "" {
+		return ""
+	}
+	who := "用户"
+	if role == "assistant" {
+		who = "助手"
+	}
+	var b strings.Builder
+	b.WriteString("[引用 · ")
+	b.WriteString(who)
+	b.WriteString("之前的消息]\n")
+	for _, ln := range strings.Split(c, "\n") {
+		b.WriteString("> ")
+		b.WriteString(ln)
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// InvalidateHistoryFor drops the cached in-memory history for convID so the
+// next turn re-hydrates from DB. Called after a message truncate/edit so the
+// agent never re-sends messages the user just deleted. No-op if this actor
+// isn't currently holding convID's history.
+func (a *Actor) InvalidateHistoryFor(convID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.historyHydratedFor != convID {
+		return
+	}
+	a.historyHydratedFor = ""
+	if len(a.history) > 0 && a.history[0].Role == "system" {
+		a.history = a.history[:1]
+	} else {
+		a.history = a.history[:0]
+	}
+}
+
 // extractPersistableExt keeps the pieces of the envelope payload that should
 // live on the user message row (knowledge chip, media). Drops ephemerals like
 // agent_id and enable_tool_calling that are purely routing/runtime hints.
@@ -615,7 +719,7 @@ func extractPersistableExt(data json.RawMessage) json.RawMessage {
 		return nil
 	}
 	keep := map[string]json.RawMessage{}
-	for _, k := range []string{"knowledge", "media"} {
+	for _, k := range []string{"knowledge", "media", "quote", "knowledge_domains"} {
 		if v, ok := all[k]; ok && len(v) > 0 {
 			keep[k] = v
 		}

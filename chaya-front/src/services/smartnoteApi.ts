@@ -197,6 +197,18 @@ export interface Document {
   byte_size: number;
   ingested_at: string | null;
   created_at: string;
+  metadata?: Record<string, unknown> | null;
+}
+
+/** A knowledge domain (知识域) is a workspace tag: its `name` is the domain's
+ *  alias/identifier used everywhere (memory tags, doc metadata.domains, the
+ *  @mention in chat, and the retrieve `tags` filter). */
+export interface Tag {
+  id?: string;
+  name: string;
+  description?: string | null;
+  color?: string | null;
+  sort_order?: number;
 }
 
 /* ============================================================
@@ -254,6 +266,20 @@ export const smartnoteDocuments = {
   /** Chunks, embeds, and lands as memories. Synchronous at MVP. */
   ingest: (id: string) =>
     req<{ ok: boolean; chunks: number }>(`/v1/documents/${encodeURIComponent(id)}/ingest`, { method: 'POST' }),
+};
+
+/* ============================================================
+   Knowledge domains (= workspace tags)
+   ============================================================ */
+
+export const smartnoteTags = {
+  /** GET /v1/tags returns a bare array. */
+  list: () => req<Tag[]>('/v1/tags'),
+  /** Create or update a domain (idempotent on name). */
+  upsert: (body: Tag) =>
+    req<Tag>('/v1/tags', { method: 'POST', body: JSON.stringify(body) }),
+  remove: (name: string) =>
+    req<{ ok: boolean; deleted: number }>(`/v1/tags/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 };
 
 /* ============================================================

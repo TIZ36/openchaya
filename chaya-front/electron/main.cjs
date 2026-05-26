@@ -1,22 +1,36 @@
 /**
  * Electron 主进程：加载 Vite 开发服务器或打包后的 dist，后端始终通过 HTTP 独立连接。
  */
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, dialog, nativeImage } = require('electron');
 const path = require('path');
+const { registerLocalAgent } = require('./localAgent.cjs');
 
 const isDev = !app.isPackaged;
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5177';
+// v2 is the only shell now; root renders it directly (no router).
+const ENTRY_PATH = process.env.CHAYA_ENTRY || '/';
 const IS_MAC = process.platform === 'darwin';
+// Master PNG (transparent corners, black squircle, white triangle). Packaged
+// macOS builds use build/icon.icns via electron-builder; this drives the dev
+// dock icon and the win/linux window icon.
+const ICON_PNG = path.join(__dirname, '../build/icon.png');
 
 function createWindow() {
   const win = new BrowserWindow({
     width: 1320,
     height: 860,
-    minWidth: 960,
-    minHeight: 640,
+    minWidth: 420,
+    minHeight: 560,
     backgroundColor: '#000000',
     show: false,
+    // macOS ignores the window icon (it uses the dock/bundle icon); win/linux
+    // take it for the title bar / taskbar.
+    icon: IS_MAC ? undefined : ICON_PNG,
     titleBarStyle: IS_MAC ? 'hiddenInset' : 'default',
+    // Lights are 12px circles → center y = 16+6 = 22. The in-app shell-toggle
+    // and topbar crumb are both sized so their optical centers land on the
+    // same y=22 axis. (Default y avoided so we don't need an Electron restart
+    // to see correct alignment.)
     trafficLightPosition: IS_MAC ? { x: 14, y: 16 } : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -53,10 +67,11 @@ function createWindow() {
   });
 
   if (isDev) {
-    win.loadURL(DEV_URL);
+    win.loadURL(DEV_URL.replace(/\/$/, '') + ENTRY_PATH);
     win.webContents.openDevTools({ mode: 'detach' });
   } else {
-    win.loadFile(path.join(__dirname, '../dist/index.html'));
+    // Packaged build uses HashRouter (file://), so the entry must live in the hash.
+    win.loadFile(path.join(__dirname, '../dist/index.html'), { hash: ENTRY_PATH });
   }
 
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -65,7 +80,19 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow);
+// 本地 Agent 桥：纯本地功能，与后端无关。仅注册一次。
+registerLocalAgent(ipcMain, dialog);
+
+app.whenReady().then(() => {
+  // Dev dock icon (packaged macOS uses build/icon.icns from the bundle).
+  if (IS_MAC && isDev && app.dock) {
+    try {
+      const img = nativeImage.createFromPath(ICON_PNG);
+      if (!img.isEmpty()) app.dock.setIcon(img);
+    } catch { /* non-fatal */ }
+  }
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (!IS_MAC) app.quit();

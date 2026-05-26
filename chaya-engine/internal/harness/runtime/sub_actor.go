@@ -277,40 +277,6 @@ func (s *SubActor) callLLMWithTools(ctx context.Context, convID string, messages
 	return resp
 }
 
-// executeTool dispatches a single tool call to the appropriate handler (MCP or ExecuteFn).
-func (s *SubActor) executeTool(ctx context.Context, tc provider.ToolCall, toolIndex map[string]pkg.Tool) string {
-	pkgTool, found := toolIndex[tc.Name]
-	if !found {
-		return fmt.Sprintf("Error: tool %q not found. Available tools: %s. Try a different tool name, or use web_fetch as a fallback for URL content.",
-			tc.Name, availableToolNames(toolIndex))
-	}
-
-	args := json.RawMessage(tc.Arguments)
-
-	// MCP tool → CallTool via registry (userID/tenantID needed for OAuth MCP servers)
-	if pkgTool.Source == "mcp" && pkgTool.ServerID != "" && s.Orchestrator != nil && s.Orchestrator.MCPRegistry != nil {
-		result, err := s.Orchestrator.MCPRegistry.CallTool(ctx, pkgTool.ServerID, tc.Name, args, s.UserID, s.resolvedTenantID())
-		if err != nil {
-			return fmt.Sprintf("Error calling %s: %s. Try different parameters, a different tool, or use web_fetch as a fallback.", tc.Name, err.Error())
-		}
-		if !result.Success {
-			return fmt.Sprintf("Error from %s: %s. The tool returned an error — try different parameters, a different tool, or use web_fetch as a fallback.", tc.Name, result.Error)
-		}
-		return result.Body
-	}
-
-	// Generic tool with ExecuteFn
-	if pkgTool.ExecuteFn != nil {
-		result, err := pkgTool.ExecuteFn(ctx, args)
-		if err != nil {
-			return fmt.Sprintf("Error executing %s: %s. Try a different approach or tool.", tc.Name, err.Error())
-		}
-		return result.Body
-	}
-
-	return fmt.Sprintf("Error: tool %q has no execution handler", tc.Name)
-}
-
 // availableToolNames returns a comma-separated list of available tool names for error messages.
 func availableToolNames(index map[string]pkg.Tool) string {
 	names := make([]string, 0, len(index))

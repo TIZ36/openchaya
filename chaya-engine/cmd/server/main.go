@@ -23,6 +23,7 @@ import (
 	"github.com/chaya-ai/chaya-engine/internal/harness/runtime"
 	"github.com/chaya-ai/chaya-engine/internal/provider"
 	pgstore "github.com/chaya-ai/chaya-engine/internal/storage/postgres"
+	"github.com/chaya-ai/chaya-engine/internal/teahouse"
 	redisstore "github.com/chaya-ai/chaya-engine/internal/storage/redis"
 	"github.com/chaya-ai/chaya-engine/pkg/envelope"
 	"github.com/go-chi/chi/v5"
@@ -101,6 +102,9 @@ func main() {
 	// ── Actor Pool ──
 	actorPool := runtime.NewActorPool(hub, providerRegistry, db, orch, rdb)
 
+	// ── Teahouse (Agent-less direct LLM chat) ──
+	teahouseSvc := teahouse.NewService(db, hub, providerRegistry)
+
 	// ── WS Message Handler ──
 	onWSMessage := func(client *gateway.Client, msg *gateway.WSMessage) {
 		switch msg.Type {
@@ -177,6 +181,50 @@ func main() {
 					})
 				}
 			}
+
+		case "teahouse_message":
+			var payload struct {
+				ConvID  string         `json:"conv_id"`
+				Content string         `json:"content"`
+				Ext     map[string]any `json:"ext"`
+			}
+			json.Unmarshal(msg.Payload, &payload)
+			if payload.ConvID == "" {
+				slog.Warn("ws teahouse_message missing conv_id")
+				break
+			}
+			if !api.ConversationAccessForUser(db, payload.ConvID, client.UserID, client.TenantID) {
+				slog.Warn("ws teahouse denied: conv not accessible", "user", client.UserID, "conv", payload.ConvID)
+				break
+			}
+			hub.Subscribe(client.ID, payload.ConvID)
+			if err := teahouseSvc.Start(teahouse.TurnRequest{
+				ConvID:  payload.ConvID,
+				UserID:  client.UserID,
+				Content: payload.Content,
+				Ext:     payload.Ext,
+			}); err != nil {
+				slog.Warn("teahouse start failed", "err", err, "conv", payload.ConvID)
+				hub.Publish(payload.ConvID, map[string]any{
+					"type":       "agent_stream_done",
+					"agent_id":   "teahouse",
+					"message_id": "",
+					"content":    "❌ " + err.Error(),
+					"error":      err.Error(),
+				})
+			}
+
+		case "teahouse_interrupt":
+			convID := msg.Topic
+			if convID == "" {
+				slog.Warn("ws teahouse_interrupt missing topic")
+				break
+			}
+			if !api.ConversationAccessForUser(db, convID, client.UserID, client.TenantID) {
+				slog.Warn("ws teahouse_interrupt denied", "user", client.UserID, "conv", convID)
+				break
+			}
+			teahouseSvc.Cancel(convID)
 		}
 	}
 
@@ -195,7 +243,8 @@ func main() {
 		r.Group(func(r chi.Router) {
 			r.Use(mw.JWTAuth(cfg.Auth.JWTSecret))
 			api.RegisterAdminRoutes(r, db)
-			api.RegisterConversationRoutes(r, db, providerRegistry)
+			api.RegisterConversationRoutes(r, db, providerRegistry, actorPool)
+			api.RegisterTeahouseRoutes(r, db)
 			api.RegisterChatFollowupRoutes(r, db, providerRegistry)
 			api.RegisterAgentRoutes(r, db)
 			api.RegisterAgentHarnessRoutes(r, db, mcpReg)

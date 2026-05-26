@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chaya · 毛玻璃探索原型</title>
+<style>
+/* ===========================================================================
+   Chaya — Frosted-glass / vibrancy exploration prototype
+   Replicates the current v2 chat shell. Toggle glass per zone to evaluate.
+   Tokens mirror src/v2/theme.css (white / anthropic / dark).
+   =========================================================================== */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --c-bg:#ffffff; --c-sidebar:#f9f9f9; --c-ink:#0d0d0d; --c-ink-2:#3c3c3c;
+  --c-ink-3:#6e6e6e; --c-ink-4:#a4a4a4; --c-hover:#ececec; --c-hover-soft:#f2f2f2;
+  --c-selected:#e6e6e6; --c-rule:#ececec; --c-accent:#0d0d0d; --c-surface:#f4f4f4;
+  --c-shadow-card:0 1px 2px rgba(0,0,0,0.03),0 8px 24px rgba(0,0,0,0.05);
+  --c-shadow-menu:0 1px 2px rgba(0,0,0,0.04),0 10px 28px rgba(0,0,0,0.10);
+  --c-ease:cubic-bezier(0.22,1,0.36,1);
+
+  /* glass — driven by the control panel */
+  --glass-blur:22px;
+  --glass-sat:150%;
+  --glass-tint-light:255,255,255;
+  --glass-tint-dark:28,28,30;
+  --glass-alpha:0.66;
+  --glass-tint:var(--glass-tint-light);
+}
+
+/* ---- themes ---- */
+.app[data-theme="anthropic"]{
+  --c-bg:#fdfcfa; --c-sidebar:#f4f1ea; --c-ink:#141413; --c-ink-2:#46443d;
+  --c-ink-3:#87867f; --c-ink-4:#b0aea5; --c-hover:#f0eee6; --c-hover-soft:#f7f5ef;
+  --c-selected:#f0e3d9; --c-rule:#e8e6dc; --c-accent:#d97757; --c-surface:#f0eee6;
+  --glass-tint:250,247,242;
+}
+.app[data-theme="dark"]{
+  --c-bg:#1a1a1a; --c-sidebar:#1f1f1f; --c-ink:#ececec; --c-ink-2:#c4c4c4;
+  --c-ink-3:#969696; --c-ink-4:#6e6e6e; --c-hover:#2a2a2a; --c-hover-soft:#232323;
+  --c-selected:#343434; --c-rule:#2e2e2e; --c-accent:#ececec; --c-surface:#232323;
+  --glass-tint:var(--glass-tint-dark);
+  --c-shadow-card:0 1px 2px rgba(0,0,0,0.3),0 8px 24px rgba(0,0,0,0.4);
+  --c-shadow-menu:0 1px 2px rgba(0,0,0,0.3),0 10px 28px rgba(0,0,0,0.5);
+}
+
+html,body{ height:100%; }
+body{
+  font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','PingFang SC',system-ui,sans-serif;
+  background:#3a3a3c; color:var(--c-ink); -webkit-font-smoothing:antialiased;
+  display:grid; place-items:center; min-height:100vh; padding:28px;
+}
+
+/* window frame (mimics the electron window so we can see the desktop behind it) */
+.window{
+  position:relative; width:min(1180px,96vw); height:min(760px,90vh);
+  border-radius:14px; overflow:hidden; box-shadow:0 30px 90px rgba(0,0,0,0.5);
+  background:var(--c-bg);
+}
+
+/* ---- AMBIENT BACKDROP: the soft wash that makes vibrancy read.
+        Off by default so you can see how flat-bg kills the glass effect. ---- */
+.app .ambient{ position:absolute; inset:0; opacity:0; transition:opacity .4s var(--c-ease); pointer-events:none; z-index:0; }
+.app.ambient-on .ambient{ opacity:1; }
+.ambient::before,.ambient::after{ content:''; position:absolute; border-radius:50%; filter:blur(60px); }
+.ambient::before{ width:520px; height:520px; left:-120px; top:-80px;
+  background:radial-gradient(circle, rgba(217,119,87,0.28), transparent 70%); }
+.ambient::after{ width:600px; height:600px; right:-160px; bottom:-120px;
+  background:radial-gradient(circle, rgba(94,106,210,0.22), transparent 70%); }
+.app[data-theme="dark"] .ambient::before{ background:radial-gradient(circle, rgba(217,119,87,0.30), transparent 70%); }
+
+.app{ position:relative; width:100%; height:100%; }
+.shell{ position:relative; z-index:1; display:flex; height:100%; }
+
+/* ============================== SIDEBAR ============================== */
+.side{
+  width:248px; flex:0 0 248px; height:100%; padding:42px 8px 8px;
+  background:var(--c-sidebar); border-right:1px solid var(--c-rule);
+  display:flex; flex-direction:column; gap:2px; position:relative; z-index:2;
+}
+.app.glass-side .side{
+  background:rgba(var(--glass-tint), calc(var(--glass-alpha) - 0.04));
+  -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter:blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border-right:1px solid rgba(var(--glass-tint),0.5);
+}
+.search{ display:flex; align-items:center; gap:8px; margin:0 4px 8px; padding:7px 10px;
+  background:var(--c-hover-soft); border-radius:8px; color:var(--c-ink-3); font-size:13px; }
+.app.glass-side .search{ background:rgba(var(--glass-tint),0.4); }
+.search svg{ width:15px; height:15px; }
+.nav .row{ display:flex; align-items:center; gap:10px; padding:7px 12px; border-radius:8px;
+  font-size:13.5px; color:var(--c-ink-2); cursor:pointer; transition:background .14s var(--c-ease); }
+.nav .row:hover{ background:var(--c-hover-soft); }
+.nav .row.active{ background:var(--c-hover); color:var(--c-ink); font-weight:500; }
+.nav .row svg{ width:17px; height:17px; }
+.sec{ display:flex; align-items:center; padding:14px 12px 4px; font-size:11px;
+  font-weight:600; letter-spacing:.04em; color:var(--c-ink-4); text-transform:uppercase; }
+.sec .add{ margin-left:auto; color:var(--c-ink-4); font-size:14px; cursor:pointer; }
+.agents .a,.recents .r{ display:flex; align-items:center; gap:8px; padding:6px 10px;
+  border-radius:8px; font-size:13px; color:var(--c-ink); cursor:pointer; transition:background .14s var(--c-ease); }
+.agents .a:hover,.recents .r:hover{ background:var(--c-hover-soft); }
+.agents .a.active,.recents .r.active{ background:var(--c-hover); }
+.av{ width:20px; height:20px; border-radius:5px; background:var(--c-surface); display:grid;
+  place-items:center; font-size:10px; color:var(--c-ink-2); flex:0 0 20px; }
+.recents .r .t{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.recents{ overflow-y:auto; flex:1 1 auto; min-height:0; }
+.me{ display:flex; align-items:center; gap:8px; padding:8px 10px; margin-top:6px;
+  border-radius:8px; cursor:pointer; }
+.me:hover{ background:var(--c-hover-soft); }
+.me .uav{ width:26px; height:26px; border-radius:50%; background:var(--c-accent);
+  color:var(--c-bg); display:grid; place-items:center; font-size:11px; font-weight:600; }
+.me .unm{ font-size:13px; }
+.me .gear{ margin-left:auto; color:var(--c-ink-3); }
+
+/* ============================== MAIN ============================== */
+.main{ flex:1 1 auto; display:flex; flex-direction:column; min-width:0; position:relative; }
+
+.topbar{ height:48px; flex:0 0 48px; display:flex; align-items:center; padding:0 18px;
+  position:absolute; top:0; left:0; right:0; z-index:5; }
+.app.glass-top .topbar{
+  background:rgba(var(--glass-tint), calc(var(--glass-alpha) - 0.10));
+  -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter:blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border-bottom:1px solid rgba(var(--glass-tint),0.4);
+  -webkit-mask-image:linear-gradient(#000 60%, transparent);
+}
+.crumb{ font-size:14px; font-weight:600; color:var(--c-ink); display:flex; align-items:center; gap:6px; }
+.crumb .chev{ color:var(--c-ink-3); font-size:11px; }
+
+.stream{ flex:1 1 auto; overflow-y:auto; padding:64px 0 150px; }
+.msgs{ max-width:720px; margin:0 auto; padding:0 24px; }
+.msg{ display:flex; margin-bottom:18px; }
+.msg.user{ justify-content:flex-end; }
+.bubble{ max-width:78%; padding:10px 14px; border-radius:16px; font-size:14px; line-height:1.6; }
+.msg.user .bubble{ background:var(--c-surface); color:var(--c-ink); }
+.app.glass-bubble .msg.user .bubble{
+  background:rgba(var(--glass-tint), 0.5);
+  -webkit-backdrop-filter:blur(12px) saturate(140%);
+  backdrop-filter:blur(12px) saturate(140%);
+  border:1px solid rgba(var(--glass-tint),0.6);
+}
+.msg.assistant .bubble{ max-width:100%; padding:0; color:var(--c-ink); }
+.msg.assistant .bubble p{ margin-bottom:10px; }
+.msg.assistant .bubble p:last-child{ margin-bottom:0; }
+.imgs{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:10px; max-width:420px; }
+.imgs i{ aspect-ratio:1; border-radius:10px; display:block;
+  background:linear-gradient(135deg,#d97757,#5e6ad2); opacity:.85; }
+
+/* ============================== COMPOSER ============================== */
+.composer-wrap{ position:absolute; left:0; right:0; bottom:16px; display:flex;
+  justify-content:center; padding:0 24px; z-index:6; pointer-events:none; }
+.composer{ width:100%; max-width:740px; pointer-events:auto;
+  background:var(--c-bg); border:1px solid var(--c-rule); border-radius:24px;
+  box-shadow:var(--c-shadow-card); padding:12px 14px; }
+.app.glass-composer .composer{
+  background:rgba(var(--glass-tint), var(--glass-alpha));
+  -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter:blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border:1px solid rgba(var(--glass-tint),0.7);
+  box-shadow:0 1px 2px rgba(0,0,0,0.04),0 12px 40px rgba(0,0,0,0.12);
+}
+.composer .ph{ color:var(--c-ink-4); font-size:15px; padding:4px 4px 12px; }
+.composer .crow{ display:flex; align-items:center; gap:8px; }
+.composer .ib{ width:30px; height:30px; border-radius:8px; display:grid; place-items:center;
+  color:var(--c-ink-3); cursor:pointer; }
+.composer .ib:hover{ background:var(--c-hover-soft); }
+.composer .send{ margin-left:auto; width:32px; height:32px; border-radius:50%;
+  background:var(--c-accent); color:var(--c-bg); display:grid; place-items:center; cursor:pointer; }
+
+/* ============================== MENU / POPOVER ============================== */
+.menu{ position:absolute; top:120px; left:300px; z-index:40; width:180px; padding:6px;
+  border-radius:10px; background:var(--c-bg); border:1px solid var(--c-rule);
+  box-shadow:var(--c-shadow-menu); font-size:13px; display:none; }
+.app.show-menu .menu{ display:block; }
+.app.glass-menu .menu{
+  background:rgba(var(--glass-tint), calc(var(--glass-alpha) + 0.14));
+  -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter:blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border:1px solid rgba(var(--glass-tint),0.6);
+}
+.menu button{ display:block; width:100%; text-align:left; padding:7px 10px; border-radius:6px;
+  background:none; border:none; color:var(--c-ink); font-size:13px; cursor:pointer; }
+.menu button:hover{ background:var(--c-hover); }
+
+/* ============================== MODAL ============================== */
+.scrim{ position:absolute; inset:0; z-index:50; display:none; align-items:center;
+  justify-content:center; background:rgba(0,0,0,0.28); }
+.app.show-modal .scrim{ display:flex; }
+.app.glass-modal .scrim{
+  background:rgba(0,0,0,0.12);
+  -webkit-backdrop-filter:blur(10px) saturate(120%);
+  backdrop-filter:blur(10px) saturate(120%);
+}
+.modal{ width:520px; max-width:90%; border-radius:16px; padding:24px;
+  background:var(--c-bg); box-shadow:0 20px 60px rgba(0,0,0,0.28); }
+.app.glass-modal .modal{
+  background:rgba(var(--glass-tint), calc(var(--glass-alpha) + 0.18));
+  -webkit-backdrop-filter:blur(30px) saturate(150%);
+  backdrop-filter:blur(30px) saturate(150%);
+  border:1px solid rgba(var(--glass-tint),0.7);
+}
+.modal h3{ font-size:17px; margin-bottom:6px; }
+.modal p{ font-size:13.5px; color:var(--c-ink-3); line-height:1.6; margin-bottom:18px; }
+.modal .x{ float:right; cursor:pointer; color:var(--c-ink-3); font-size:18px; }
+.modal .btn{ padding:8px 16px; border-radius:8px; background:var(--c-accent); color:var(--c-bg);
+  border:none; font-size:13px; cursor:pointer; }
+
+/* ============================== CALLOUTS ============================== */
+.tag{ position:absolute; z-index:60; font-size:11px; font-weight:600; padding:3px 8px;
+  border-radius:6px; background:#111; color:#fff; box-shadow:0 4px 14px rgba(0,0,0,.4);
+  white-space:nowrap; opacity:0; transform:translateY(-4px); transition:.2s var(--c-ease);
+  pointer-events:none; }
+.tag::after{ content:''; position:absolute; width:7px; height:7px; background:#111;
+  transform:rotate(45deg); }
+.app.show-callouts .tag{ opacity:1; transform:translateY(0); }
+.tag.t-side{ top:8px; left:90px; } .tag.t-side::after{ left:-3px; top:9px; }
+.tag.t-top{ top:50px; left:280px; } .tag.t-top::after{ left:14px; top:-3px; }
+.tag.t-composer{ bottom:96px; left:50%; transform:translateX(-50%) translateY(-4px); }
+.app.show-callouts .tag.t-composer{ transform:translateX(-50%); }
+.tag.t-composer::after{ left:50%; bottom:-3px; margin-left:-3px; }
+.tag.t-bubble{ top:120px; right:40px; } .tag.t-bubble::after{ right:14px; bottom:-3px; }
+
+/* ============================== CONTROL PANEL ============================== */
+.panel{ position:fixed; top:18px; right:18px; z-index:200; width:268px;
+  background:rgba(20,20,22,0.78); -webkit-backdrop-filter:blur(20px); backdrop-filter:blur(20px);
+  border:1px solid rgba(255,255,255,0.12); border-radius:14px; padding:14px 16px; color:#eee;
+  font-family:-apple-system,system-ui,sans-serif; box-shadow:0 20px 60px rgba(0,0,0,.5); }
+.panel h4{ font-size:12px; letter-spacing:.05em; text-transform:uppercase; color:#9a9aa0;
+  margin:14px 0 8px; } .panel h4:first-child{ margin-top:0; }
+.panel .ttl{ font-size:14px; font-weight:700; margin-bottom:2px; }
+.panel .sub{ font-size:11px; color:#8a8a90; line-height:1.5; margin-bottom:12px; }
+.row-c{ display:flex; align-items:center; justify-content:space-between; padding:5px 0; font-size:13px; }
+.row-c label{ cursor:pointer; user-select:none; }
+.sw{ position:relative; width:34px; height:20px; }
+.sw input{ position:absolute; opacity:0; width:100%; height:100%; cursor:pointer; margin:0; }
+.sw i{ position:absolute; inset:0; background:#3a3a40; border-radius:999px; transition:.2s; }
+.sw i::after{ content:''; position:absolute; width:16px; height:16px; border-radius:50%;
+  background:#fff; top:2px; left:2px; transition:.2s var(--c-ease); }
+.sw input:checked + i{ background:#d97757; }
+.sw input:checked + i::after{ transform:translateX(14px); }
+.panel .slide{ margin:8px 0; }
+.panel .slide label{ display:flex; justify-content:space-between; font-size:12px; color:#b0b0b6; margin-bottom:4px; }
+.panel input[type=range]{ width:100%; accent-color:#d97757; }
+.seg{ display:flex; gap:4px; margin-top:4px; }
+.seg button{ flex:1; padding:6px; font-size:12px; border-radius:7px; border:1px solid rgba(255,255,255,.14);
+  background:transparent; color:#cfcfd4; cursor:pointer; }
+.seg button.on{ background:#d97757; color:#fff; border-color:#d97757; }
+.hint{ font-size:11px; color:#c8a36f; background:rgba(217,119,87,.12); border-radius:8px;
+  padding:8px 10px; margin-top:12px; line-height:1.5; }
+</style>
+</head>
+<body>
+
+<div class="window">
+  <div class="app" id="app" data-theme="white">
+    <div class="ambient"></div>
+
+    <div class="shell">
+      <!-- SIDEBAR -->
+      <aside class="side">
+        <div class="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg>
+          搜索 (⌘K)
+        </div>
+        <nav class="nav">
+          <div class="row active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> 聊天</div>
+          <div class="row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg> 画廊</div>
+          <div class="row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 知识库</div>
+        </nav>
+        <div class="sec"><span>Agents</span><span class="add">+</span></div>
+        <div class="agents">
+          <div class="a active"><span class="av">茶</span> 茶花女 <span style="font-size:10px;color:var(--c-ink-4);margin-left:auto">primary</span></div>
+          <div class="a"><span class="av">研</span> 研究助手</div>
+        </div>
+        <div class="sec"><span>Chats</span></div>
+        <div class="recents">
+          <div class="r active"><span class="t">关于毛玻璃质感的讨论</span></div>
+          <div class="r"><span class="t">帮我润色一段产品文案</span></div>
+          <div class="r"><span class="t">本周市场调研汇总</span></div>
+          <div class="r"><span class="t">生成几张封面草图</span></div>
+          <div class="r"><span class="t">解释一下 OKLCH 色彩空间</span></div>
+          <div class="r"><span class="t">周末徒步路线规划</span></div>
+        </div>
+        <div class="me">
+          <span class="uav">B</span><span class="unm">Bao</span>
+          <svg class="gear" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </div>
+      </aside>
+
+      <!-- MAIN -->
+      <main class="main">
+        <div class="topbar"><div class="crumb">茶花女 <span class="chev">▾</span></div></div>
+
+        <section class="stream">
+          <div class="msgs">
+            <div class="msg user"><div class="bubble">我现在感觉我们的毛玻璃质感的组件没有，能不能看看哪些地方适合加上毛玻璃，让软件看起来更高级？</div></div>
+            <div class="msg assistant"><div class="bubble">
+              <p>好问题。毛玻璃（vibrancy）要显得"高级"而不廉价，关键有两点：<b>克制</b>——只用在浮层上；<b>背后有内容可糊</b>——否则纯白底上的玻璃等于不存在。</p>
+              <p>在我们当前界面里，最自然的候选区域是浮在消息流之上的<b>输入框</b>，以及侧栏、顶栏这类 macOS 风格的半透明 chrome。打开右侧面板逐个试试看。</p>
+              <div class="imgs"><i></i><i></i><i></i></div>
+            </div></div>
+            <div class="msg user"><div class="bubble">那我先看看输入框和侧栏的效果。</div></div>
+            <div class="msg assistant"><div class="bubble">
+              <p>已经准备好了。向上滚动时注意输入框：内容会从它<b>背后透出并被柔化</b>——这正是让桌面软件显得精致的细节。</p>
+            </div></div>
+          </div>
+        </section>
+
+        <!-- COMPOSER -->
+        <div class="composer-wrap">
+          <div class="composer">
+            <div class="ph">给"茶花女"发消息…</div>
+            <div class="crow">
+              <span class="ib">＋</span>
+              <span class="ib">🖼</span>
+              <span class="send">↑</span>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- floating menu (popover) demo -->
+    <div class="menu">
+      <button>重命名</button><button>置顶</button><button>导出</button><button>删除会话</button>
+    </div>
+
+    <!-- modal demo -->
+    <div class="scrim" id="scrim">
+      <div class="modal">
+        <span class="x" onclick="toggle('show-modal',false)">✕</span>
+        <h3>设置</h3>
+        <p>毛玻璃用在模态背景上：把整个 app 柔化下沉，让弹层成为唯一焦点。这是"高级感"性价比最高的一处。</p>
+        <button class="btn">完成</button>
+      </div>
+    </div>
+
+    <!-- callout tags -->
+    <div class="tag t-side">① 侧栏 chrome</div>
+    <div class="tag t-top">② 顶栏</div>
+    <div class="tag t-composer">③ 输入框（最推荐）</div>
+    <div class="tag t-bubble">④ 用户气泡（慎用）</div>
+  </div>
+</div>
+
+<!-- CONTROL PANEL -->
+<div class="panel">
+  <div class="ttl">毛玻璃探索</div>
+  <div class="sub">逐个开关，看哪些区域值得加。背后无内容时玻璃≈不可见——记得开"环境背景"。</div>
+
+  <h4>可加玻璃的区域</h4>
+  <div class="row-c"><label for="g-composer">③ 输入框 <span style="color:#c8a36f">推荐</span></label><span class="sw"><input type="checkbox" id="g-composer" checked><i></i></span></div>
+  <div class="row-c"><label for="g-side">① 侧栏</label><span class="sw"><input type="checkbox" id="g-side"><i></i></span></div>
+  <div class="row-c"><label for="g-top">② 顶栏</label><span class="sw"><input type="checkbox" id="g-top"><i></i></span></div>
+  <div class="row-c"><label for="g-menu">⋯ 弹出菜单</label><span class="sw"><input type="checkbox" id="g-menu"><i></i></span></div>
+  <div class="row-c"><label for="g-modal">设置模态</label><span class="sw"><input type="checkbox" id="g-modal"><i></i></span></div>
+  <div class="row-c"><label for="g-bubble">④ 用户气泡 <span style="color:#8a8a90">慎用</span></label><span class="sw"><input type="checkbox" id="g-bubble"><i></i></span></div>
+
+  <h4>强度</h4>
+  <div class="slide"><label>模糊 <span id="blur-v">22px</span></label><input type="range" id="blur" min="6" max="40" value="22"></div>
+  <div class="slide"><label>透明度（越低越透） <span id="alpha-v">0.66</span></label><input type="range" id="alpha" min="30" max="92" value="66"></div>
+
+  <h4>查看条件</h4>
+  <div class="row-c"><label for="ambient">环境背景（让玻璃可见）</label><span class="sw"><input type="checkbox" id="ambient" checked><i></i></span></div>
+  <div class="row-c"><label for="callouts">显示标注</label><span class="sw"><input type="checkbox" id="callouts" checked><i></i></span></div>
+  <div class="row-c"><label for="showmenu">显示菜单</label><span class="sw"><input type="checkbox" id="showmenu"><i></i></span></div>
+  <div class="row-c"><label for="showmodal">打开模态</label><span class="sw"><input type="checkbox" id="showmodal"><i></i></span></div>
+
+  <h4>主题</h4>
+  <div class="seg" id="seg">
+    <button data-theme="white" class="on">白</button>
+    <button data-theme="anthropic">暖</button>
+    <button data-theme="dark">暗</button>
+  </div>
+
+  <div class="hint">提示：玻璃只用在<b>浮层</b>（输入框/菜单/模态），正文与主背景保持实色——这是"高级"与"花哨"的分界线。</div>
+</div>
+
+<script>
+const app = document.getElementById('app');
+function toggle(cls,on){ app.classList.toggle(cls,on); }
+const map = {
+  'g-composer':'glass-composer','g-side':'glass-side','g-top':'glass-top',
+  'g-menu':'glass-menu','g-modal':'glass-modal','g-bubble':'glass-bubble',
+  'ambient':'ambient-on','callouts':'show-callouts','showmenu':'show-menu','showmodal':'show-modal'
+};
+Object.entries(map).forEach(([id,cls])=>{
+  const el=document.getElementById(id);
+  app.classList.toggle(cls, el.checked);
+  el.addEventListener('change',()=>app.classList.toggle(cls, el.checked));
+});
+const blur=document.getElementById('blur'), bv=document.getElementById('blur-v');
+blur.addEventListener('input',()=>{ document.documentElement.style.setProperty('--glass-blur',blur.value+'px'); bv.textContent=blur.value+'px'; });
+const alpha=document.getElementById('alpha'), av=document.getElementById('alpha-v');
+alpha.addEventListener('input',()=>{ const a=(alpha.value/100).toFixed(2); document.documentElement.style.setProperty('--glass-alpha',a); av.textContent=a; });
+document.getElementById('seg').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  document.querySelectorAll('#seg button').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); app.dataset.theme=b.dataset.theme;
+});
+</script>
+</body>
+</html>

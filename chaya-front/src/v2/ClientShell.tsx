@@ -1,0 +1,2328 @@
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
+import 'highlight.js/styles/github.css';
+import './theme.css';
+import { api } from '../utils/apiClient';
+import type { Session, Message } from '../services/chat';
+import { useChatBackend } from './useChatBackend';
+import { mediaApi, type MediaOutputItem } from '../services/mediaApi';
+import KnowledgeView, { domainColor } from './KnowledgeView';
+import {
+  smartnoteTags, smartnoteRetrieve, getSmartnoteApiKey, type Tag as DomainTag,
+} from '../services/smartnoteApi';
+import type { ClientSettings } from '../components/SettingsPage';
+import SettingsModal from './SettingsModal';
+
+const LS_SETTINGS = 'settings';
+const DEFAULT_SETTINGS: ClientSettings = {
+  font: 'default',
+  glassZones: ['composer', 'menu', 'modal'],
+  glassIntensity: 'standard',
+  enableToolCalling: true,
+  handRule: true,
+  cmdEnterToSend: true,
+  showTokenCost: false,
+  autoTTS: false,
+  ragEnabled: false,
+  ragTopK: 5,
+  ragScope: 'auto',
+  chatStreamSmooth: true,
+  chatStreamSpeed: 'normal',
+  cliStreamSmooth: true,
+  cliStreamSpeed: 'normal',
+};
+import { useCreateMode, type RefImage, ASPECT_OPTIONS, COUNT_OPTIONS } from './useCreateMode';
+import {
+  BUILTIN_STYLES, loadCustomStyles, findPresetBySuffix,
+  addCustomStyle, deleteCustomStyle, type StylePreset,
+  syncCustomStylesFromBackend,
+  getHiddenBuiltinIds, setHiddenBuiltinIds,
+} from './stylePresets';
+import LoginPage from './LoginPage';
+import {
+  IconAgentCode, IconAgentDoc, IconAgentPainter, IconAgentPrimary,
+  IconAttach, IconChat, IconGallery, IconGear, IconKB,
+  IconPlus, IconSearch, IconSend, IconSidebar,
+  IconSkill, IconChevron, IconAspect,
+  IconEdit, IconRevert, IconQuote,
+} from './icons';
+import { getLLMConfigs, type LLMConfigFromDB } from '../services/llmApi';
+import { updateSessionLLMConfig } from '../services/chat';
+import { updateRoleProfile } from '../services/roleApi';
+import { mcpApi, type MCPServer } from '../services/integrationsApi';
+import { LocalAgentTree, LocalAgentConversation, LocalAgentTabs } from './LocalAgentView';
+import { useLocalAgent } from './useLocalAgent';
+import { isLocalAgentAvailable } from './services/localAgent';
+
+type NavKey = 'chat' | 'gallery' | 'kb' | 'local';
+type Mode = 'chat' | 'create';
+
+interface Batch {
+  batchId: string;
+  /** The conversation this batch belongs to. Batches are session-scoped:
+   *  switching to another session must not bleed in-progress batches into
+   *  the other surface. `null` means "no session" (rare). */
+  sessionId: string | null;
+  /** Raw user prompt (what they typed) — shown verbatim on the spec card. */
+  promptDisplay: string;
+  /** Snapshot of the creation config at the moment of send. */
+  spec: {
+    aspect: string;
+    count: number;
+    style: string;
+    negative: string;
+    refs: { id: string; data: string; mimeType: string; directive: string }[];
+  };
+  slots: (string | null)[];
+  errors: (string | null)[];
+  pending: boolean;
+  /** Wall-clock generation time in ms, set once the batch settles. */
+  elapsedMs?: number;
+}
+
+const ClientShell: React.FC = () => {
+  const [authed, setAuthed] = useState<boolean>(() => api.isLoggedIn());
+  if (!authed) return <LoginPage onLogin={() => setAuthed(true)} />;
+  return <ShellInner />;
+};
+
+const ShellInner: React.FC = () => {
+  // Settings are read before useChatBackend so the chat typewriter config can be
+  // passed in. Persisted to localStorage by the effect further down.
+  const [settings, setSettings] = useState<ClientSettings>(() => {
+    try {
+      const raw = localStorage.getItem(LS_SETTINGS);
+      if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    } catch { /* ignore */ }
+    return DEFAULT_SETTINGS;
+  });
+
+  const {
+    loadingMeta, agents, recents, teahouses, activeSessionId, messages, stream, thinking,
+    sending, wsState,
+    setActiveSessionId, sendMessage, createTopicAndOpen, startTeahouseDraft,
+    setTeahouseModel, reloadActiveMessages,
+    renameSession, removeSession, refreshMeta, isTeahouseSession: isTeahouseSessionFn,
+    quoted, quoteMessage, clearQuote, revertToMessage,
+  } = useChatBackend({
+    enabled: settings.chatStreamSmooth ?? true,
+    speed: settings.chatStreamSpeed ?? 'normal',
+  });
+
+  /* ---- teahouse picker (choose llm_config + optional model) ---- */
+  const [teahousePickerOpen, setTeahousePickerOpen] = useState(false);
+
+  const [activeNav, setActiveNav] = useState<NavKey>('chat');
+  const [mode, setMode] = useState<Mode>('chat');
+  const [draft, setDraft] = useState<string>('');
+  const [batches, setBatches] = useState<Batch[]>([]);
+  // Batches whose assistant images we've already persisted — guards against a
+  // double POST leaving duplicate image messages in the conversation.
+  const persistedBatchRef = useRef<Set<string>>(new Set());
+  const [generating, setGenerating] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [rowMenu, setRowMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
+  const [agentSettingsFor, setAgentSettingsFor] = useState<Session | null>(null);
+  /** Full-screen lightbox for any chat image (persisted or live-batch). */
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  /** Pending destructive confirm for 回退 / 回退并编辑 (both rewind history). */
+  const [confirmRewind, setConfirmRewind] = useState<{ kind: 'revert' | 'edit'; m: Message } | null>(null);
+
+  /* ---- knowledge domains (@提及): smartnote workspace tags ---- */
+  const [domains, setDomains] = useState<DomainTag[]>([]);
+  // Domains the user @-attached for the NEXT send; their knowledge is retrieved
+  // and injected as ext.knowledge, then cleared after sending.
+  const [pickedDomains, setPickedDomains] = useState<string[]>([]);
+  // @mention autocomplete popover: open + current query + caret token span.
+  const [mention, setMention] = useState<{ query: string; from: number; to: number } | null>(null);
+  const [mentionIdx, setMentionIdx] = useState(0);
+  const [domainsLoading, setDomainsLoading] = useState(false);
+  const loadDomains = useCallback(() => {
+    if (!getSmartnoteApiKey()) { setDomains([]); return; }
+    setDomainsLoading(true);
+    smartnoteTags.list()
+      .then((t) => setDomains(t || []))
+      .catch(() => {})
+      .finally(() => setDomainsLoading(false));
+  }, []);
+  useEffect(() => { loadDomains(); }, [loadDomains, settingsOpen]);
+
+  // chat-mode attachments (images sent inline with the next user message)
+  const [attachments, setAttachments] = useState<Array<{ id: string; data: string; mimeType: string; fileName?: string }>>([]);
+  const addAttachmentFile = useCallback(async (f: File) => {
+    if (!f.type.startsWith('image/')) return;
+    const b64 = await new Promise<string>((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => { const s = String(r.result || ''); const i = s.indexOf('base64,'); resolve(i >= 0 ? s.slice(i + 7) : s); };
+      r.onerror = reject;
+      r.readAsDataURL(f);
+    });
+    setAttachments((xs) => [...xs, { id: `att-${Date.now()}-${xs.length}`, data: b64, mimeType: f.type, fileName: f.name }]);
+  }, []);
+  const removeAttachment = (id: string) => setAttachments((xs) => xs.filter((x) => x.id !== id));
+
+  useEffect(() => {
+    try { localStorage.setItem(LS_SETTINGS, JSON.stringify(settings)); } catch { /* ignore */ }
+    document.documentElement.setAttribute('data-font', settings.font);
+  }, [settings]);
+
+  // Local Agents（纯本地，与后端无关）：状态上提，侧栏树 + 主区对话共享。
+  // provider 由设置决定；探测惰性触发（进入该 nav 才 detect，配合 loading 动画）。
+  const la = useLocalAgent(activeNav === 'local', settings.localAgentProvider ?? 'claude', {
+    enabled: settings.cliStreamSmooth ?? true,
+    speed: settings.cliStreamSpeed ?? 'normal',
+  });
+
+  // Color theme + light/dark appearance → attributes on the .chaya-v2 root.
+  // 'system' follows the OS via matchMedia and live-updates.
+  const appearance = settings.appearance ?? 'system';
+  const theme = settings.theme ?? 'default';
+  const [systemDark, setSystemDark] = useState(
+    () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-color-scheme: dark)').matches,
+  );
+  useEffect(() => {
+    if (appearance !== 'system' || typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, [appearance]);
+  const resolvedMode = appearance === 'system' ? (systemDark ? 'dark' : 'light') : appearance;
+
+  // Frosted glass: per-zone toggles + global intensity. CSS matches each zone
+  // via [data-glass~="<zone>"]. Sidebar/topbar vibrancy only reads when there's
+  // a tinted backdrop behind the blur, so auto-append "ambient" when either is on.
+  const glassZones = settings.glassZones ?? ['composer', 'menu', 'modal'];
+  const glassIntensity = settings.glassIntensity ?? 'standard';
+  const glassAttr = (
+    glassZones.some((z) => z === 'sidebar' || z === 'topbar')
+      ? [...glassZones, 'ambient']
+      : glassZones
+  ).join(' ');
+
+  const updateSettings = useCallback((patch: Partial<ClientSettings>) => {
+    setSettings((p) => ({ ...p, ...patch }));
+  }, []);
+  // Click the CLI badge to cycle provider: claude → codex → gemini → claude.
+  // provider is settings-driven and detect() already returns all of them, so
+  // switching just re-points `current` — no re-detection needed.
+  const cycleLocalAgentProvider = useCallback(() => {
+    const order = ['claude', 'codex', 'gemini'] as const;
+    setSettings((p) => {
+      const cur = p.localAgentProvider ?? 'claude';
+      return { ...p, localAgentProvider: order[(order.indexOf(cur) + 1) % order.length] };
+    });
+  }, []);
+  const handleLogout = useCallback(() => {
+    api.clearToken();
+    window.location.reload();
+  }, []);
+
+  /* ---- LLM configs cache (for showing current model name) ---- */
+  const [llmConfigs, setLlmConfigs] = useState<LLMConfigFromDB[]>([]);
+  useEffect(() => {
+    getLLMConfigs().then((l) => setLlmConfigs(Array.isArray(l) ? l : [])).catch(() => {});
+  }, [settingsOpen /* refresh after settings */]);
+
+  const create = useCreateMode();
+  // Create-mode extension panel collapsed state. Default open so the user can
+  // configure their first turn; once they hit send we auto-collapse so the
+  // generated images aren't pushed off-screen.
+  const [cbarOpen, setCbarOpen] = useState(true);
+
+  // First time we see an LLM config list, if create-mode has no model picked
+  // yet, default it to the user's chosen default LLM config so generation
+  // doesn't 400 on a missing config_id. Picks the first Gemini-capable
+  // config as a fallback.
+  useEffect(() => {
+    if (create.cfg.configId) return;
+    if (llmConfigs.length === 0) return;
+    // The default create model must be a 创作可见 (media_visible) config — the
+    // same filter the model picker uses. The chat default
+    // (settings.defaultLLMConfigId) usually isn't media-capable, so only honor
+    // it when it's media-visible; otherwise prefer a Gemini media model, then
+    // any media-visible one. Falls back to the full list only if nothing is
+    // marked media-visible yet.
+    const media = llmConfigs.filter((c) => (c as any).media_visible);
+    const pool = media.length > 0 ? media : llmConfigs;
+    const byDefault = settings.defaultLLMConfigId
+      ? pool.find((c) => c.config_id === settings.defaultLLMConfigId)
+      : undefined;
+    const byGemini = pool.find((c) =>
+      (c.provider || '').toLowerCase().includes('gemini') ||
+      (c.model || '').toLowerCase().includes('gemini'),
+    );
+    const pick = byDefault || byGemini || pool[0];
+    if (pick) create.setModelConfig(pick.config_id, pick.model);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [llmConfigs, settings.defaultLLMConfigId]);
+
+  /* ---- mode pill spring indicator ---- */
+  const pillsRef = useRef<HTMLDivElement | null>(null);
+  const indicatorRef = useRef<HTMLSpanElement | null>(null);
+  const chatBtnRef = useRef<HTMLButtonElement | null>(null);
+  const createBtnRef = useRef<HTMLButtonElement | null>(null);
+  useLayoutEffect(() => {
+    const ind = indicatorRef.current, pills = pillsRef.current;
+    const target = mode === 'chat' ? chatBtnRef.current : createBtnRef.current;
+    if (!ind || !pills || !target) return;
+    const r = target.getBoundingClientRect(), p = pills.getBoundingClientRect();
+    ind.style.left = `${r.left - p.left}px`;
+    ind.style.width = `${r.width}px`;
+  }, [mode]);
+  useEffect(() => {
+    const f = () => setMode((m) => m);
+    window.addEventListener('resize', f);
+    return () => window.removeEventListener('resize', f);
+  }, []);
+
+  /* ---- textarea grow ---- */
+  const taRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    const ta = taRef.current; if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(ta.scrollHeight, 220)}px`;
+  }, [draft]);
+
+  /* ---- ⌘K ---- */
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault(); searchRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  /* ---- scroll to bottom ---- */
+  const streamRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = streamRef.current; if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages.length, stream?.content, activeSessionId, batches]);
+
+  /* ---- recents (topic + teahouse mixed, freshest first) ---- */
+  const mergedRecents: Session[] = useMemo(() => {
+    const all = [...recents, ...teahouses];
+    const seen = new Set<string>();
+    const uniq = all.filter((s) => {
+      if (!s?.session_id || seen.has(s.session_id)) return false;
+      seen.add(s.session_id);
+      return true;
+    });
+    return uniq.sort((a, b) => {
+      const ta = a.updated_at || a.last_message_at || a.created_at || '';
+      const tb = b.updated_at || b.last_message_at || b.created_at || '';
+      return tb.localeCompare(ta);
+    });
+  }, [recents, teahouses]);
+
+  /* ---- topic title ---- */
+  const activeRecord: Session | undefined = useMemo(() => {
+    const all = [...agents, ...mergedRecents];
+    return all.find((x) => x.session_id === activeSessionId);
+  }, [agents, mergedRecents, activeSessionId]);
+  const activeTitle = activeRecord?.name || activeRecord?.title || (activeSessionId ? '会话' : '');
+
+  /* ---- clipboard / drop → ref image (create) or chat attachment ---- */
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it.kind === 'file' && it.type.startsWith('image/')) {
+          const f = it.getAsFile();
+          if (f) {
+            e.preventDefault();
+            if (mode === 'create') void create.addRefFromFile(f);
+            else void addAttachmentFile(f);
+          }
+        }
+      }
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [mode, create, addAttachmentFile]);
+
+  const onDrop = (e: React.DragEvent) => {
+    const files = Array.from(e.dataTransfer?.files || []).filter((f) => f.type.startsWith('image/'));
+    if (files.length === 0) return;
+    e.preventDefault();
+    if (mode === 'create') for (const f of files) void create.addRefFromFile(f);
+    else for (const f of files) void addAttachmentFile(f);
+  };
+  const swallowDragOver = (e: React.DragEvent) => { e.preventDefault(); };
+
+  /* ---- send ---- */
+  const onSend = useCallback(async () => {
+    const text = draft.trim();
+    if (!text) return;
+    if (mode === 'chat') {
+      if (sending) return;
+      const agentId = (activeRecord as any)?.id || activeRecord?.session_id;
+      const media = attachments.length > 0
+        ? attachments.map((a) => ({ type: 'image' as const, mimeType: a.mimeType, data: a.data }))
+        : undefined;
+      const baseExt: Record<string, unknown> = { enable_tool_calling: settings.enableToolCalling };
+      // No active session → user is on a fresh 茶话: create a topic, then send.
+      if (!activeSessionId) {
+        setDraft('');
+        // @域 must ride the FIRST message too — createTopicAndOpen sends over WS
+        // directly, so fold the retrieved knowledge into its ext (the regular
+        // path below does the same via sendMessage).
+        const firstExt: Record<string, unknown> = { ...baseExt };
+        if (pickedDomains.length > 0) {
+          // Record the @-referenced domains so the user bubble can show
+          // "引用了 …" — persisted on the row, survives reload.
+          firstExt.knowledge_domains = [...pickedDomains];
+          try {
+            const knowledge = await fetchDomainKnowledge(text, pickedDomains);
+            if (knowledge.length) firstExt.knowledge = knowledge;
+          } catch (e) { console.warn('[v2] domain retrieve failed', e); }
+        }
+        const sid = await createTopicAndOpen(text, agentId, firstExt);
+        if (sid && media) {
+          // first-send doesn't carry media; warn rather than silently drop
+          console.warn('[v2] media on new-topic first send not supported yet');
+        }
+        if (!sid) setDraft(text); // restore on failure
+        else setPickedDomains([]);
+        setAttachments([]);
+        return;
+      }
+      const ext: Record<string, unknown> = { ...baseExt };
+      if (media) ext.media = media;
+      // A queued quote rides along as context for this turn (backend folds it
+      // into the prompt and persists it on the user row so the chip reloads).
+      if (quoted) ext.quote = { role: quoted.role, content: quoted.content, message_id: quoted.messageId };
+      // @域: retrieve each picked domain's top chunks (union) and inject as
+      // ext.knowledge — the backend folds it into the prompt (extractKnowledgeBlock).
+      if (pickedDomains.length > 0) {
+        // Record the @-referenced domains so the user bubble can show
+        // "引用了 …" — persisted on the row, survives reload.
+        ext.knowledge_domains = [...pickedDomains];
+        try {
+          const knowledge = await fetchDomainKnowledge(text, pickedDomains);
+          if (knowledge.length) ext.knowledge = knowledge;
+        } catch (e) { console.warn('[v2] domain retrieve failed', e); }
+      }
+      // Optimistically clear input; sendMessage may now POST a draft teahouse
+      // before sending, so we don't want the user to double-fire by re-typing.
+      const prevDraft = text;
+      setDraft(''); setAttachments([]);
+      const ok = await sendMessage(text, { agentId, ext });
+      if (ok) { clearQuote(); setPickedDomains([]); }
+      else setDraft(prevDraft);
+      return;
+    }
+    // create mode
+    if (generating) return;
+    const batchId = `b-${Date.now()}`;
+    const count = create.cfg.count;
+    const specSnapshot = {
+      aspect: create.cfg.aspect,
+      count,
+      style: create.cfg.style,
+      negative: create.cfg.negative,
+      refs: create.refs.map((r) => ({ id: r.id, data: r.data, mimeType: r.mimeType, directive: r.directive })),
+    };
+    setBatches((bs) => [...bs, {
+      batchId,
+      sessionId: activeSessionId,
+      promptDisplay: text,
+      spec: specSnapshot,
+      slots: Array.from({ length: count }, () => null),
+      errors: Array.from({ length: count }, () => null),
+      pending: true,
+    }]);
+    setDraft('');
+    setCbarOpen(false);  // auto-fold so the slots are visible
+    setGenerating(true);
+    // Persist the spec card as a user message in the current conversation so
+    // the dialogue is durable across reloads. Best-effort — gen still works
+    // even if no active session.
+    const persistSid = activeSessionId;
+    if (persistSid) {
+      void persistCreationUserSpec(persistSid, text, specSnapshot).catch(() => {});
+    }
+    // Accumulate the generated slots locally as they resolve. We must NOT rely
+    // on reading the batch back out of `batches` state in the finally block:
+    // React doesn't run the functional setState updater synchronously, so a
+    // value assigned inside it is still undefined when read right after the
+    // call. That race silently skipped persistCreationAssistantImages — images
+    // showed live (from batch state) but were never saved, so they vanished on
+    // reload. Building `settled` from these locals sidesteps React's timing.
+    const localSlots: (string | null)[] = Array.from({ length: count }, () => null);
+    const localErrors: (string | null)[] = Array.from({ length: count }, () => null);
+    const startedAt = Date.now();
+    try {
+      await create.generate(text, (idx, dataUri, err) => {
+        if (dataUri) localSlots[idx] = dataUri;
+        if (err) localErrors[idx] = err;
+        setBatches((bs) => bs.map((b) => {
+          if (b.batchId !== batchId) return b;
+          const slots = b.slots.slice(); const errors = b.errors.slice();
+          if (dataUri) slots[idx] = dataUri;
+          if (err) errors[idx] = err;
+          return { ...b, slots, errors };
+        }));
+      });
+    } finally {
+      // Mark batch settled (pure state update). Side-effects (persist + reload)
+      // run OUTSIDE the updater so React StrictMode's double-invocation of
+      // updaters in dev doesn't issue two POSTs, which would leave two
+      // identical assistant messages in the DB.
+      const elapsedMs = Date.now() - startedAt;
+      const settled: Batch = {
+        batchId,
+        sessionId: persistSid,
+        promptDisplay: text,
+        spec: specSnapshot,
+        slots: localSlots,
+        errors: localErrors,
+        pending: false,
+        elapsedMs,
+      };
+      setBatches((bs) => bs.map((b) => (b.batchId === batchId ? { ...b, pending: false, elapsedMs } : b)));
+      setGenerating(false);
+
+      if (persistSid && !persistedBatchRef.current.has(batchId)) {
+        // Mark persisted up-front so a re-entrant settle can't double-POST.
+        persistedBatchRef.current.add(batchId);
+        try {
+          await persistCreationAssistantImages(persistSid, settled);
+          // Await the reload so the persisted image message is in the message
+          // list BEFORE we drop the live batch — otherwise there's a flicker,
+          // and a lingering batch would render *below* any newer chat message
+          // (the images appearing out of order — the reported "错位").
+          await reloadActiveMessages();
+          setBatches((cur) => cur.filter((b) => b.batchId !== batchId));
+        } catch (e) {
+          // Allow a later retry and keep the live batch as the only record.
+          persistedBatchRef.current.delete(batchId);
+          console.warn('[v2] persist creation assistant failed', e);
+        }
+      }
+    }
+  }, [draft, mode, sending, generating, activeRecord, sendMessage, create, activeSessionId, quoted, clearQuote, pickedDomains]);
+
+  // Quote a message (works for both user and AI messages); focus the composer
+  // so the user can immediately type the follow-up that references it.
+  const onQuoteMessage = useCallback((m: Message) => {
+    quoteMessage(m);
+    setMode('chat');
+    setTimeout(() => taRef.current?.focus(), 0);
+  }, [quoteMessage]);
+
+  // Run a confirmed rewind. 'edit' additionally lifts the message text back
+  // into the composer so the user can amend and resend it.
+  const runRewind = useCallback(async (kind: 'revert' | 'edit', m: Message) => {
+    const text = m.content || '';
+    await revertToMessage(m.message_id);
+    if (kind === 'edit') {
+      setMode('chat');
+      setDraft(text);
+      setTimeout(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(text.length, text.length); } }, 0);
+    }
+  }, [revertToMessage]);
+
+  /* ---- @域 mention autocomplete ---- */
+  // Domains matching the live @token, minus ones already picked.
+  const mentionMatches = useMemo(() => {
+    if (!mention) return [] as DomainTag[];
+    const q = mention.query.toLowerCase();
+    return domains
+      .filter((d) => !pickedDomains.includes(d.name) && (!q || d.name.toLowerCase().includes(q)))
+      .slice(0, 8);
+  }, [mention, domains, pickedDomains]);
+
+  // Detect a trailing "@token" at the caret → open the picker; otherwise close.
+  const onComposerChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const v = e.target.value;
+    setDraft(v);
+    const caret = e.target.selectionStart ?? v.length;
+    const m = /(?:^|\s)@([^\s@]*)$/.exec(v.slice(0, caret));
+    // Open whenever smartnote is configured — even before the domain list has
+    // arrived — so a slow/failed initial load doesn't silently swallow `@`.
+    // The popover shows a loading/empty hint and we (re)fetch on the spot.
+    if (m && (domains.length || getSmartnoteApiKey())) {
+      setMention({ query: m[1], from: caret - m[1].length - 1, to: caret });
+      setMentionIdx(0);
+      if (!domains.length) loadDomains();
+    } else if (mention) {
+      setMention(null);
+    }
+  };
+
+  const addPickedDomain = useCallback((name: string) => {
+    setPickedDomains((p) => (p.includes(name) ? p : [...p, name]));
+  }, []);
+  const removePickedDomain = useCallback((name: string) => {
+    setPickedDomains((p) => p.filter((x) => x !== name));
+  }, []);
+
+  // Commit a domain from the popover: strip the @token, attach the chip.
+  const pickDomain = useCallback((name: string) => {
+    setMention((mn) => {
+      if (mn) setDraft((d) => d.slice(0, mn.from) + d.slice(mn.to));
+      return null;
+    });
+    addPickedDomain(name);
+    setTimeout(() => taRef.current?.focus(), 0);
+  }, [addPickedDomain]);
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // @域 popover steals nav keys while open. Escape always closes it, even
+    // on the loading/empty hint (when there are no selectable matches).
+    if (mention) {
+      if (e.key === 'Escape') { e.preventDefault(); setMention(null); return; }
+      if (mentionMatches.length > 0) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); setMentionIdx((i) => (i + 1) % mentionMatches.length); return; }
+        if (e.key === 'ArrowUp') { e.preventDefault(); setMentionIdx((i) => (i - 1 + mentionMatches.length) % mentionMatches.length); return; }
+        if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickDomain(mentionMatches[mentionIdx]?.name || mentionMatches[0].name); return; }
+      }
+    }
+    // Tab quickly toggles 对话 ⇄ 创作 without leaving the input box. Plain Tab
+    // only — Shift/⌘/Ctrl/Alt+Tab keep their normal focus/navigation behavior.
+    if (e.key === 'Tab' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      setMode((m) => (m === 'chat' ? 'create' : 'chat'));
+      return;
+    }
+    // settings.cmdEnterToSend:
+    //   true  (default)  Enter = send,  Shift+Enter = newline.
+    //   false            Enter = newline, ⌘/Ctrl+Enter = send.
+    const wantsEnterSend = settings.cmdEnterToSend !== false;
+    if (e.key !== 'Enter') return;
+    if (wantsEnterSend) {
+      if (!e.shiftKey) { e.preventDefault(); void onSend(); }
+    } else {
+      if (e.metaKey || e.ctrlKey) { e.preventDefault(); void onSend(); }
+    }
+  };
+
+  /* ---- file picker (mode-aware) ---- */
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const onPickFiles = () => fileRef.current?.click();
+  const onFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []).filter((f) => f.type.startsWith('image/'));
+    if (mode === 'create') for (const f of files) void create.addRefFromFile(f);
+    else for (const f of files) void addAttachmentFile(f);
+    e.target.value = '';
+  };
+
+  /* ---- context popover (model picker / agent settings) ---- */
+  const [contextPopOpen, setContextPopOpen] = useState(false);
+  const contextBtnRef = useRef<HTMLButtonElement | null>(null);
+  const isAgentSession = useMemo(
+    () => !!activeSessionId && agents.some((a) => a.session_id === activeSessionId),
+    [agents, activeSessionId],
+  );
+
+  /* ---- inline chip panel (only one open at a time) ---- */
+  type ChipKey = null | 'style' | 'aspect' | 'count' | 'negative';
+  const [openChip, setOpenChip] = useState<ChipKey>(null);
+  const toggleChip = (k: Exclude<ChipKey, null>) => setOpenChip((p) => (p === k ? null : k));
+  const styleLabel = useMemo(() => {
+    const t = create.cfg.style.trim();
+    if (!t) return '未设置';
+    const preset = findPresetBySuffix(t);
+    return preset?.zh || (t.length > 14 ? t.slice(0, 14) + '…' : t);
+  }, [create.cfg.style]);
+  const negativeLabel = useMemo(() => {
+    const t = create.cfg.negative.trim();
+    if (!t) return '无';
+    return t.length > 18 ? t.slice(0, 18) + '…' : t;
+  }, [create.cfg.negative]);
+
+  return (
+    <div className="chaya-v2" data-mode={resolvedMode} data-theme={theme} data-glass={glassAttr} data-glass-i={glassIntensity} onDragOver={swallowDragOver} onDrop={onDrop}>
+      <div className="v2-tb"><div className="v2-dots"><i /><i /><i /></div></div>
+
+      {/* Sidebar toggle: lives permanently to the right of the macOS traffic
+       *  lights, regardless of sidebar state. Click toggles collapse. */}
+      <button
+        className="v2-shell-toggle"
+        title={collapsed ? '展开侧栏' : '折叠侧栏'}
+        onClick={() => setCollapsed((v) => !v)}
+        aria-label="toggle sidebar"
+      >
+        <IconSidebar />
+      </button>
+
+      <div className={`v2-app${collapsed ? ' collapsed' : ''}`}>
+        {/* ===== sidebar ===== */}
+        <aside className="v2-side">
+          <div className="v2-search">
+            <IconSearch />
+            <input ref={searchRef} placeholder="搜索 (⌘K)" />
+          </div>
+
+          <nav className="v2-nav">
+            {([
+              { k: 'chat',    label: '聊天',   ic: <IconChat /> },
+              { k: 'gallery', label: '画廊',   ic: <IconGallery /> },
+              { k: 'kb',      label: '知识库', ic: <IconKB /> },
+              // Local Agents 不再占导航位——入口在常驻的项目树（点 badge / 项目 / 会话进入）。
+            ] as { k: NavKey; label: string; ic: React.ReactElement }[]).map((it) => (
+              <div
+                key={it.k}
+                className={`v2-row${activeNav === it.k ? ' active' : ''}`}
+                onClick={() => {
+                  setActiveNav(it.k);
+                  if (it.k === 'chat') {
+                    setMode('chat');
+                    setTeahousePickerOpen(true);
+                  }
+                }}
+              >
+                <div className="v2-ic">{it.ic}</div>
+                <div>{it.label}</div>
+              </div>
+            ))}
+          </nav>
+
+          {/* Local Agents 项目树：常驻侧栏，不必进入该 nav 才显示；未配置则只剩空标题。 */}
+          {isLocalAgentAvailable() && (
+            <LocalAgentTree la={la} onEnter={() => setActiveNav('local')} onCycleProvider={cycleLocalAgentProvider} />
+          )}
+
+          <div className="v2-sec">
+            <span>Agents</span>
+            <button className="v2-add" title="新建"><IconPlus /></button>
+          </div>
+          <div className="v2-agents">
+            {loadingMeta && agents.length === 0 && <SkeletonRows n={2} />}
+            {agents.map((a) => (
+              <div
+                key={a.session_id}
+                className={`v2-a${activeSessionId === a.session_id ? ' active' : ''}`}
+                onClick={() => { setActiveNav('chat'); setActiveSessionId(a.session_id); }}
+                title={a.name || a.title}
+              >
+                <div className="v2-side-av">
+                  {a.avatar
+                    ? <img src={a.avatar.startsWith('data:') ? a.avatar : `data:image/png;base64,${a.avatar}`} alt="" />
+                    : <AgentIcon a={a} />}
+                </div>
+                <div className="v2-nm">
+                  {a.name || a.title || '未命名'}
+                  {a.is_primary && <span className="v2-pri">primary</span>}
+                </div>
+                <div
+                  className="v2-more"
+                  onClick={(e) => { e.stopPropagation(); const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setRowMenu({ session: a, x: r.right, y: r.bottom + 4 }); }}
+                >⋯</div>
+              </div>
+            ))}
+            {!loadingMeta && agents.length === 0 && (
+              <div style={{ padding: '8px 12px', fontSize: 12, color: 'var(--c-ink-4)' }}>还没有 agent</div>
+            )}
+          </div>
+
+          <div className="v2-sec"><span>Chats</span></div>
+          <div className="v2-recents">
+            {loadingMeta && mergedRecents.length === 0 && <SkeletonRows n={6} />}
+            {mergedRecents.map((r) => {
+              const tea = (r as any).ext?.teahouse === true;
+              return (
+                <div
+                  key={r.session_id}
+                  className={`v2-r${activeSessionId === r.session_id ? ' active' : ''}${tea ? ' teahouse' : ''}`}
+                  onClick={() => { setActiveNav('chat'); setActiveSessionId(r.session_id); }}
+                  title={r.name || r.title}
+                >
+                  <span className="v2-t">{r.name || r.title || r.preview_text || (tea ? '新聊天' : '空会话')}</span>
+                  <span
+                    className="v2-more"
+                    onClick={(e) => { e.stopPropagation(); const rect = (e.currentTarget as HTMLElement).getBoundingClientRect(); setRowMenu({ session: r, x: rect.right, y: rect.bottom + 4 }); }}
+                  >⋯</span>
+                </div>
+              );
+            })}
+            {!loadingMeta && mergedRecents.length === 0 && (
+              <div style={{ padding: '8px 12px', fontSize: 12, color: 'var(--c-ink-4)' }}>暂无会话</div>
+            )}
+          </div>
+
+          <div className="v2-me" onClick={() => setSettingsOpen(true)} title={`WS ${wsState} · 点击打开设置`}>
+            <div className="v2-av">{userInitials()}</div>
+            <div className="v2-nm">{userName()}</div>
+            <div className="v2-gear"><IconGear /></div>
+          </div>
+        </aside>
+
+        {/* ===== main ===== */}
+        <main className="v2-main">
+          <div className={`v2-topbar${activeNav === 'local' ? ' v2-topbar-tabs' : ''}`}>
+            {activeNav === 'local' ? (
+              <LocalAgentTabs la={la} />
+            ) : (
+              <button className="v2-crumb">
+                {activeNav === 'gallery' ? '画廊'
+                  : activeNav === 'kb' ? '知识库'
+                  : (activeTitle || '新对话')}
+                <span className="v2-chev">▾</span>
+              </button>
+            )}
+            <div className="v2-grow" />
+          </div>
+
+          {activeNav === 'gallery' && <GalleryView />}
+          {activeNav === 'kb' && <KnowledgeView />}
+          {activeNav === 'local' && <LocalAgentConversation la={la} />}
+
+          {activeNav === 'chat' && <>
+          <section className="v2-stream" ref={streamRef}>
+            <div className="v2-msgs">
+              {messages.length === 0 && batches.filter((b) => b.sessionId === activeSessionId).length === 0 && !stream && !thinking && (
+                <EmptyState title={activeTitle} />
+              )}
+
+              {messages.map((m) => (
+                <MessageView
+                  key={m.message_id}
+                  m={m}
+                  showTokens={!!settings.showTokenCost}
+                  onPreviewImage={setPreviewSrc}
+                  onRevert={(msg) => setConfirmRewind({ kind: 'revert', m: msg })}
+                  onEdit={(msg) => setConfirmRewind({ kind: 'edit', m: msg })}
+                  onQuote={onQuoteMessage}
+                />
+              ))}
+
+              {batches.filter((b) => b.sessionId === activeSessionId).map((b) => (
+                <React.Fragment key={b.batchId}>
+                  <CreateSpecCard b={b} />
+                  <BatchView b={b} onPreviewImage={setPreviewSrc} />
+                </React.Fragment>
+              ))}
+
+              {thinking && !stream && <ThinkingDots />}
+              {stream && <StreamView content={stream.content} reasoning={stream.reasoning} />}
+            </div>
+          </section>
+
+          <div className="v2-composer-wrap">
+            <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={onFiles} />
+            <div className={`v2-composer${mode === 'create' && !cbarOpen ? ' cbar-collapsed' : ''}`} data-mode={mode}>
+              <div className="v2-cbar">
+                <div className="v2-cbar-inner">
+                  <div className="v2-hd">
+                    <span className="v2-t">创作</span>
+                    <span className="v2-h">— 下方即正向提示词 · 拖入 / 粘贴图作参考</span>
+                    <span className="v2-h-warn" title="创作请求不会携带 agent 的人设 / system prompt，避免污染生图。如需特定画风请用「风格」">⚠ 不带 agent 人设</span>
+                    {/* Collapsed strip mirrors the sent CreateSpecCard chips so config stays visible. */}
+                    {!cbarOpen && (
+                      <span className="v2-cbar-summary">
+                        <span className="v2-spec-chip"><IconAspect />{create.cfg.aspect}</span>
+                        <span className="v2-spec-chip">× {create.cfg.count}</span>
+                        {create.cfg.style.trim() && (
+                          <span className="v2-spec-chip" title={create.cfg.style}>风格 · {styleLabel}</span>
+                        )}
+                        {create.cfg.negative.trim() && (
+                          <span className="v2-spec-chip" title={create.cfg.negative}>负面 · {negativeLabel}</span>
+                        )}
+                        {create.refs.length > 0 && (
+                          <span className="v2-spec-chip">参考 × {create.refs.length}</span>
+                        )}
+                      </span>
+                    )}
+                    <button
+                      className={`v2-cbar-toggle${cbarOpen ? ' open' : ''}`}
+                      title={cbarOpen ? '收起' : '展开'}
+                      aria-label={cbarOpen ? '收起创作面板' : '展开创作面板'}
+                      aria-expanded={cbarOpen}
+                      onClick={() => setCbarOpen((v) => !v)}
+                    ><IconChevron /></button>
+                    <button className="v2-x" title="退出创作" aria-label="退出创作" onClick={() => setMode('chat')}>✕</button>
+                  </div>
+                  <div className="v2-chips">
+                    <button className={`v2-chip${openChip === 'style' ? ' active' : ''}`} onClick={() => toggleChip('style')}>
+                      <span className="v2-k">风格</span><span>{styleLabel}</span>
+                    </button>
+                    <button className={`v2-chip${openChip === 'aspect' ? ' active' : ''}`} onClick={() => toggleChip('aspect')}>
+                      <span className="v2-k">比例</span><span>{create.cfg.aspect}</span>
+                    </button>
+                    <button className={`v2-chip${openChip === 'count' ? ' active' : ''}`} onClick={() => toggleChip('count')}>
+                      <span className="v2-k">数量</span><span>{create.cfg.count}</span>
+                    </button>
+                    <button className={`v2-chip${openChip === 'negative' ? ' active' : ''}`} onClick={() => toggleChip('negative')}>
+                      <span className="v2-k">负面</span><span>{negativeLabel}</span>
+                    </button>
+                  </div>
+
+                  {openChip && (
+                    <ChipPanel
+                      which={openChip}
+                      cfg={create.cfg}
+                      setStyle={create.setStyle}
+                      setNegative={create.setNegative}
+                      setAspect={create.setAspect}
+                      setCount={create.setCount}
+                      close={() => setOpenChip(null)}
+                    />
+                  )}
+
+                  <div className="v2-refs">
+                    {create.refs.map((r, i) => (
+                      <RefPill
+                        key={r.id}
+                        idx={i + 1}
+                        r={r}
+                        onChange={(v) => create.setRefDirective(r.id, v)}
+                        onRemove={() => create.removeRef(r.id)}
+                      />
+                    ))}
+                    <div className="v2-ref add" onClick={onPickFiles}>＋ 添加 / 粘贴 / 拖入</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="v2-box">
+                {mode === 'chat' && quoted && (
+                  <div className="v2-quote-bar">
+                    <span className="v2-quote-tag">{quoted.role === 'assistant' ? '引用 · 回复' : '引用 · 你'}</span>
+                    <span className="v2-quote-text">{truncate(quoted.content || '（空消息）', 90)}</span>
+                    <button className="v2-quote-x" title="取消引用" onClick={clearQuote}>✕</button>
+                  </div>
+                )}
+                {mode === 'chat' && pickedDomains.length > 0 && (
+                  <div className="v2-dom-chips">
+                    {pickedDomains.map((name) => {
+                      const d = domains.find((x) => x.name === name);
+                      return (
+                        <span key={name} className="v2-dom-chip" title="本条消息会调用该知识域">
+                          <span className="dot" style={{ background: domainColor(d) }} />@{name}
+                          <button className="x" title="移除" onClick={() => removePickedDomain(name)}>✕</button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+                {mention && (
+                  <div className="v2-dom-pop">
+                    <div className="v2-dom-pop-hd">知识域 · 选中后本条消息会带上该领域知识</div>
+                    {mentionMatches.length > 0 ? (
+                      mentionMatches.map((d, i) => (
+                        <button
+                          key={d.name}
+                          className={`v2-dom-pop-item${i === mentionIdx ? ' on' : ''}`}
+                          onMouseEnter={() => setMentionIdx(i)}
+                          onClick={() => pickDomain(d.name)}
+                        >
+                          <span className="dot" style={{ background: domainColor(d) }} />
+                          <span className="nm">{d.name}</span>
+                          {d.description ? <span className="ds">{d.description}</span> : null}
+                        </button>
+                      ))
+                    ) : (
+                      <div className="v2-dom-pop-empty">
+                        {domainsLoading
+                          ? '加载中…'
+                          : domains.length === 0
+                            ? '还没有知识域，去「知识库」新建'
+                            : pickedDomains.length > 0 && domains.every((d) => pickedDomains.includes(d.name))
+                              ? '已全部选中'
+                              : '没有匹配的知识域'}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {mode === 'chat' && attachments.length > 0 && (
+                  <div className="v2-attaches">
+                    {attachments.map((a) => (
+                      <div key={a.id} className="v2-att">
+                        <img src={`data:${a.mimeType};base64,${a.data}`} alt="" />
+                        <span className="x" onClick={() => removeAttachment(a.id)}>✕</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <textarea
+                  ref={taRef}
+                  placeholder={mode === 'create' ? '描述你想要的画面…' : 'Ask anything（@ 调用知识域）'}
+                  value={draft}
+                  onChange={onComposerChange}
+                  onKeyDown={onKeyDown}
+                  onBlur={() => setTimeout(() => setMention(null), 120)}
+                />
+                <div className="v2-row">
+                  <div className="v2-l">
+                    <button className="v2-ib" title="附件" onClick={onPickFiles}><IconAttach /></button>
+                    <button
+                      ref={contextBtnRef}
+                      className={`v2-ib${contextPopOpen ? ' on' : ''}`}
+                      title={
+                        // In an agent chat, the triangle (app logo) opens the
+                        // agent's own surface. Everywhere else it's the model /
+                        // context picker.
+                        mode === 'chat' && isAgentSession
+                          ? 'Agent 设置'
+                          : mode === 'create' ? '创作模型' : '对话模型'
+                      }
+                      onClick={() => {
+                        if (mode === 'chat' && isAgentSession && activeRecord) {
+                          setAgentSettingsFor(activeRecord);
+                        } else {
+                          setContextPopOpen((v) => !v);
+                        }
+                      }}
+                    >
+                      <IconSkill />
+                    </button>
+                    <div className="v2-modepills" ref={pillsRef}>
+                      <span className="v2-indicator" ref={indicatorRef} />
+                      <button ref={chatBtnRef}   className={mode === 'chat'   ? 'on' : ''} onClick={() => setMode('chat')}>对话</button>
+                      <button ref={createBtnRef} className={mode === 'create' ? 'on' : ''} onClick={() => setMode('create')}>创作</button>
+                    </div>
+                  </div>
+                  <ModelBadge
+                    mode={mode}
+                    configs={llmConfigs}
+                    activeRecord={activeRecord}
+                    createConfig={create.cfg}
+                    settingsDefault={settings.defaultLLMConfigId}
+                    onClick={() => setContextPopOpen(true)}
+                  />
+                  <button
+                    className="v2-send"
+                    title="发送 (Enter)"
+                    onClick={onSend}
+                    disabled={!draft.trim() || (mode === 'chat' ? sending : generating)}
+                  >
+                    <IconSend />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          </>}
+        </main>
+      </div>
+
+      {previewSrc && (
+        <ImagePreview src={previewSrc} onClose={() => setPreviewSrc(null)} />
+      )}
+
+      {confirmRewind && (
+        <ConfirmRewind
+          kind={confirmRewind.kind}
+          preview={truncate(confirmRewind.m.content || '（空消息）', 60)}
+          onCancel={() => setConfirmRewind(null)}
+          onConfirm={() => {
+            const c = confirmRewind;
+            setConfirmRewind(null);
+            void runRewind(c.kind, c.m);
+          }}
+        />
+      )}
+
+      {rowMenu && (
+        <RowMenu
+          session={rowMenu.session}
+          isAgent={agents.some((a) => a.session_id === rowMenu.session.session_id)}
+          x={rowMenu.x}
+          y={rowMenu.y}
+          onClose={() => setRowMenu(null)}
+          onRename={async (newName) => {
+            await renameSession(rowMenu.session.session_id, newName);
+            setRowMenu(null);
+          }}
+          onDelete={async () => {
+            await removeSession(rowMenu.session);
+            setRowMenu(null);
+          }}
+          onSettings={() => { setAgentSettingsFor(rowMenu.session); setRowMenu(null); }}
+        />
+      )}
+
+      {agentSettingsFor && (
+        <AgentSettingsDrawer
+          agent={agentSettingsFor}
+          onClose={() => { setAgentSettingsFor(null); void refreshMeta(false); }}
+        />
+      )}
+
+      {settingsOpen && (
+        <SettingsModal
+          settings={settings}
+          updateSettings={updateSettings}
+          onLogout={handleLogout}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
+
+      {teahousePickerOpen && (
+        <TeahousePicker
+          configs={llmConfigs}
+          onClose={() => setTeahousePickerOpen(false)}
+          onPick={(cfg, modelOverride) => {
+            setTeahousePickerOpen(false);
+            // Draft only — nothing hits the DB until the user actually sends.
+            startTeahouseDraft({
+              llm_config_id: cfg.config_id,
+              model: modelOverride || undefined,
+            });
+            setActiveNav('chat');
+          }}
+        />
+      )}
+
+      {contextPopOpen && (
+        <ContextPopover
+          mode={mode}
+          isAgent={isAgentSession}
+          activeRecord={activeRecord}
+          createConfigId={create.cfg.configId}
+          onClose={() => setContextPopOpen(false)}
+          onPickModel={async (cfg) => {
+            if (mode === 'create') {
+              create.setModelConfig(cfg.config_id, cfg.model);
+            } else if (activeSessionId && activeRecord) {
+              try {
+                // Agent-bound sessions store llm_config_id on the
+                // *agent* record, not the conversation. Use the
+                // agents/{id}/profile endpoint accordingly.
+                if (isAgentSession) {
+                  const apiId = (activeRecord as any).id || activeRecord.session_id;
+                  await updateRoleProfile(apiId, { llm_config_id: cfg.config_id });
+                  await refreshMeta(false);
+                } else if (isTeahouseSessionFn(activeRecord)) {
+                  // Teahouse rows live in /api/teahouse/conversations
+                  // — the /sessions/{id}/llm-config alias doesn't reach them.
+                  await setTeahouseModel(activeSessionId, cfg.config_id, cfg.model);
+                } else {
+                  await updateSessionLLMConfig(activeSessionId, cfg.config_id);
+                  await refreshMeta(false);
+                }
+              } catch (e) {
+                console.warn('[v2] update model failed', e);
+              }
+            } else if (!activeSessionId) {
+              // 茶话 with no active session — new chats are answered
+              // by the primary agent, so updating its model is what
+              // the user actually means by "change the model".
+              const primary = agents.find((a) => a.is_primary);
+              if (primary) {
+                try {
+                  const apiId = (primary as any).id || primary.session_id;
+                  await updateRoleProfile(apiId, { llm_config_id: cfg.config_id });
+                  await refreshMeta(false);
+                } catch (e) {
+                  console.warn('[v2] update primary failed', e);
+                }
+              }
+              // Also remember for non-primary-routed new topics.
+              updateSettings({ defaultLLMConfigId: cfg.config_id });
+            }
+            setContextPopOpen(false);
+          }}
+        />
+      )}
+    </div>
+  );
+};
+
+const TeahousePicker: React.FC<{
+  configs: LLMConfigFromDB[];
+  onClose: () => void;
+  onPick: (cfg: LLMConfigFromDB, modelOverride: string) => void;
+}> = ({ configs, onClose, onPick }) => {
+  const enabled = (configs || []).filter((c) => c.enabled !== false);
+  const [picked, setPicked] = useState<LLMConfigFromDB | null>(enabled[0] || null);
+  const [modelOverride, setModelOverride] = useState('');
+  useEffect(() => { setModelOverride(''); }, [picked?.config_id]);
+  return (
+    <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="v2-modal" onMouseDown={(e) => e.stopPropagation()} style={{ maxWidth: 480, padding: 20 }}>
+        <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 4 }}>发起聊天</div>
+        <div style={{ fontSize: 13, color: 'var(--c-ink-4)', marginBottom: 12 }}>
+          选一个模型直接开聊，本次会话不经过 Agent。
+        </div>
+        {enabled.length === 0 ? (
+          <div style={{ fontSize: 13, color: 'var(--c-ink-4)' }}>
+            还没有可用的 LLM 配置，先在设置里添加一个。
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 320, overflowY: 'auto' }}>
+              {enabled.map((c) => (
+                <button
+                  key={c.config_id}
+                  type="button"
+                  className={`v2-pick${picked?.config_id === c.config_id ? ' on' : ''}`}
+                  onClick={() => setPicked(c)}
+                  style={{
+                    textAlign: 'left', padding: '8px 12px', borderRadius: 8,
+                    border: `1px solid ${picked?.config_id === c.config_id ? 'var(--c-accent)' : 'var(--c-line)'}`,
+                    background: picked?.config_id === c.config_id ? 'var(--c-tint)' : 'transparent',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <div style={{ fontSize: 14, fontWeight: 500 }}>{c.shortname || c.name}</div>
+                  <div style={{ fontSize: 12, color: 'var(--c-ink-4)' }}>
+                    {c.provider} · {c.model || '默认模型'}
+                  </div>
+                </button>
+              ))}
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <label style={{ fontSize: 12, color: 'var(--c-ink-4)' }}>模型覆盖（可选）</label>
+              <input
+                type="text"
+                value={modelOverride}
+                onChange={(e) => setModelOverride(e.target.value)}
+                placeholder={picked?.model || ''}
+                style={{
+                  width: '100%', marginTop: 4, padding: '6px 10px',
+                  border: '1px solid var(--c-line)', borderRadius: 6, fontSize: 13,
+                  background: 'transparent', color: 'inherit',
+                }}
+              />
+            </div>
+          </>
+        )}
+        <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button type="button" onClick={onClose} className="v2-btn">取消</button>
+          <button
+            type="button"
+            className="v2-btn primary"
+            disabled={!picked}
+            onClick={() => picked && onPick(picked, modelOverride.trim())}
+          >
+            开聊
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const RowMenu: React.FC<{
+  session: Session;
+  isAgent: boolean;
+  x: number; y: number;
+  onClose: () => void;
+  onRename: (n: string) => Promise<void>;
+  onDelete: () => Promise<void>;
+  onSettings: () => void;
+}> = ({ session, isAgent, x, y, onClose, onRename, onDelete, onSettings }) => {
+  const ref = useRef<HTMLDivElement | null>(null);
+  // Electron disables window.prompt/confirm, so rename has to use an inline
+  // input. Keep the editing UI inside the menu itself for minimal layout work.
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(session.name || session.title || '');
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    setTimeout(() => window.addEventListener('mousedown', onDoc), 0);
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('mousedown', onDoc); window.removeEventListener('keydown', onKey); };
+  }, [onClose]);
+
+  useEffect(() => {
+    if (editing) {
+      requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.select(); });
+    }
+  }, [editing]);
+
+  const commit = () => {
+    const v = name.trim();
+    if (!v) return;
+    void onRename(v);
+  };
+  const del = () => {
+    if (session.is_primary) return;
+    void onDelete();
+  };
+
+  return (
+    <div ref={ref} className="v2-rowmenu" style={{ left: x - 160, top: y }}>
+      {editing ? (
+        <div className="v2-rowmenu-edit">
+          <input
+            ref={inputRef}
+            className="v2-input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); commit(); }
+              if (e.key === 'Escape') { e.preventDefault(); setEditing(false); }
+            }}
+            placeholder="输入名称"
+          />
+          <div className="v2-rowmenu-edit-foot">
+            <button className="v2-btn ghost" onClick={() => setEditing(false)}>取消</button>
+            <button className="v2-btn primary" onClick={commit} disabled={!name.trim()}>确定</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {isAgent && <button onClick={onSettings}>Agent 设置…</button>}
+          <button onClick={() => setEditing(true)}>改名</button>
+          {!session.is_primary && <button className="danger" onClick={del}>删除</button>}
+        </>
+      )}
+    </div>
+  );
+};
+
+/* ============== subcomponents ============== */
+
+/** Markdown surface for assistant prose — GFM (tables, strikethrough, task
+ *  lists) + code highlighting via highlight.js. Wrapped in `.v2-md` so the
+ *  app's typography rules can scope all child elements without leaking.
+ *  Streaming-safe: react-markdown re-parses on each render, but our batched
+ *  chunk flushing (32 chars / 16ms) keeps the cost bounded. */
+const MD: React.FC<{ text: string }> = React.memo(({ text }) => (
+  <div className="v2-md">
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      rehypePlugins={[rehypeHighlight]}
+      components={{
+        a: ({ node: _n, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" />,
+      }}
+    >{text}</ReactMarkdown>
+  </div>
+));
+
+const MessageView: React.FC<{
+  m: Message;
+  showTokens?: boolean;
+  onPreviewImage?: (src: string) => void;
+  onRevert?: (m: Message) => void;
+  onEdit?: (m: Message) => void;
+  onQuote?: (m: Message) => void;
+}> = ({ m, showTokens, onPreviewImage, onRevert, onEdit, onQuote }) => {
+  const role = m.role === 'user' ? 'user' : 'assistant';
+  // Defensive: some backends (or older persisted rows) hand ext back as a
+  // JSON-stringified blob rather than an object. Normalise once so the
+  // downstream reads always hit a plain object.
+  const ext: any = typeof m.ext === 'string'
+    ? (() => { try { return JSON.parse(m.ext as unknown as string); } catch { return {}; } })()
+    : (m.ext || {});
+  const media = Array.isArray(ext.media) ? ext.media : [];
+  // A quote this message carried when sent — surfaced as a chip so the
+  // referenced context is visible on reload.
+  const quote = ext.quote && typeof ext.quote === 'object' ? ext.quote : null;
+  const reasoning = m.role === 'assistant' ? (ext.reasoning || m.thinking || '') : '';
+  const spec = ext.creation_spec as Batch['spec'] | undefined;
+  const imgSrc = (img: any) => img.data?.startsWith('data:') ? img.data : `data:${img.mimeType};base64,${img.data}`;
+  // Caption for assistant creation batches. New rows store it in `content`;
+  // older rows (saved before this existed) have empty content — synthesize a
+  // fallback so historical images still get a "生成完成 · N 张" header. Older
+  // rows lack elapsed_ms, so they just show the count.
+  const bubbleText = m.content?.trim()
+    ? m.content
+    : (m.role === 'assistant' && ext.creation_batch && media.length > 0
+        ? creationDoneCaption(media.length, ext.elapsed_ms)
+        : '');
+
+  // Quote chip + hover action toolbar, shared across render branches.
+  // user → 回退 · 编辑 · 引用; assistant → 引用. Spec cards skip 编辑 (editing an
+  // image spec as plain text would be lossy).
+  const quoteChip = quote ? (
+    <div className="v2-quote-cite" title={quote.content || ''}>
+      <IconQuote />
+      <span className="v2-quote-cite-tag">{quote.role === 'assistant' ? '引用回复' : '引用'}</span>
+      <span className="v2-quote-cite-text">{truncate(quote.content || '', 60)}</span>
+    </div>
+  ) : null;
+  // @-referenced knowledge domains this message rode — shown as a chip so the
+  // citation is visible on send and on reload.
+  const refDomains: string[] = Array.isArray(ext.knowledge_domains)
+    ? ext.knowledge_domains.filter((x: unknown): x is string => typeof x === 'string' && !!x)
+    : [];
+  const domainCite = refDomains.length > 0 ? (
+    <div className="v2-domain-cite" title={`引用知识域：${refDomains.join('、')}`}>
+      <span className="v2-domain-cite-tag">引用了</span>
+      {refDomains.map((name) => (
+        <span key={name} className="v2-domain-cite-pill">
+          <span className="dot" />
+          {name}
+        </span>
+      ))}
+    </div>
+  ) : null;
+  const actions = (
+    <div className="v2-msg-actions">
+      {m.role === 'user' && onRevert && (
+        <button className="v2-msg-act" title="回退到这条（删除这条及其之后）" onClick={() => onRevert(m)}><IconRevert /></button>
+      )}
+      {m.role === 'user' && !spec && onEdit && (
+        <button className="v2-msg-act" title="回退并编辑这条" onClick={() => onEdit(m)}><IconEdit /></button>
+      )}
+      {onQuote && (
+        <button className="v2-msg-act" title="引用这条作为下条上下文" onClick={() => onQuote(m)}><IconQuote /></button>
+      )}
+    </div>
+  );
+
+  // User-side create spec: render chips + ref thumbs inside the bubble.
+  if (m.role === 'user' && spec) {
+    return (
+      <div className="v2-msg user">
+        <div className="v2-body" style={{ maxWidth: '90%' }}>
+          {quoteChip}
+          {domainCite}
+          <div className="v2-bubble v2-spec">
+            <div className="v2-spec-chips">
+              <span className="v2-spec-chip"><IconAspect />{spec.aspect}</span>
+              <span className="v2-spec-chip">× {spec.count}</span>
+              {spec.style?.trim() && <span className="v2-spec-chip" title={spec.style}>风格 · {truncate(spec.style, 20)}</span>}
+              {spec.negative?.trim() && <span className="v2-spec-chip" title={spec.negative}>负面 · {truncate(spec.negative, 16)}</span>}
+            </div>
+            {m.content?.trim() && <p style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{m.content}</p>}
+            {media.length > 0 && (
+              <div className="v2-spec-refs">
+                {media.filter((x: any) => x.type === 'image').map((img: any, i: number) => (
+                  <div key={i} className="v2-spec-ref" onClick={() => onPreviewImage?.(imgSrc(img))}>
+                    <img src={imgSrc(img)} alt={`#${i + 1}`} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          {actions}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`v2-msg ${role}`}>
+      <div className="v2-body">
+        {quoteChip}
+        {domainCite}
+        {reasoning && <ThinkBlock reasoning={reasoning} streaming={false} hasContent={!!bubbleText} />}
+        {bubbleText && (
+          <div className="v2-bubble">
+            {/* User input stays as plain pre-wrap (no markdown surprises);
+                assistant gets full markdown rendering. */}
+            {role === 'user'
+              ? <p style={{ whiteSpace: 'pre-wrap' }}>{bubbleText}</p>
+              : <MD text={bubbleText} />}
+          </div>
+        )}
+        {media.length > 0 && (
+          <div className="v2-imgs" data-mid={m.message_id} data-mcount={media.length}>
+            {/* Don't pre-filter by `type` — older / older-format persisted rows
+             *  occasionally have type omitted or set to something we don't
+             *  recognise, which previously made AI-generated assistant images
+             *  invisible after reload. We just trust anything with a `data`
+             *  payload and render it as <img>. */}
+            {media.filter((x: any) => !!x?.data || !!x?.url).map((img: any, i: number) => {
+              const src = imgSrc(img);
+              if (m.role === 'assistant') {
+                // eslint-disable-next-line no-console
+                console.log('[MessageView] assistant img', m.message_id, i, 'src head:', src.slice(0, 60), 'len:', src.length);
+              }
+              return (
+                <div
+                  key={i}
+                  className="v2-ph clickable"
+                  onClick={() => onPreviewImage?.(src)}
+                >
+                  <img src={src} alt="" onError={(e) => { console.warn('[MessageView] img onError', m.message_id, i, e); }} />
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {showTokens && m.role === 'assistant' && m.token_count != null && (
+          <div className="v2-tokens">{m.token_count} tokens</div>
+        )}
+        {actions}
+      </div>
+    </div>
+  );
+};
+
+/** Confirm dialog for the two destructive rewind actions (回退 / 回退并编辑).
+ *  Both delete the target message and everything after it, so we gate them
+ *  behind an explicit confirm. Esc / backdrop cancels; Enter confirms. */
+const ConfirmRewind: React.FC<{
+  kind: 'revert' | 'edit';
+  preview: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}> = ({ kind, preview, onConfirm, onCancel }) => {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+      if (e.key === 'Enter') onConfirm();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onConfirm, onCancel]);
+  return (
+    <div className="v2-confirm-backdrop" onClick={onCancel}>
+      <div className="v2-confirm" onClick={(e) => e.stopPropagation()}>
+        <div className="v2-confirm-title">{kind === 'edit' ? '回退并编辑这条消息？' : '回退到这条消息？'}</div>
+        <div className="v2-confirm-quote">“{preview}”</div>
+        <div className="v2-confirm-body">
+          这会删除这条消息<strong>以及它之后的所有消息</strong>（含 AI 回复），不可恢复。
+          {kind === 'edit' && ' 原文会回填到输入框，供你修改后重新发送。'}
+        </div>
+        <div className="v2-confirm-actions">
+          <button className="v2-btn ghost" onClick={onCancel}>取消</button>
+          <button className="v2-btn danger" onClick={onConfirm}>{kind === 'edit' ? '回退并编辑' : '回退'}</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/** Collapsible reasoning ("Thinking") block. Auto-expanded during streaming
+ *  while the answer hasn't started; collapses on its own once content begins
+ *  to flow so the answer becomes the primary surface. */
+const ThinkBlock: React.FC<{ reasoning: string; streaming: boolean; hasContent: boolean }> = ({
+  reasoning, streaming, hasContent,
+}) => {
+  const [open, setOpen] = useState(streaming && !hasContent);
+  useEffect(() => {
+    if (streaming && hasContent) setOpen(false);
+  }, [streaming, hasContent]);
+  return (
+    <details className="v2-think" open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary>
+        <span className="v2-think-ic">💭</span>
+        <span>{streaming && !hasContent ? '思考中…' : '思考过程'}</span>
+        <span className="v2-think-len">{reasoning.length.toLocaleString()} 字</span>
+      </summary>
+      <div className="v2-think-body">{reasoning}</div>
+    </details>
+  );
+};
+
+/** Fullscreen image preview with a download action. Esc / backdrop close. */
+const ImagePreview: React.FC<{ src: string; onClose: () => void }> = ({ src, onClose }) => {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  const download = () => {
+    const a = document.createElement('a');
+    a.href = src;
+    // Try to give the file a sane extension from the data URI's mime type.
+    const m = /^data:image\/([a-zA-Z0-9.+-]+);/.exec(src);
+    const ext = (m && m[1]) ? m[1].replace('jpeg', 'jpg') : 'png';
+    a.download = `chaya-${Date.now()}.${ext}`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  };
+  return (
+    <div className="v2-imgpreview" onClick={onClose}>
+      <button className="v2-imgpreview-close" title="关闭 (Esc)" onClick={onClose}>✕</button>
+      <button
+        className="v2-imgpreview-dl"
+        title="下载"
+        onClick={(e) => { e.stopPropagation(); download(); }}
+      >下载</button>
+      <img src={src} alt="" onClick={(e) => e.stopPropagation()} />
+    </div>
+  );
+};
+
+/** A user-side "spec card" rendered above each creation batch — chips for
+ *  aspect / count / style / negative, the prompt, and small ref thumbs.
+ *  Acts as the user's outgoing message in the chat stream so the dialogue
+ *  remains chronological. */
+const CreateSpecCard: React.FC<{ b: Batch }> = ({ b }) => {
+  const { aspect, count, style, negative, refs } = b.spec;
+  return (
+    <div className="v2-msg user">
+      <div className="v2-body" style={{ maxWidth: '90%' }}>
+        <div className="v2-bubble v2-spec">
+          <div className="v2-spec-chips">
+            <span className="v2-spec-chip"><IconAspect />{aspect}</span>
+            <span className="v2-spec-chip">× {count}</span>
+            {style.trim() && <span className="v2-spec-chip" title={style}>风格 · {truncate(style, 20)}</span>}
+            {negative.trim() && <span className="v2-spec-chip" title={negative}>负面 · {truncate(negative, 16)}</span>}
+          </div>
+          {b.promptDisplay.trim() && (
+            <p style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{b.promptDisplay}</p>
+          )}
+          {refs.length > 0 && (
+            <div className="v2-spec-refs">
+              {refs.map((r, i) => (
+                <div key={r.id} className="v2-spec-ref" title={r.directive || `#${i + 1}`}>
+                  <img src={`data:${r.mimeType};base64,${r.data}`} alt={`#${i + 1}`} />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+function truncate(s: string, n: number): string {
+  const t = s.trim();
+  return t.length <= n ? t : t.slice(0, n) + '…';
+}
+
+/** Retrieve the picked knowledge domains' top chunks for `query` (union across
+ *  domains, deduped, score-ranked) and shape them as ext.knowledge entries the
+ *  backend folds into the prompt. Per-domain topK is small so a few domains
+ *  don't blow the context budget. */
+async function fetchDomainKnowledge(
+  query: string,
+  domainNames: string[],
+): Promise<Array<{ kind: string; content: string; pinned: boolean; domain?: string }>> {
+  const perDomainTopK = domainNames.length > 2 ? 4 : 6;
+  const settled = await Promise.allSettled(
+    domainNames.map((name) =>
+      smartnoteRetrieve({ query, tags: [name], topk: perDomainTopK }).then((r) => ({ name, results: r.results || [] })),
+    ),
+  );
+  const seen = new Set<string>();
+  const rows: Array<{ kind: string; content: string; pinned: boolean; domain: string; score: number }> = [];
+  for (const s of settled) {
+    if (s.status !== 'fulfilled') continue;
+    for (const r of s.value.results) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      rows.push({ kind: r.kind || 'memory', content: r.content, pinned: !!r.pinned, domain: s.value.name, score: r.score });
+    }
+  }
+  // Pinned first, then by score; cap total so context stays bounded.
+  rows.sort((a, b) => (Number(b.pinned) - Number(a.pinned)) || (b.score - a.score));
+  return rows.slice(0, 12).map(({ kind, content, pinned, domain }) => ({ kind, content, pinned, domain }));
+}
+
+/** Persist a creation turn's user spec card into the conversation so the
+ *  full dialogue survives a reload. Uses the saveMessage endpoint with an
+ *  `ext.creation_spec` blob alongside `ext.media` (the ref images). */
+async function persistCreationUserSpec(
+  sid: string,
+  prompt: string,
+  spec: Batch['spec'],
+): Promise<void> {
+  const media = spec.refs.map((r) => ({ type: 'image', mimeType: r.mimeType, data: r.data }));
+  const ext: any = {
+    creation_spec: {
+      aspect: spec.aspect, count: spec.count, style: spec.style,
+      negative: spec.negative,
+      refs: spec.refs.map((r) => ({ directive: r.directive, mimeType: r.mimeType })),
+    },
+  };
+  if (media.length > 0) ext.media = media;
+  await api.post(`/api/sessions/${sid}/messages`, {
+    role: 'user', content: prompt, source: 'create', ext,
+  });
+}
+
+/** Persist the assistant-side images for a settled batch. Stores all
+ *  generated image data-URIs as `ext.media`. */
+async function persistCreationAssistantImages(sid: string, b: Batch): Promise<void> {
+  const media = b.slots
+    .map((s, i) => ({ s, err: b.errors[i] }))
+    .filter((x) => !!x.s)
+    .map(({ s }) => {
+      // s is a data: URI; split out mime + base64
+      const m = /^data:([^;]+);base64,(.+)$/.exec(s!);
+      if (!m) return { type: 'image', mimeType: 'image/png', data: s! };
+      return { type: 'image', mimeType: m[1], data: m[2] };
+    });
+  if (media.length === 0) return; // nothing produced; skip persisting
+  // Caption: "生成完成 · N 张 · 耗时 X.Xs" lives in `content` so it renders above
+  // the images on reload exactly like the live batch — no special-casing needed.
+  await api.post(`/api/sessions/${sid}/messages`, {
+    role: 'assistant', content: creationDoneCaption(media.length, b.elapsedMs),
+    source: 'create', ext: { media, creation_batch: true, elapsed_ms: b.elapsedMs },
+  });
+}
+
+/** Human caption for a finished creation batch, e.g. "生成完成 · 4 张 · 耗时 12.3s". */
+function creationDoneCaption(n: number, elapsedMs?: number): string {
+  let s = `生成完成 · ${n} 张`;
+  if (elapsedMs && elapsedMs > 0) s += ` · 耗时 ${(elapsedMs / 1000).toFixed(1)}s`;
+  return s;
+}
+
+const BatchView: React.FC<{ b: Batch; onPreviewImage?: (src: string) => void }> = ({ b, onPreviewImage }) => (
+  <div className="v2-msg assistant">
+    <div className="v2-body">
+      <p style={{ color: 'var(--c-ink-3)', fontSize: 13 }}>
+        {b.pending
+          ? `正在画 ${b.slots.length} 张…`
+          : creationDoneCaption(b.slots.filter(Boolean).length, b.elapsedMs)}
+      </p>
+      <div className="v2-imgs">
+        {b.slots.map((s, i) => (
+          <div key={i} className={`v2-ph${s ? ' clickable' : ''}`} onClick={s ? () => onPreviewImage?.(s) : undefined}>
+            {s ? <img src={s} alt={`#${i + 1}`} /> :
+              b.errors[i] ? <span style={{ fontSize: 11, color: 'var(--c-ink-4)' }} title={b.errors[i] || ''}>失败</span> :
+              <span className="v2-shimmer-tile" />}
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+);
+
+const RefPill: React.FC<{ idx: number; r: RefImage; onChange: (v: string) => void; onRemove: () => void }> = ({ idx, r, onChange, onRemove }) => (
+  <div className="v2-ref">
+    <div className="v2-th"><img src={`data:${r.mimeType};base64,${r.data}`} alt={`#${idx}`} /></div>
+    <input
+      className="v2-dir"
+      placeholder={`#${idx}: 怎么用这张？`}
+      value={r.directive}
+      onChange={(e) => onChange(e.target.value)}
+    />
+    <span className="v2-x" onClick={onRemove}>✕</span>
+  </div>
+);
+
+const GalleryView: React.FC = () => {
+  const [items, setItems] = useState<MediaOutputItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [preview, setPreview] = useState<MediaOutputItem | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    mediaApi.listOutputs(120, 0)
+      .then((res) => { if (!cancelled) setItems(res.items || []); })
+      .catch((e) => { console.warn('[v2] listOutputs failed', e); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPreview(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  if (loading) {
+    return <div className="v2-view"><div className="v2-view-head"><h2>画廊</h2><p>加载中…</p></div></div>;
+  }
+  if (items.length === 0) {
+    return (
+      <div className="v2-view">
+        <div className="v2-view-head"><h2>画廊</h2></div>
+        <div className="v2-gallery-empty">
+          <div className="h">还没有作品</div>
+          <div>在创作模式下生成的图片会归到这里。</div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="v2-view">
+      <div className="v2-view-head"><h2>画廊</h2><p>{items.length} 件作品 · 最近 120 张</p></div>
+      <div className="v2-gallery">
+        {items.map((it) => {
+          const url = mediaApi.getOutputFileUrl(it.output_id);
+          const title = (it.prompt || '').split(/[.。\n]/)[0].slice(0, 40);
+          return (
+            <div key={it.output_id} className="v2-gtile" onClick={() => setPreview(it)}>
+              {it.media_type === 'video' && <span className="v2-vidbadge">VIDEO</span>}
+              {it.media_type === 'video'
+                ? <video src={url} muted />
+                : <img src={url} alt={title} loading="lazy" />}
+              <div className="v2-meta">{title || '无名'}</div>
+            </div>
+          );
+        })}
+      </div>
+      {preview && (
+        <div className="v2-lightbox" onClick={() => setPreview(null)}>
+          <div className="v2-lb-close">✕</div>
+          {preview.media_type === 'video'
+            ? <video src={mediaApi.getOutputFileUrl(preview.output_id)} controls autoPlay />
+            : <img src={mediaApi.getOutputFileUrl(preview.output_id)} alt="" />}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ModelBadge: React.FC<{
+  mode: Mode;
+  configs: LLMConfigFromDB[];
+  activeRecord: Session | undefined;
+  createConfig: { configId?: string; model?: string };
+  settingsDefault?: string;
+  onClick: () => void;
+}> = ({ mode, configs, activeRecord, createConfig, settingsDefault, onClick }) => {
+  let label: string; let sub: string;
+  if (mode === 'create') {
+    const id = createConfig.configId;
+    const cfg = id ? configs.find((c) => c.config_id === id) : undefined;
+    label = cfg ? (cfg.shortname || cfg.name) : '默认创作';
+    sub = cfg?.model || createConfig.model || 'gemini-2.5-flash-image';
+  } else {
+    const id = activeRecord?.llm_config_id || settingsDefault;
+    const cfg = id ? configs.find((c) => c.config_id === id) : undefined;
+    label = cfg ? (cfg.shortname || cfg.name) : '默认模型';
+    sub = cfg?.model || cfg?.provider || '';
+  }
+  return (
+    <button className="v2-modelbadge" onClick={onClick} title="切换模型">
+      <span className="nm">{label}</span>
+      {sub && <span className="sub">{sub}</span>}
+    </button>
+  );
+};
+
+const ContextPopover: React.FC<{
+  mode: Mode;
+  isAgent: boolean;
+  activeRecord: Session | undefined;
+  createConfigId?: string;
+  onClose: () => void;
+  onPickModel: (cfg: LLMConfigFromDB) => void;
+}> = ({ mode, activeRecord, createConfigId, onClose, onPickModel }) => {
+  // ▲ in composer always picks a model now (chat or media depending on mode).
+  // Agent-level config moved to the sidebar agent row's ⋯ menu.
+  return (
+    <Modal
+      title={mode === 'create' ? '选创作模型' : '选对话模型'}
+      onClose={onClose}
+    >
+      <ModelPicker
+        wantMedia={mode === 'create'}
+        currentConfigId={mode === 'create' ? createConfigId : activeRecord?.llm_config_id}
+        onPick={onPickModel}
+      />
+    </Modal>
+  );
+};
+
+const Modal: React.FC<{
+  title: string;
+  subtitle?: string;
+  wide?: boolean;
+  onClose: () => void;
+  footer?: React.ReactNode;
+  children: React.ReactNode;
+}> = ({ title, subtitle, wide, onClose, footer, children }) => {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className={`v2-modal${wide ? ' wide' : ''}`} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="v2-modal-hd">
+          <h3>{title}</h3>
+          {subtitle && <span className="v2-modal-sub">{subtitle}</span>}
+          <button className="x" onClick={onClose}>✕</button>
+        </div>
+        <div className="v2-modal-body">{children}</div>
+        {footer && <div className="v2-modal-foot">{footer}</div>}
+      </div>
+    </div>
+  );
+};
+
+const ModelPicker: React.FC<{
+  wantMedia: boolean;
+  currentConfigId?: string;
+  onPick: (cfg: LLMConfigFromDB) => void;
+}> = ({ wantMedia, currentConfigId, onPick }) => {
+  const [configs, setConfigs] = useState<LLMConfigFromDB[] | null>(null);
+  useEffect(() => {
+    getLLMConfigs()
+      .then((list) => setConfigs(Array.isArray(list) ? list : []))
+      .catch(() => setConfigs([]));
+  }, []);
+  const list = useMemo(() => {
+    if (!configs) return null;
+    const enabled = configs.filter((c) => c.enabled !== false);
+    return wantMedia ? enabled.filter((c) => c.media_visible) : enabled;
+  }, [configs, wantMedia]);
+
+  if (!list) return <div className="v2-ctxpop-empty">加载中…</div>;
+  if (list.length === 0) {
+    return (
+      <div className="v2-ctxpop-empty">
+        {wantMedia ? '没有标为"创作可见"的模型。去 设置 · 模型 录入。' : '还没有可用的模型，去 设置 · 模型 录入。'}
+      </div>
+    );
+  }
+  return (
+    <div className="v2-ctxpop-list">
+      {list.map((c) => (
+        <div
+          key={c.config_id}
+          className={`v2-ctxpop-item${c.config_id === currentConfigId ? ' active' : ''}`}
+          onClick={() => onPick(c)}
+        >
+          <div className="nm">{c.shortname || c.name}<small>{c.model || c.provider}</small></div>
+          <div className="tag">{c.provider}</div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const AgentSettingsDrawer: React.FC<{ agent: Session; onClose: () => void }> = ({ agent, onClose }) => {
+  const agentApiId = (agent as any).id || agent.session_id;
+  const [name, setName] = useState(agent.name || agent.title || '');
+  const [prompt, setPrompt] = useState(agent.system_prompt || '');
+  const [llmId, setLlmId] = useState<string | undefined>(agent.llm_config_id);
+  const [avatar, setAvatar] = useState<string | undefined>(agent.avatar);
+  const [busy, setBusy] = useState(false);
+
+  const [llms, setLlms] = useState<LLMConfigFromDB[] | null>(null);
+  const [allMcps, setAllMcps] = useState<MCPServer[] | null>(null);
+  const [boundMcps, setBoundMcps] = useState<Set<string>>(new Set());
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    getLLMConfigs().then((l) => setLlms(Array.isArray(l) ? l.filter((x) => x.enabled !== false) : [])).catch(() => setLlms([]));
+    mcpApi.list().then((l) => setAllMcps(Array.isArray(l) ? l : [])).catch(() => setAllMcps([]));
+    mcpApi.listForAgent(agentApiId).then((l) => setBoundMcps(new Set((l || []).map((x) => x.id)))).catch(() => {});
+  }, [agentApiId]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const onAvatarPick = (file: File) => {
+    if (!file.type.startsWith('image/')) return;
+    const r = new FileReader();
+    r.onload = () => { setAvatar(String(r.result || '')); };
+    r.readAsDataURL(file);
+  };
+
+  const toggleMcp = async (m: MCPServer) => {
+    const has = boundMcps.has(m.id);
+    try {
+      if (has) await mcpApi.unbindFromAgent(agentApiId, m.id);
+      else await mcpApi.bindToAgent(agentApiId, m.id);
+      setBoundMcps((s) => {
+        const next = new Set(s);
+        if (has) next.delete(m.id); else next.add(m.id);
+        return next;
+      });
+    } catch (e) {
+      console.warn('[v2] toggleMcp failed', e);
+    }
+  };
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      // Agent-level updates go through /api/agents/{id}/profile so the agent
+      // record itself is updated (name / persona / llm / avatar all live on
+      // the agent, not the conversation).
+      const updates: Record<string, unknown> = {};
+      if (name.trim() && name.trim() !== (agent.name || agent.title)) updates.name = name.trim();
+      if ((prompt || '') !== (agent.system_prompt || '')) updates.system_prompt = prompt;
+      if (llmId !== agent.llm_config_id) updates.llm_config_id = llmId || null;
+      if (avatar && avatar !== agent.avatar) updates.avatar = avatar;
+      if (Object.keys(updates).length > 0) {
+        await updateRoleProfile(agentApiId, updates);
+      }
+      onClose();
+    } catch (e) {
+      console.warn('[v2] agent save failed', e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="Agent 设置"
+      subtitle={agent.name || agent.title}
+      wide
+      onClose={onClose}
+      footer={<>
+        <button className="v2-mbtn" onClick={onClose} disabled={busy}>取消</button>
+        <button className="v2-mbtn primary" onClick={save} disabled={busy}>{busy ? '保存中…' : '保存'}</button>
+      </>}
+    >
+      <div className="v2-modal-sec">
+        <div className="v2-avatar-row">
+          <div className="v2-avatar-lg" onClick={() => fileRef.current?.click()} title="点击换头像">
+            {avatar
+              ? <img src={avatar.startsWith('data:') ? avatar : `data:image/png;base64,${avatar}`} alt="" />
+              : <span>{(agent.name || agent.title || '?').charAt(0)}</span>}
+          </div>
+          <div style={{ flex: 1 }}>
+            <div className="lab">名字</div>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="给这个 agent 起个名" />
+          </div>
+          <input
+            ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) onAvatarPick(f); e.target.value = ''; }}
+          />
+        </div>
+      </div>
+
+      <div className="v2-modal-sec">
+        <div className="lab">人设 / System Prompt</div>
+        <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="它的语气、知识范围、行为偏好…" rows={6} />
+        <div className="v2-modal-note">作为 system message 进所有对话的开头。</div>
+      </div>
+
+      <div className="v2-modal-sec">
+        <div className="lab">模型</div>
+        {!llms && <div className="v2-modal-note">加载中…</div>}
+        {llms && (
+          <div className="v2-ctxpop-list">
+            <div className={`v2-ctxpop-item${!llmId ? ' active' : ''}`} onClick={() => setLlmId(undefined)}>
+              <div className="nm">跟随默认<small>未指定</small></div>
+            </div>
+            {llms.map((c) => (
+              <div
+                key={c.config_id}
+                className={`v2-ctxpop-item${llmId === c.config_id ? ' active' : ''}`}
+                onClick={() => setLlmId(c.config_id)}
+              >
+                <div className="nm">{c.shortname || c.name}<small>{c.model || c.provider}</small></div>
+                <div className="tag">{c.provider}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="v2-modal-sec">
+        <div className="lab">MCP 工具</div>
+        {!allMcps && <div className="v2-modal-note">加载中…</div>}
+        {allMcps && allMcps.length === 0 && (
+          <div className="v2-modal-note">还没有 MCP 服务器。去 设置 · MCP · 技能 添加。</div>
+        )}
+        {allMcps && allMcps.length > 0 && (
+          <div className="v2-ctxpop-list">
+            {allMcps.map((m) => {
+              const bound = boundMcps.has(m.id);
+              return (
+                <div
+                  key={m.id}
+                  className={`v2-ctxpop-item${bound ? ' active' : ''}`}
+                  onClick={() => void toggleMcp(m)}
+                >
+                  <div className="nm">{m.name}<small>{m.type}</small></div>
+                  <div className="tag">{bound ? '已绑' : '点击绑定'}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+};
+
+const ChipPanel: React.FC<{
+  which: 'style' | 'aspect' | 'count' | 'negative';
+  cfg: { style: string; aspect: string; count: number; negative: string };
+  setStyle: (v: string) => void;
+  setAspect: (v: string) => void;
+  setCount: (v: number) => void;
+  setNegative: (v: string) => void;
+  close: () => void;
+}> = ({ which, cfg, setStyle, setAspect, setCount, setNegative, close }) => {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [close]);
+
+  if (which === 'style') {
+    return <StylePanel cfg={cfg} setStyle={setStyle} close={close} />;
+  }
+  if (which === 'aspect') {
+    return (
+      <div className="v2-panel">
+        <div className="v2-panel-hd">比例</div>
+        <div className="v2-options">
+          {ASPECT_OPTIONS.map((a) => (
+            <div key={a} className={`v2-opt${cfg.aspect === a ? ' active' : ''}`} onClick={() => { setAspect(a); }}>
+              <span>{a}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  if (which === 'count') {
+    return (
+      <div className="v2-panel">
+        <div className="v2-panel-hd">一次画几张</div>
+        <div className="v2-options">
+          {COUNT_OPTIONS.map((n) => (
+            <div key={n} className={`v2-opt${cfg.count === n ? ' active' : ''}`} onClick={() => { setCount(n); }}>
+              <span>{n} 张</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  // negative
+  return (
+    <div className="v2-panel">
+      <div className="v2-panel-hd">想避免的元素 — 用逗号分隔</div>
+      <FreeTextRow
+        placeholder="如：霓虹、过曝、塑料感"
+        initial={cfg.negative}
+        onApply={(v) => { setNegative(v); close(); }}
+        multiline
+      />
+    </div>
+  );
+};
+
+const StylePanel: React.FC<{
+  cfg: { style: string };
+  setStyle: (v: string) => void;
+  close: () => void;
+}> = ({ cfg, setStyle, close }) => {
+  const [custom, setCustom] = useState<StylePreset[]>(() => loadCustomStyles());
+  // Hidden built-in style IDs (user-deleted). Persisted on the primary
+  // agent's ext.style_presets_hidden so the choice carries across sessions.
+  const [hiddenBuiltins, setHiddenBuiltins] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    // One-shot pull on mount; pushes/deletes auto-sync below.
+    void (async () => {
+      const { list } = await syncCustomStylesFromBackend();
+      setCustom(list);
+      setHiddenBuiltins(new Set(getHiddenBuiltinIds()));
+    })();
+  }, []);
+
+  const visibleBuiltins = useMemo(
+    () => BUILTIN_STYLES.filter((s) => !hiddenBuiltins.has(s.id)),
+    [hiddenBuiltins],
+  );
+  const all: StylePreset[] = useMemo(() => [...visibleBuiltins, ...custom], [visibleBuiltins, custom]);
+  const activeId = findPresetBySuffix(cfg.style)?.id;
+  const trimmed = cfg.style.trim();
+
+  const onDelete = async (id: string, isCustom: boolean, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isCustom) {
+      const s = custom.find((x) => x.id === id);
+      if (!s) return;
+      const rep = await deleteCustomStyle(id);
+      if (!rep.ok) { console.warn('[v2] delete custom style failed', rep.error); return; }
+      const after = loadCustomStyles();
+      setCustom(after);
+      if (cfg.style.trim() === s.suffix.trim()) setStyle('');
+    } else {
+      // Hide a builtin — record in agent ext so other sessions see it too.
+      const s = BUILTIN_STYLES.find((x) => x.id === id);
+      if (!s) return;
+      const next = new Set([...hiddenBuiltins, id]);
+      setHiddenBuiltins(next);
+      void setHiddenBuiltinIds([...next]);
+      if (cfg.style.trim() === s.suffix.trim()) setStyle('');
+    }
+  };
+
+  // Save: persist as a preset chip (no auto-apply, so the user can browse).
+  // Apply: set the suffix as the current style for this turn; if it's not
+  // already a known preset, also save it so it becomes a clickable chip.
+  const saveAsPreset = async (name: string, suffix: string) => {
+    const v = suffix.trim();
+    if (!v) return;
+    if (findPresetBySuffix(v)) return;
+    const aliased = (name.trim() || v.slice(0, 12)).slice(0, 24);
+    const { report } = await addCustomStyle(aliased, v);
+    setCustom(loadCustomStyles());
+    if (!report.ok) console.warn('[v2] style backend save failed:', report.error);
+  };
+
+  const applyNow = async (name: string, suffix: string) => {
+    const v = suffix.trim();
+    if (!v) { setStyle(''); close(); return; }
+    const existing = findPresetBySuffix(v);
+    if (existing) { setStyle(existing.suffix); close(); return; }
+    const aliased = (name.trim() || v.slice(0, 12)).slice(0, 24);
+    const { preset, report } = await addCustomStyle(aliased, v);
+    setCustom(loadCustomStyles());
+    setStyle(preset.suffix);
+    if (!report.ok) console.warn('[v2] style backend save failed:', report.error);
+    close();
+  };
+
+  return (
+    <div className="v2-panel">
+      <div className="v2-panel-hd">
+        <span>风格 — 选预设或在下方自定义</span>
+        {custom.length > 0 && <span style={{ color: 'var(--c-ink-4)' }}>· 已存 {custom.length}</span>}
+      </div>
+      <div className="v2-options">
+        <div className={`v2-opt${!activeId && !trimmed ? ' active' : ''}`} onClick={() => setStyle('')}>
+          <span>无</span><small>NONE</small>
+        </div>
+        {all.map((s) => (
+          <div
+            key={s.id}
+            className={`v2-opt${activeId === s.id ? ' active' : ''}`}
+            onClick={() => setStyle(s.suffix)}
+            title={s.suffix}
+          >
+            <span>{s.zh}</span>
+            {s.custom ? <span className="v2-opt-custom">自定</span> : (s.en && <small>{s.en}</small>)}
+            <span className="v2-opt-del" title="删除" onClick={(e) => onDelete(s.id, !!s.custom, e)}>✕</span>
+          </div>
+        ))}
+      </div>
+      <CustomStyleEditor
+        initialSuffix={activeId ? '' : cfg.style}
+        onSave={saveAsPreset}
+        onApply={applyNow}
+      />
+    </div>
+  );
+};
+
+const CustomStyleEditor: React.FC<{
+  initialSuffix: string;
+  onSave: (name: string, suffix: string) => void | Promise<void>;
+  onApply: (name: string, suffix: string) => void | Promise<void>;
+}> = ({ initialSuffix, onSave, onApply }) => {
+  const [name, setName] = useState('');
+  const [suffix, setSuffix] = useState(initialSuffix);
+  // Re-seed once when the parent's "current style" changes (e.g. user clicks
+  // another preset). Don't echo on every keystroke.
+  useEffect(() => { setSuffix(initialSuffix); }, [initialSuffix]);
+  const disabled = !suffix.trim();
+  return (
+    <div className="v2-row-input" style={{ flexWrap: 'wrap', gap: 8 }}>
+      <input
+        placeholder="短名字（chip 上显示，可留空自动取首段）"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        style={{ flex: '0 0 220px' }}
+      />
+      <textarea
+        placeholder="自定义风格描述，例如：watercolor, soft edges, pastel palette…"
+        value={suffix}
+        onChange={(e) => setSuffix(e.target.value)}
+        style={{ flex: '1 1 240px', minHeight: 60 }}
+      />
+      <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+        <button
+          className="ghost"
+          type="button"
+          disabled={disabled}
+          onClick={() => onSave(name, suffix)}
+          title="只入库（之后可点击 chip 应用），不改变当前选中风格"
+        >保存为预设</button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onApply(name, suffix)}
+          title="设为本次的风格（如果是新输入也会入库）"
+        >应用本次</button>
+      </div>
+    </div>
+  );
+};
+
+const FreeTextRow: React.FC<{
+  placeholder: string;
+  initial: string;
+  onApply: (v: string) => void;
+  multiline?: boolean;
+  extra?: React.ReactNode;
+}> = ({ placeholder, initial, onApply, multiline, extra }) => {
+  const [v, setV] = useState(initial);
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onApply(v.trim()); }
+  };
+  return (
+    <div className="v2-row-input">
+      {multiline
+        ? <textarea autoFocus placeholder={placeholder} value={v} onChange={(e) => setV(e.target.value)} onKeyDown={onKeyDown} />
+        : <input autoFocus placeholder={placeholder} value={v} onChange={(e) => setV(e.target.value)} onKeyDown={onKeyDown} />
+      }
+      {extra}
+      {initial && <button className="ghost" onClick={() => { setV(''); onApply(''); }}>清空</button>}
+      <button onClick={() => onApply(v.trim())}>应用</button>
+    </div>
+  );
+};
+
+const StreamView: React.FC<{ content: string; reasoning: string }> = ({ content, reasoning }) => (
+  <div className="v2-msg assistant streaming">
+    <div className="v2-body">
+      {reasoning && <ThinkBlock reasoning={reasoning} streaming={true} hasContent={!!content} />}
+      {content ? (
+        <div className="v2-stream-md">
+          <MD text={content} />
+          <span className="v2-caret">▍</span>
+        </div>
+      ) : !reasoning && <p className="v2-pending">等候首字…</p>}
+    </div>
+  </div>
+);
+
+const ThinkingDots: React.FC = () => (
+  <div className="v2-msg assistant">
+    <div className="v2-body">
+      <p style={{ color: 'var(--c-ink-3)', fontStyle: 'italic' }}>正在思考…</p>
+    </div>
+  </div>
+);
+
+const EmptyState: React.FC<{ title: string }> = ({ title }) => (
+  <div className="v2-empty">
+    <div className="v2-empty-title">{title || '新会话'}</div>
+    <div className="v2-empty-sub">从下面开始聊 · Enter 发送 · Shift+Enter 换行 · 切到「创作」可以拖入参考图</div>
+  </div>
+);
+
+const SkeletonRows: React.FC<{ n: number }> = ({ n }) => (
+  <>
+    {Array.from({ length: n }).map((_, i) => (
+      <div key={i} style={{
+        height: 30, margin: '1px 2px', borderRadius: 10,
+        background: 'linear-gradient(90deg, #f0f0f0, #f7f7f7, #f0f0f0)',
+        backgroundSize: '200% 100%',
+        animation: 'v2-shimmer 1.4s linear infinite',
+      }} />
+    ))}
+  </>
+);
+
+/* ============== utils ============== */
+
+function userName(): string {
+  try {
+    const u = api.getUser();
+    return (u?.name || u?.email || '未登入').toString();
+  } catch { return ''; }
+}
+function userInitials(): string {
+  const n = userName();
+  if (!n) return '?';
+  if (/[a-zA-Z]/.test(n[0])) {
+    const parts = n.split(/[^a-zA-Z]/).filter(Boolean);
+    return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || n[0].toUpperCase();
+  }
+  return n.slice(0, 1).toUpperCase();
+}
+
+const AgentIcon: React.FC<{ a: Session }> = ({ a }) => {
+  if (a.is_primary) return <IconAgentPrimary />;
+  const key = (a.name || a.title || '').toLowerCase();
+  if (/绘|画|paint|draw|art/.test(key)) return <IconAgentPainter />;
+  if (/史|doc|记|note|写/.test(key)) return <IconAgentDoc />;
+  if (/码|code|dev/.test(key)) return <IconAgentCode />;
+  return <IconAgentDoc />;
+};
+
+export default ClientShell;

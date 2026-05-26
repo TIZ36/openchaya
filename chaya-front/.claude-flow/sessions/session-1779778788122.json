@@ -1,0 +1,14 @@
+{
+  "id": "session-1779778788122",
+  "startedAt": "2026-05-26T06:59:48.122Z",
+  "cwd": "/Users/lilithgames/aiproj/chaya-next/chaya-front",
+  "context": {},
+  "metrics": {
+    "edits": 41,
+    "commands": 0,
+    "tasks": 0,
+    "errors": 0
+  },
+  "endedAt": "2026-05-26T07:29:34.332Z",
+  "duration": 1786211
+}

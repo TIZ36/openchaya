@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>Chaya · Chat-first Refactor · v1 mode-rail</title>
+<link rel="stylesheet" href="_shared.css" />
+<style>
+  :root { color-scheme: light; }
+  html, body { height: 100%; overflow: hidden; }
+  .app { display: grid; grid-template-columns: 280px 1fr; height: 100vh; background: var(--paper); }
+
+  /* ===== sidebar ===== */
+  .side2 { border-right: 1px solid var(--rule); display: flex; flex-direction: column; min-height: 0; }
+  .side-head { padding: 18px 16px 12px; display: flex; align-items: center; justify-content: space-between; }
+  .side-head .brand { font-family: var(--display); font-size: 22px; color: var(--ink-strong); letter-spacing: -0.01em; }
+  .side-head .brand span { color: var(--accent); }
+  .side-head .new { width: 28px; height: 28px; border: 1px solid var(--rule-strong); border-radius: 4px; display: grid; place-items: center; cursor: pointer; color: var(--pencil); }
+  .side-head .new:hover { color: var(--accent); border-color: var(--accent); }
+  .side-search { margin: 0 12px 8px; padding: 7px 10px; border: 1px solid var(--rule-strong); border-radius: 4px; display: flex; gap: 8px; align-items: center; color: var(--pencil); font-size: 12.5px; }
+  .side-search input { border: 0; outline: 0; background: transparent; flex: 1; font: inherit; color: var(--ink); }
+  .side-section { padding: 8px 12px 4px; font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--pencil-soft); font-weight: 500; }
+  .convs { flex: 1; overflow-y: auto; padding: 0 6px; }
+  .conv {
+    display: grid; grid-template-columns: 1fr auto; gap: 4px;
+    padding: 8px 10px; border-radius: 4px; cursor: pointer;
+    color: var(--ink); font-size: 13px; line-height: 1.35;
+    transition: background 140ms var(--ease);
+  }
+  .conv:hover { background: color-mix(in oklch, var(--ink) 4%, transparent); }
+  .conv.active { background: color-mix(in oklch, var(--accent) 9%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+  .conv .t { font-family: var(--display); font-size: 13.5px; color: var(--ink-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conv .when { font-size: 10.5px; color: var(--pencil-soft); font-family: var(--mono); }
+  .conv .preview { grid-column: 1 / -1; font-size: 11.5px; color: var(--pencil); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conv .badge { display: inline-block; padding: 1px 6px; font-size: 9.5px; letter-spacing: 0.12em; border-radius: 2px; background: color-mix(in oklch, var(--marginalia) 28%, transparent); color: var(--marginalia-ink); margin-right: 6px; text-transform: uppercase; font-family: var(--mono); }
+
+  .side-foot { border-top: 1px solid var(--rule); padding: 8px 0 12px; max-height: 38%; display: flex; flex-direction: column; min-height: 0; }
+  .side-foot .head { display: flex; align-items: center; justify-content: space-between; padding: 6px 14px 6px; }
+  .side-foot .head .l { font-size: 10px; letter-spacing: 0.24em; text-transform: uppercase; color: var(--pencil); font-weight: 500; }
+  .side-foot .head .add { font-size: 12px; color: var(--pencil); cursor: pointer; }
+  .side-foot .head .add:hover { color: var(--accent); }
+  .agents { overflow-y: auto; padding: 0 6px; }
+  .agent { display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; padding: 7px 8px; border-radius: 4px; cursor: pointer; align-items: center; }
+  .agent:hover { background: color-mix(in oklch, var(--ink) 4%, transparent); }
+  .agent .av { width: 28px; height: 28px; border-radius: 4px; background: color-mix(in oklch, var(--accent) 14%, transparent); display: grid; place-items: center; font-family: var(--display); font-size: 13px; color: var(--accent); }
+  .agent .meta .n { font-size: 13px; color: var(--ink-strong); font-family: var(--display); }
+  .agent .meta .s { font-size: 10.5px; color: var(--pencil); font-family: var(--mono); margin-top: 1px; }
+  .agent .cfg { font-size: 11px; color: var(--pencil-soft); }
+  .agent.primary .av { background: var(--accent); color: var(--paper); }
+  .side-bottom { padding: 8px 14px 0; display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--rule); margin-top: 6px; }
+  .side-bottom .me { width: 28px; height: 28px; border-radius: 50%; background: color-mix(in oklch, var(--accent) 12%, transparent); display: grid; place-items: center; font-family: var(--display); font-size: 13px; color: var(--accent); }
+  .side-bottom .who { font-size: 12px; color: var(--ink); flex: 1; }
+  .side-bottom .who small { display: block; color: var(--pencil); font-family: var(--mono); font-size: 10px; }
+  .side-bottom .gear { color: var(--pencil); cursor: pointer; }
+  .side-bottom .gear:hover { color: var(--accent); }
+
+  /* ===== main chat ===== */
+  .chat { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; background: var(--page); }
+  .chat-top { display: flex; align-items: center; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--rule); background: var(--paper); }
+  .chat-top .crumb { font-size: 10.5px; letter-spacing: 0.2em; color: var(--pencil-soft); text-transform: uppercase; }
+  .chat-top h2 { font-family: var(--display); font-size: 17px; color: var(--ink-strong); margin-left: 4px; }
+  .chat-top .with { color: var(--pencil); font-size: 12px; margin-left: 8px; }
+  .chat-top .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--rule-strong); border-radius: 999px; font-size: 11.5px; color: var(--pencil); cursor: pointer; }
+  .pill:hover { color: var(--accent); border-color: var(--accent); }
+  .pill.live { color: var(--accent); border-color: color-mix(in oklch, var(--accent) 40%, transparent); }
+
+  .stream { overflow-y: auto; padding: 22px 0 12px; }
+  .msg-wrap { max-width: 760px; margin: 0 auto; padding: 0 24px; }
+  .msg { display: grid; grid-template-columns: 32px 1fr; gap: 14px; margin-bottom: 22px; }
+  .msg .av { width: 28px; height: 28px; border-radius: 4px; display: grid; place-items: center; font-family: var(--display); font-size: 12px; color: var(--paper); background: var(--ink-strong); margin-top: 2px; }
+  .msg.assistant .av { background: var(--accent); }
+  .msg .body .role { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--pencil); margin-bottom: 4px; font-weight: 500; }
+  .msg .body p { font-size: 14.5px; color: var(--ink); line-height: 1.7; margin-bottom: 8px; }
+  .msg .body p.lead { font-family: var(--display); font-size: 15.5px; }
+  .msg .body .imgs { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; margin-top: 10px; max-width: 560px; }
+  .msg .body .imgs .ph { aspect-ratio: 1/1; background: color-mix(in oklch, var(--accent) 8%, transparent); border: 1px solid color-mix(in oklch, var(--accent) 18%, transparent); display: grid; place-items: center; font-family: var(--display); color: var(--accent); font-size: 13px; }
+  .msg .body .acts { display: flex; gap: 8px; margin-top: 8px; opacity: 0; transition: opacity 160ms var(--ease); }
+  .msg:hover .body .acts { opacity: 1; }
+  .msg .body .acts button { font-size: 11px; color: var(--pencil); background: transparent; border: 0; cursor: pointer; padding: 2px 6px; border-radius: 3px; }
+  .msg .body .acts button:hover { background: color-mix(in oklch, var(--ink) 5%, transparent); color: var(--ink); }
+
+  /* ==== composer ==== */
+  .composer-wrap { padding: 0 24px 22px; background: var(--page); }
+  .composer { max-width: 760px; margin: 0 auto; }
+
+  /* mode rail (above the box) — visible only in create mode */
+  .mode-rail {
+    border: 1px solid var(--rule-strong);
+    border-bottom: 0;
+    border-top-left-radius: 8px; border-top-right-radius: 8px;
+    background: color-mix(in oklch, var(--marginalia) 8%, var(--paper));
+    padding: 10px 14px 12px;
+    display: none;
+    flex-direction: column; gap: 10px;
+    box-shadow: 0 -2px 4px oklch(0.18 0.02 310 / 0.03);
+  }
+  .composer[data-mode="create"] .mode-rail { display: flex; }
+  .mode-rail .rail-top { display: flex; align-items: center; gap: 10px; }
+  .mode-rail .rail-top .label { font-family: var(--display); font-size: 13px; color: var(--ink-strong); }
+  .mode-rail .rail-top .tag { font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--marginalia-ink); font-family: var(--mono); }
+  .mode-rail .rail-top .x { margin-left: auto; color: var(--pencil); cursor: pointer; font-size: 12px; }
+  .mode-rail .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .mode-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--rule-strong); background: var(--paper); border-radius: 999px; font-size: 12px; color: var(--ink); cursor: pointer; font-family: var(--display); }
+  .mode-chip .k { color: var(--pencil); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; margin-right: 2px; }
+  .mode-chip .v { color: var(--ink-strong); }
+  .mode-chip.has .v { color: var(--accent); }
+  .mode-chip:hover { border-color: var(--accent); }
+  .mode-chip svg { stroke: currentColor; }
+
+  /* attached refs */
+  .refs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .ref { display: flex; align-items: center; gap: 8px; padding: 4px 8px 4px 4px; border: 1px solid var(--rule-strong); border-radius: 6px; background: var(--paper); }
+  .ref .thumb { width: 28px; height: 28px; border-radius: 3px; background: color-mix(in oklch, var(--accent) 14%, transparent); display: grid; place-items: center; color: var(--accent); font-family: var(--display); font-size: 11px; }
+  .ref .lab { font-size: 11.5px; color: var(--ink); font-family: var(--display); }
+  .ref .dir { font-size: 11px; color: var(--pencil); border-left: 1px solid var(--rule); padding-left: 8px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; }
+  .ref .x { color: var(--pencil-soft); cursor: pointer; padding: 0 4px; }
+  .ref .x:hover { color: var(--status-error); }
+
+  .box {
+    border: 1px solid var(--rule-strong); border-radius: 8px;
+    background: var(--paper); padding: 10px 12px 8px;
+    display: grid; grid-template-rows: 1fr auto; gap: 8px;
+    transition: border-color 180ms var(--ease), box-shadow 180ms var(--ease);
+  }
+  .composer[data-mode="create"] .box { border-top-left-radius: 0; border-top-right-radius: 0; }
+  .box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 14%, transparent); }
+  .box textarea { width: 100%; resize: none; border: 0; outline: 0; background: transparent; font-family: var(--sans); font-size: 14.5px; line-height: 1.6; color: var(--ink); min-height: 56px; max-height: 220px; }
+  .box .row { display: flex; align-items: center; gap: 10px; }
+  .box .row .l { display: flex; align-items: center; gap: 8px; flex: 1; flex-wrap: wrap; }
+  .iconbtn { width: 30px; height: 30px; border-radius: 6px; border: 1px solid transparent; background: transparent; cursor: pointer; display: grid; place-items: center; color: var(--pencil); }
+  .iconbtn:hover { background: color-mix(in oklch, var(--ink) 4%, transparent); color: var(--ink); }
+  .modetoggle { display: inline-flex; padding: 2px; background: color-mix(in oklch, var(--ink) 4%, transparent); border-radius: 999px; font-size: 11.5px; }
+  .modetoggle button { border: 0; background: transparent; padding: 4px 12px; border-radius: 999px; cursor: pointer; color: var(--pencil); font-family: var(--display); font-size: 12.5px; }
+  .modetoggle button.on { background: var(--paper); color: var(--ink-strong); box-shadow: 0 1px 2px oklch(0.18 0.02 310 / 0.06); }
+  .send { background: var(--accent); color: var(--paper); border: 0; width: 34px; height: 34px; border-radius: 8px; cursor: pointer; display: grid; place-items: center; }
+  .send:hover { background: var(--accent-h); }
+  .hint { max-width: 760px; margin: 6px auto 0; font-size: 11px; color: var(--pencil-soft); text-align: center; font-family: var(--mono); }
+
+  .placeholder { color: var(--pencil-soft); }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ==== sidebar ==== -->
+  <aside class="side2">
+    <div class="side-head">
+      <div class="brand">茶<span>·</span>话</div>
+      <div class="new" title="new">＋</div>
+    </div>
+    <div class="side-search">
+      <span>⌕</span><input placeholder="搜索会话 / 按 ⌘K" />
+    </div>
+
+    <div class="side-section">今天</div>
+    <div class="convs">
+      <div class="conv active">
+        <div class="t">海边小镇 · 黄昏插画</div>
+        <div class="when">14:02</div>
+        <div class="preview"><span class="badge">创作</span>把灯笼调整为暖橙色，让海面反射更柔和…</div>
+      </div>
+      <div class="conv">
+        <div class="t">RAG 检索为什么 miss</div>
+        <div class="when">11:48</div>
+        <div class="preview">把 pgvector 的 ivfflat 列表数调到 100 之后…</div>
+      </div>
+      <div class="conv">
+        <div class="t">营销文案 · 春茶上新</div>
+        <div class="when">10:21</div>
+        <div class="preview">那我们换一个更含蓄的开头，避开"上新"二字</div>
+      </div>
+
+      <div class="side-section" style="margin-top:14px;">本周</div>
+      <div class="conv">
+        <div class="t">登录跳转 bug 复盘</div>
+        <div class="when">周三</div>
+        <div class="preview">原因是 token refresh 在 401 时没清掉 stale state</div>
+      </div>
+      <div class="conv">
+        <div class="t">字体配对的几个备选</div>
+        <div class="when">周二</div>
+        <div class="preview"><span class="badge">创作</span>Young Serif + Commissioner 的组合再看一组…</div>
+      </div>
+      <div class="conv">
+        <div class="t">和小柚讨论会议纪要</div>
+        <div class="when">周一</div>
+        <div class="preview">把行动项分到 owner 名下，时间统一改成下周三前</div>
+      </div>
+    </div>
+
+    <!-- agents 在底部 -->
+    <div class="side-foot">
+      <div class="head"><div class="l">Agents</div><div class="add" title="新建">＋ 新建</div></div>
+      <div class="agents">
+        <div class="agent primary">
+          <div class="av">茶</div>
+          <div class="meta"><div class="n">主・茶宴</div><div class="s">primary · MCP×3 · KB×2</div></div>
+          <div class="cfg">⋯</div>
+        </div>
+        <div class="agent">
+          <div class="av">绘</div>
+          <div class="meta"><div class="n">画师・绘灯</div><div class="s">gemini · KB·画风手稿</div></div>
+          <div class="cfg">⋯</div>
+        </div>
+        <div class="agent">
+          <div class="av">史</div>
+          <div class="meta"><div class="n">史官・修史</div><div class="s">claude · MCP·feishu</div></div>
+          <div class="cfg">⋯</div>
+        </div>
+        <div class="agent">
+          <div class="av">码</div>
+          <div class="meta"><div class="n">码匠</div><div class="s">openai · MCP·gitlab</div></div>
+          <div class="cfg">⋯</div>
+        </div>
+      </div>
+      <div class="side-bottom">
+        <div class="me">M</div>
+        <div class="who">mokk<small>免费档 · 1.2k tokens 今天</small></div>
+        <div class="gear" title="设置">⚙</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ==== chat ==== -->
+  <main class="chat">
+    <header class="chat-top">
+      <div class="crumb">会话</div>
+      <h2>海边小镇 · 黄昏插画</h2>
+      <span class="with">绘灯 · gemini-2.5-flash-image</span>
+      <div class="right">
+        <span class="pill live">● 创作模式</span>
+        <span class="pill">复用上次配置</span>
+        <span class="pill">⋯</span>
+      </div>
+    </header>
+
+    <section class="stream">
+      <div class="msg-wrap">
+
+        <div class="msg user">
+          <div class="av">M</div>
+          <div class="body">
+            <div class="role">你</div>
+            <p>我想要一张海边小镇的黄昏插画，温暖的橙红，远处有灯塔。</p>
+          </div>
+        </div>
+
+        <div class="msg assistant">
+          <div class="av">绘</div>
+          <div class="body">
+            <div class="role">绘灯</div>
+            <p class="lead">理解了 — 我先按"黄昏暖橙 + 远处灯塔"出 4 张草图给你挑。</p>
+            <div class="imgs">
+              <div class="ph">#01</div>
+              <div class="ph">#02</div>
+              <div class="ph">#03</div>
+              <div class="ph">#04</div>
+            </div>
+            <div class="acts"><button>复制</button><button>引用</button><button>送入画廊</button></div>
+          </div>
+        </div>
+
+        <div class="msg user">
+          <div class="av">M</div>
+          <div class="body">
+            <div class="role">你</div>
+            <p>第 2 张的构图不错，但灯笼有点冷。能不能把整体往暖橙拉一档，再保留这种安静的笔触？</p>
+          </div>
+        </div>
+
+        <div class="msg assistant">
+          <div class="av">绘</div>
+          <div class="body">
+            <div class="role">绘灯</div>
+            <p>好的，把 #02 作为参考重画一组，色温整体 +1，笔触保持柔和水彩。</p>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ==== composer ==== -->
+    <div class="composer-wrap">
+      <div class="composer" data-mode="create">
+
+        <!-- 当切到创作模式，rail 才显示 -->
+        <div class="mode-rail">
+          <div class="rail-top">
+            <span class="label">创作配置</span>
+            <span class="tag">本条消息将作为正向提示词</span>
+            <span class="x" onclick="document.querySelector('.composer').dataset.mode='chat'">退出创作 ✕</span>
+          </div>
+          <div class="chips">
+            <span class="mode-chip has"><span class="k">风格</span><span class="v">柔和水彩 · 黄昏暖橙</span></span>
+            <span class="mode-chip has"><span class="k">比例</span><span class="v">3:2</span></span>
+            <span class="mode-chip"><span class="k">数量</span><span class="v">4</span></span>
+            <span class="mode-chip has"><span class="k">负面</span><span class="v">霓虹·过曝·锐利</span></span>
+            <span class="mode-chip"><span class="k">种子</span><span class="v">随机</span></span>
+          </div>
+          <div class="refs">
+            <div class="ref">
+              <div class="thumb">#1</div>
+              <div class="lab">小镇 02.jpg</div>
+              <div class="dir">保留构图，仅替换色温与人物剪影</div>
+              <span class="x">✕</span>
+            </div>
+            <div class="ref">
+              <div class="thumb">#2</div>
+              <div class="lab">灯塔参考.png</div>
+              <div class="dir">作为远景灯塔形状参考</div>
+              <span class="x">✕</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="box">
+          <textarea placeholder="把整体往暖橙拉一档，保留 #1 的安静笔触，远处灯塔参考 #2…">把整体往暖橙拉一档，保留 #1 的安静笔触，远处灯塔参考 #2 的形状。海面反射柔一些。</textarea>
+          <div class="row">
+            <div class="l">
+              <button class="iconbtn" title="附件">📎</button>
+              <button class="iconbtn" title="语音">🎙</button>
+              <div class="modetoggle">
+                <button onclick="document.querySelector('.composer').dataset.mode='chat'">对话</button>
+                <button class="on" onclick="document.querySelector('.composer').dataset.mode='create'">创作</button>
+              </div>
+            </div>
+            <button class="send" title="发送 (Enter)">↑</button>
+          </div>
+        </div>
+        <div class="hint">Enter 发送 · ⇧Enter 换行 · 拖入图片自动作为参考图 · 模型与密钥在「设置」管理</div>
+      </div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

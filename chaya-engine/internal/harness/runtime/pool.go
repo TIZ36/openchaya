@@ -93,6 +93,18 @@ func (p *ActorPool) GetOrCreate(userID, convID string) (*PrimaryActor, error) {
 	return primary, nil
 }
 
+// InvalidateConvHistory clears any live actor's cached history for this conv so
+// the next turn re-hydrates from the (truncated) DB. No-op if the user has no
+// live supervisor. Satisfies api.HistoryInvalidator.
+func (p *ActorPool) InvalidateConvHistory(userID, convID string) {
+	p.mu.RLock()
+	sv, ok := p.supervisors[userID]
+	p.mu.RUnlock()
+	if ok && sv != nil {
+		sv.InvalidateConvHistory(convID)
+	}
+}
+
 // SendToUser dispatches an envelope to the targeted agent or PrimaryAgent.
 func (p *ActorPool) SendToUser(userID string, env *envelope.Envelope) error {
 	// Generic (non-primary) agents bound to a conversation get their own mailbox + config.

@@ -16,9 +16,19 @@ import (
 	"gorm.io/gorm"
 )
 
+// HistoryInvalidator lets the conversation API tell the actor runtime to drop a
+// conversation's cached in-memory history after a truncate, so a live agent
+// stops re-sending messages the user just deleted. Implemented by
+// *runtime.ActorPool; the api package can't import runtime (cycle), hence this
+// minimal interface. Always nil-safe at the call site.
+type HistoryInvalidator interface {
+	InvalidateConvHistory(userID, convID string)
+}
+
 type ConversationAPI struct {
 	db  *gorm.DB
 	reg *provider.Registry
+	inv HistoryInvalidator
 }
 
 func (a *ConversationAPI) resolvePrimaryConversation(userID, tenantID string) (*pgstore.Conversation, error) {
@@ -116,8 +126,8 @@ func (a *ConversationAPI) resolveConversation(id, userID, tenantID string) (*pgs
 	return &newConv, nil
 }
 
-func RegisterConversationRoutes(r chi.Router, db *gorm.DB, reg *provider.Registry) {
-	a := &ConversationAPI{db: db, reg: reg}
+func RegisterConversationRoutes(r chi.Router, db *gorm.DB, reg *provider.Registry, inv HistoryInvalidator) {
+	a := &ConversationAPI{db: db, reg: reg, inv: inv}
 
 	// Primary paths
 	r.Get("/api/conversations", a.list)
@@ -127,6 +137,7 @@ func RegisterConversationRoutes(r chi.Router, db *gorm.DB, reg *provider.Registr
 	r.Delete("/api/conversations/{id}", a.del)
 	r.Get("/api/conversations/{id}/messages", a.messages)
 	r.Post("/api/conversations/{id}/messages", a.saveMessage)
+	r.Delete("/api/conversations/{id}/messages", a.truncateMessages)
 	r.Patch("/api/conversations/{id}/messages/{msgId}/feedback", a.patchMessageFeedback)
 	r.Delete("/api/conversations/{id}/messages/{msgId}", a.deleteMessage)
 
@@ -138,6 +149,7 @@ func RegisterConversationRoutes(r chi.Router, db *gorm.DB, reg *provider.Registr
 	r.Delete("/api/sessions/{id}", a.del)
 	r.Get("/api/sessions/{id}/messages", a.messages)
 	r.Post("/api/sessions/{id}/messages", a.saveMessage)
+	r.Delete("/api/sessions/{id}/messages", a.truncateMessages)
 	r.Patch("/api/sessions/{id}/messages/{msgId}/feedback", a.patchMessageFeedback)
 	r.Delete("/api/sessions/{id}/messages/{msgId}", a.deleteMessage)
 	r.Get("/api/sessions/{id}/summaries", a.getSummaries) // Handle frontend 404
@@ -149,7 +161,7 @@ func (a *ConversationAPI) list(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantID(r.Context())
 	q := a.db.Model(&pgstore.Conversation{}).
 		Joins("INNER JOIN users u ON u.id = conversations.user_id").
-		Where("conversations.user_id = ?", userID)
+		Where("conversations.user_id = ? AND conversations.type <> ?", userID, TeahouseType)
 	if tenantID != "" {
 		q = q.Where("u.tenant_id = ?", tenantID)
 	}
@@ -212,7 +224,24 @@ func (a *ConversationAPI) update(w http.ResponseWriter, r *http.Request) {
 	}
 	var updates map[string]any
 	json.NewDecoder(r.Body).Decode(&updates)
-	a.db.Table("conversations").Where("id = ?", conv.ID).Updates(updates)
+	// Frontend uses `name` for the user-visible label; the column is `title`.
+	// Translate here so /api/sessions/{id} (alias) rename writes the right column.
+	if v, ok := updates["name"]; ok {
+		if _, hasTitle := updates["title"]; !hasTitle {
+			updates["title"] = v
+		}
+		delete(updates, "name")
+	}
+	// Drop unknown / read-only fields to avoid gorm errors on bogus columns.
+	allowed := map[string]struct{}{"title": {}, "type": {}, "config": {}, "updated_at": {}}
+	for k := range updates {
+		if _, ok := allowed[k]; !ok {
+			delete(updates, k)
+		}
+	}
+	if len(updates) > 0 {
+		a.db.Table("conversations").Where("id = ?", conv.ID).Updates(updates)
+	}
 	a.db.Where("id = ?", conv.ID).First(conv)
 	OK(w, conv)
 }
@@ -256,20 +285,29 @@ func (a *ConversationAPI) saveMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+		Role    string          `json:"role"`
+		Content string          `json:"content"`
+		Source  string          `json:"source"`
+		Ext     json.RawMessage `json:"ext"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
 	if req.Role == "" {
 		req.Role = "user"
 	}
+	source := req.Source
+	if source == "" {
+		source = "direct"
+	}
 
 	msg := pgstore.Message{
 		ConvID:  conv.ID,
 		Role:    req.Role,
 		Content: req.Content,
-		Source:  "direct",
+		Source:  source,
+	}
+	if len(req.Ext) > 0 && string(req.Ext) != "null" {
+		msg.Ext = req.Ext
 	}
 	if err := a.db.Create(&msg).Error; err != nil {
 		Fail(w, CodeInternal, err.Error())
@@ -393,4 +431,73 @@ func (a *ConversationAPI) deleteMessage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	OK(w, M{"ok": true})
+}
+
+// truncateMessages rewinds a conversation to an anchor message: it deletes the
+// anchor (when inclusive, the default) plus every message created after it.
+// Backs the frontend "回退到某消息 / 回退并编辑" actions. Query params:
+//
+//	from       — anchor message id (uuid, required)
+//	inclusive  — "false" keeps the anchor and only deletes what follows; any
+//	             other value (or omitted) deletes the anchor too (default)
+//
+// After deletion the live agent actor's cached history is invalidated so the
+// next turn re-hydrates from the truncated DB rather than re-sending the gone
+// messages. (Teahouse rebuilds history from DB each turn, so it needs nothing.)
+func (a *ConversationAPI) truncateMessages(w http.ResponseWriter, r *http.Request) {
+	convKey := chi.URLParam(r, "id")
+	userID := middleware.UserID(r.Context())
+	tenantID := middleware.TenantID(r.Context())
+
+	fromID := strings.TrimSpace(r.URL.Query().Get("from"))
+	if fromID == "" {
+		Fail(w, CodeInvalidParam, "missing 'from' message id")
+		return
+	}
+	if _, err := uuid.Parse(fromID); err != nil {
+		Fail(w, CodeInvalidParam, "invalid 'from' message id")
+		return
+	}
+	inclusive := r.URL.Query().Get("inclusive") != "false"
+
+	conv, err := a.resolveConversation(convKey, userID, tenantID)
+	if err != nil {
+		Fail(w, CodeNotFound, "not found")
+		return
+	}
+
+	var anchor pgstore.Message
+	if err := a.db.Where("id = ? AND conv_id = ?", fromID, conv.ID).First(&anchor).Error; err != nil {
+		Fail(w, CodeNotFound, "anchor message not found")
+		return
+	}
+
+	// Everything strictly after the anchor, by creation time. Persists are
+	// sequential (user turn, then network round-trip, then assistant placeholder),
+	// so created_at reliably separates them — ties between distinct turns don't occur.
+	var ids []string
+	a.db.Model(&pgstore.Message{}).
+		Where("conv_id = ? AND created_at > ?", conv.ID, anchor.CreatedAt).
+		Pluck("id", &ids)
+	if inclusive {
+		ids = append(ids, anchor.ID)
+	}
+	if len(ids) == 0 {
+		OK(w, M{"ok": true, "deleted": 0})
+		return
+	}
+
+	// Parts first — FK(message_id -> messages.id) blocks deleting parent rows.
+	a.db.Where("message_id IN ?", ids).Delete(&pgstore.MessagePart{})
+	res := a.db.Where("id IN ?", ids).Delete(&pgstore.Message{})
+	if res.Error != nil {
+		Fail(w, CodeInternal, res.Error.Error())
+		return
+	}
+	a.db.Table("conversations").Where("id = ?", conv.ID).Update("updated_at", time.Now())
+
+	if a.inv != nil {
+		a.inv.InvalidateConvHistory(conv.UserID, conv.ID)
+	}
+	OK(w, M{"ok": true, "deleted": len(ids)})
 }
