@@ -197,6 +197,7 @@ export interface Document {
   byte_size: number;
   ingested_at: string | null;
   created_at: string;
+  updated_at?: string | null;
   metadata?: Record<string, unknown> | null;
 }
 
@@ -263,6 +264,12 @@ export const smartnoteDocuments = {
   get: (id: string) => req<Document & { content: string }>(`/v1/documents/${encodeURIComponent(id)}`),
   create: (body: { name: string; content: string; kind?: string; metadata?: Record<string, unknown> }) =>
     req<Document>('/v1/documents', { method: 'POST', body: JSON.stringify(body) }),
+  /** Partial update. Note: `metadata` REPLACES the stored object, so callers
+   *  must merge with the existing metadata. Patching metadata.domains re-tags
+   *  the document's already-ingested chunks in place (cloud-side), so a domain
+   *  reassignment takes effect for `@域` retrieval without re-ingesting. */
+  patch: (id: string, body: { name?: string; content?: string; kind?: string; metadata?: Record<string, unknown> }) =>
+    req<Document>(`/v1/documents/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   /** Chunks, embeds, and lands as memories. Synchronous at MVP. */
   ingest: (id: string) =>
     req<{ ok: boolean; chunks: number }>(`/v1/documents/${encodeURIComponent(id)}/ingest`, { method: 'POST' }),

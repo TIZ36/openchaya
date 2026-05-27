@@ -33,7 +33,7 @@ const TAB_GROUPS: { group: string; hint: string; items: { id: Tab; label: string
     items: [
       { id: 'account',  label: '账号' },
       { id: 'prefs',    label: '偏好' },
-      { id: 'models',   label: '模型录入' },
+      { id: 'models',   label: '模型' },
       ...(isLocalAgentAvailable() ? [{ id: 'localagent' as Tab, label: 'Local Agents' }] : []),
     ],
   },
@@ -505,133 +505,156 @@ const RagPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<
   );
 };
 
-/* ============ models pane (v2 native) ============ */
-
-interface ModelEditDraft {
-  config_id?: string;       // present when editing
-  provider: LLMConfigFromDB['provider'];
-  name: string;
-  shortname?: string;
-  api_key?: string;
-  api_url?: string;
-  model?: string;
-  enabled: boolean;
-  media_visible?: boolean;
-}
+/* ============ models pane — 以 API Key 为中心的「凭证 + 动态模型」 ============ *
+ * 每接入一个 provider = 一份凭证（一个 api_key + base_url）；其下的「可用模型」
+ * 从 provider API 动态拉取，启用哪些就建哪些 LLMConfig（共享该 key）。复用现有后端：
+ * 一份凭证 = 该 provider 下共享 key 的一组 config。 */
 
 const PROVIDER_LABELS: Record<string, string> = {
   openai: 'OpenAI', deepseek: 'DeepSeek', anthropic: 'Anthropic',
   gemini: 'Gemini', ollama: 'Ollama', local: 'Local', custom: 'Custom',
 };
 
+/** 接入/管理凭证的草稿：provider + key(+url) + 该 provider 现有的 config（编辑态）。 */
+interface CredDraft {
+  provider: string;
+  api_key: string;   // 编辑态留空 = 不改 key
+  api_url: string;
+  existing: LLMConfigFromDB[];
+}
+
 const ModelsPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => {
   const [list, setList] = useState<LLMConfigFromDB[] | null>(null);
-  const [editing, setEditing] = useState<ModelEditDraft | null>(null);
+  const [cred, setCred] = useState<CredDraft | null>(null);
   const refresh = () => getLLMConfigs().then((l) => setList(Array.isArray(l) ? l : [])).catch(() => setList([]));
   useEffect(() => { refresh(); }, []);
 
   const defaultId = settings.defaultLLMConfigId;
   const setDefault = (id?: string) => updateSettings({ defaultLLMConfigId: id });
 
+  // 一个 provider = 一份凭证；其下 config = 已启用的模型。
   const groups = useMemo(() => {
     if (!list) return null;
     const map = new Map<string, LLMConfigFromDB[]>();
     for (const c of list) {
       const k = c.provider || 'custom';
-      const arr = map.get(k) || [];
-      arr.push(c);
-      map.set(k, arr);
+      (map.get(k) || map.set(k, []).get(k)!).push(c);
     }
     return Array.from(map.entries()).map(([provider, configs]) => ({ provider, configs }));
   }, [list]);
+  const enabledCount = (list || []).filter((c) => c.enabled !== false).length;
 
   const onToggle = async (c: LLMConfigFromDB, key: 'enabled' | 'media_visible') => {
+    try { await updateLLMConfig(c.config_id, { [key]: !c[key] } as any); refresh(); }
+    catch (e: any) { window.alert(e?.message || '失败'); }
+  };
+  const onDeleteModel = async (c: LLMConfigFromDB) => {
+    try { await deleteLLMConfig(c.config_id); if (defaultId === c.config_id) setDefault(undefined); refresh(); }
+    catch (e: any) { window.alert(e?.message || '失败'); }
+  };
+  const onDeleteCred = async (provider: string, configs: LLMConfigFromDB[]) => {
+    if (!window.confirm(`移除 ${PROVIDER_LABELS[provider] || provider} 凭证？其下 ${configs.length} 个模型都会删除。`)) return;
     try {
-      await updateLLMConfig(c.config_id, { [key]: !c[key] } as any);
+      await Promise.all(configs.map((c) => deleteLLMConfig(c.config_id)));
+      if (configs.some((c) => c.config_id === defaultId)) setDefault(undefined);
       refresh();
     } catch (e: any) { window.alert(e?.message || '失败'); }
   };
-  const onDelete = async (c: LLMConfigFromDB) => {
-    if (!window.confirm(`删除模型「${c.name}」？`)) return;
-    try { await deleteLLMConfig(c.config_id); refresh(); } catch (e: any) { window.alert(e?.message || '失败'); }
-  };
-  const onEdit = async (c: LLMConfigFromDB) => {
+  const onManage = async (provider: string, configs: LLMConfigFromDB[]) => {
     let api_key = '';
-    try { api_key = await getLLMConfigApiKey(c.config_id); } catch {/* */}
-    setEditing({
-      config_id: c.config_id, provider: c.provider, name: c.name, shortname: c.shortname,
-      api_key, api_url: c.api_url, model: c.model, enabled: c.enabled !== false, media_visible: !!c.media_visible,
-    });
+    if (configs[0]) { try { api_key = await getLLMConfigApiKey(configs[0].config_id); } catch {/* */} }
+    setCred({ provider, api_key, api_url: configs[0]?.api_url || '', existing: configs });
   };
-  const onAdd = () => setEditing({
-    provider: 'openai', name: '', api_key: '', api_url: '', model: '', enabled: true, media_visible: false,
-  });
+  const onAddCred = () => setCred({ provider: 'openai', api_key: '', api_url: '', existing: [] });
 
   return (
     <>
       <Section
-        title="模型录入"
-        hint="管理 LLM 配置 — agent / 茶话 / 创作都从这里挑；点「设为默认」指定新会话默认用哪个"
-        trailing={<button className="v2-set-btn primary" onClick={onAdd}>＋ 添加</button>}
+        title="模型"
+        hint="以 API Key 为单位接入 provider —— 填一次 key，动态拉取它的可用模型，按需启用。agent / 茶话 / 创作都从这里挑模型。"
+        trailing={<button className="v2-set-btn primary" onClick={onAddCred}>＋ 接入</button>}
       >
         {!list && <div className="v2-set-empty">加载中…</div>}
-        {list && list.length === 0 && <div className="v2-set-empty">还没有模型配置 — 点右上角「添加」</div>}
+        {list && list.length === 0 && <div className="v2-set-empty">还没接入任何 provider — 点右上角「接入」，填 API Key 即可拉取模型</div>}
+        {groups && groups.length > 0 && (
+          <div className="v2-cred-count">{groups.length} 家 · {enabledCount} 款已启用</div>
+        )}
         {groups && groups.map((g) => (
-          <div key={g.provider} className="v2-set-group">
-            <div className="v2-set-group-hd">{PROVIDER_LABELS[g.provider] || g.provider}</div>
-            {g.configs.map((c) => {
-              const isDefault = defaultId === c.config_id;
-              const isEnabled = c.enabled !== false;
-              return (
-                <div key={c.config_id} className={`v2-set-card-row${isDefault ? ' is-default' : ''}`}>
-                  <div className="l">
-                    <div className="t">{c.shortname || c.name} <small>{c.model || '—'}</small></div>
-                    <div className="s">
-                      {isDefault && <span className="v2-pill solid">★ 默认</span>}
-                      {isEnabled ? <span className="v2-pill ok">启用</span> : <span className="v2-pill mute">停用</span>}
-                      {c.media_visible && <span className="v2-pill">创作可见</span>}
-                      {c.api_url && <span className="v2-pill mute" title={c.api_url}>自定义 URL</span>}
-                    </div>
-                  </div>
-                  <div className="r">
-                    {isDefault ? (
-                      <button className="v2-set-btn" onClick={() => setDefault(undefined)}>取消默认</button>
-                    ) : (
-                      <button className="v2-set-btn" onClick={() => setDefault(c.config_id)} disabled={!isEnabled} title={isEnabled ? '' : '停用的模型不能设为默认'}>设为默认</button>
-                    )}
-                    <button className="v2-set-btn" onClick={() => onToggle(c, 'enabled')}>{isEnabled ? '停用' : '启用'}</button>
-                    <button className="v2-set-btn" onClick={() => onToggle(c, 'media_visible')}>{c.media_visible ? '从创作隐藏' : '设为创作可见'}</button>
-                    <button className="v2-set-btn" onClick={() => void onEdit(c)}>编辑</button>
-                    <button className="v2-set-danger" onClick={() => void onDelete(c)}>删除</button>
-                  </div>
+          <div key={g.provider} className="v2-cred">
+            <div className="v2-cred-hd">
+              <span className="av" data-p={g.provider}>{(PROVIDER_LABELS[g.provider] || g.provider).charAt(0)}</span>
+              <div className="meta">
+                <div className="nm">{PROVIDER_LABELS[g.provider] || g.provider}</div>
+                <div className="sub">
+                  <span className="v2-pill ok">已连</span>
+                  <span className="cnt">{g.configs.length} 款</span>
+                  {g.configs[0]?.api_url && <span className="v2-pill mute" title={g.configs[0].api_url}>自定义 URL</span>}
                 </div>
-              );
-            })}
+              </div>
+              <div className="acts">
+                <button className="v2-set-btn" onClick={() => void onManage(g.provider, g.configs)}>管理模型</button>
+                <button className="v2-set-danger" onClick={() => void onDeleteCred(g.provider, g.configs)}>移除</button>
+              </div>
+            </div>
+            <div className="v2-cred-models">
+              {g.configs.map((c) => {
+                const isDefault = defaultId === c.config_id;
+                const isEnabled = c.enabled !== false;
+                return (
+                  <div key={c.config_id} className={`v2-cred-model${isDefault ? ' is-default' : ''}`}>
+                    <button
+                      className={`star${isDefault ? ' on' : ''}`}
+                      title={isDefault ? '当前默认（点击取消）' : isEnabled ? '设为新会话默认' : '停用的模型不能设为默认'}
+                      disabled={!isEnabled && !isDefault}
+                      onClick={() => setDefault(isDefault ? undefined : c.config_id)}
+                    >{isDefault ? '★' : '☆'}</button>
+                    <code className="mid" title={c.model}>{c.model || '—'}</code>
+                    <div className="grow" />
+                    <label className="tg" title="在创作面板可选（生图/视频）">
+                      <span>创作</span>
+                      <Switch checked={!!c.media_visible} onChange={() => void onToggle(c, 'media_visible')} />
+                    </label>
+                    <label className="tg" title="启用后可被 agent/会话选用">
+                      <span>启用</span>
+                      <Switch checked={isEnabled} onChange={() => void onToggle(c, 'enabled')} />
+                    </label>
+                    <button className="del" title="删除该模型" onClick={() => void onDeleteModel(c)}>✕</button>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         ))}
       </Section>
 
-      {editing && (
-        <ModelEditModal
-          draft={editing}
-          onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); refresh(); }}
+      {cred && (
+        <CredentialModal
+          draft={cred}
+          onClose={() => setCred(null)}
+          onSaved={() => { setCred(null); refresh(); }}
         />
       )}
     </>
   );
 };
 
-const ModelEditModal: React.FC<{
-  draft: ModelEditDraft;
+/* 接入/管理一份凭证：选 provider、填 key+url、动态拉取可用模型、勾选启用。
+ * 勾选 = 建/留 config（共享该 key）；取消勾选已有 = 删该 config。改了 key/url 则同步到该凭证全部模型。 */
+const CredentialModal: React.FC<{
+  draft: CredDraft;
   onClose: () => void;
   onSaved: () => void;
 }> = ({ draft, onClose, onSaved }) => {
-  const [d, setD] = useState<ModelEditDraft>(draft);
+  const editMode = draft.existing.length > 0;
+  const [provider, setProvider] = useState(draft.provider);
+  const [apiKey, setApiKey] = useState(draft.api_key);
+  const [apiUrl, setApiUrl] = useState(draft.api_url);
   const [providers, setProviders] = useState<SupportedProvider[] | null>(null);
-  const [discoverList, setDiscoverList] = useState<{ id: string; name: string }[] | null>(null);
-  const [discovering, setDiscovering] = useState(false);
+  const [models, setModels] = useState<{ id: string; name: string }[] | null>(null);
+  const [sel, setSel] = useState<Set<string>>(() => new Set(draft.existing.map((c) => c.model).filter((m): m is string => !!m)));
+  const [fetching, setFetching] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
 
   useEffect(() => { getSupportedProviders().then(setProviders).catch(() => setProviders([])); }, []);
   useEffect(() => {
@@ -639,114 +662,96 @@ const ModelEditModal: React.FC<{
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+  // 编辑态进来若已有 key，自动拉一次模型，省一次点击。
+  useEffect(() => { if (editMode && draft.api_key.trim()) void fetchModels(draft.api_key, draft.provider, draft.api_url); /* eslint-disable-next-line */ }, []);
 
-  const set = (patch: Partial<ModelEditDraft>) => setD((p) => ({ ...p, ...patch }));
-
-  const discover = async () => {
-    if (!d.api_key?.trim()) { window.alert('先填 API Key'); return; }
-    setDiscovering(true);
+  const fetchModels = async (key = apiKey, prov = provider, url = apiUrl) => {
+    if (!key.trim()) { setErr('先填 API Key'); return; }
+    setErr(''); setFetching(true);
     try {
-      const ms = await listAvailableModels(d.provider, d.api_key.trim(), d.api_url?.trim() || undefined);
-      setDiscoverList(ms);
-    } catch (e: any) {
-      window.alert(e?.message || '拉模型失败');
-    } finally { setDiscovering(false); }
+      const ms = await listAvailableModels(prov, key.trim(), url.trim() || undefined);
+      // 已启用的模型即便没在返回里也并进来，避免「拉取后旧模型消失」。
+      const ids = new Set(ms.map((m) => m.id));
+      const merged = [...ms, ...draft.existing.filter((c) => !!c.model && !ids.has(c.model)).map((c) => ({ id: c.model as string, name: c.model as string }))];
+      setModels(merged);
+    } catch (e: any) { setErr(e?.message || '拉取模型失败'); setModels([]); }
+    finally { setFetching(false); }
   };
+
+  const toggle = (id: string) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const save = async () => {
-    if (!d.name.trim()) { window.alert('名字不能空'); return; }
-    setBusy(true);
+    if (sel.size === 0) { setErr('至少选一个模型'); return; }
+    setBusy(true); setErr('');
+    const key = apiKey.trim();
+    const url = apiUrl.trim();
     try {
-      if (d.config_id) {
-        const updates: any = {
-          name: d.name.trim(), shortname: d.shortname,
-          api_url: d.api_url || undefined, model: d.model || undefined,
-          enabled: d.enabled, media_visible: d.media_visible,
-        };
-        if (d.api_key && d.api_key.trim()) updates.api_key = d.api_key.trim();
-        await updateLLMConfig(d.config_id, updates);
-      } else {
-        await createLLMConfig({
-          provider: d.provider, name: d.name.trim(), shortname: d.shortname,
-          api_key: d.api_key?.trim() || undefined,
-          api_url: d.api_url?.trim() || undefined,
-          model: d.model?.trim() || undefined,
-          enabled: d.enabled, media_visible: d.media_visible,
-        });
+      const existingByModel = new Map(draft.existing.map((c) => [c.model, c]));
+      // 1) 新勾选且无 config → 建。
+      for (const model of sel) {
+        const cur = existingByModel.get(model);
+        if (!cur) {
+          await createLLMConfig({ provider: provider as LLMConfigFromDB['provider'], name: model, shortname: model, model, api_key: key || undefined, api_url: url || undefined, enabled: true });
+        } else if (key || url !== (cur.api_url || '')) {
+          // 仍勾选但凭证(key/url)变了 → 同步。
+          await updateLLMConfig(cur.config_id, { api_key: key || undefined, api_url: url || undefined });
+        }
+      }
+      // 2) 原有但取消勾选 → 删。
+      for (const c of draft.existing) {
+        if (c.model && !sel.has(c.model)) await deleteLLMConfig(c.config_id);
       }
       onSaved();
-    } catch (e: any) {
-      window.alert(e?.message || '保存失败');
-    } finally { setBusy(false); }
+    } catch (e: any) { setErr(e?.message || '保存失败'); }
+    finally { setBusy(false); }
   };
+
+  const provTypes = (providers && providers.length > 0 ? providers.map((p) => p.provider_type) : ['openai', 'deepseek', 'anthropic', 'gemini', 'ollama', 'custom']);
 
   return (
     <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }} style={{ zIndex: 110 }}>
       <div className="v2-modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="v2-modal-hd">
-          <h3>{d.config_id ? '编辑模型' : '添加模型'}</h3>
+          <h3>{editMode ? `${PROVIDER_LABELS[provider] || provider} · 凭证与模型` : '接入 provider'}</h3>
           <button className="x" onClick={onClose}>✕</button>
         </div>
         <div className="v2-modal-body">
           <div className="v2-modal-sec">
             <div className="lab">Provider</div>
-            <select className="v2-set-select" style={{ width: '100%' }} value={d.provider} onChange={(e) => set({ provider: e.target.value as any })}>
-              {(providers && providers.length > 0
-                ? providers.map((p) => p.provider_type)
-                : ['openai', 'deepseek', 'anthropic', 'gemini', 'ollama', 'custom']
-              ).map((pt) => (
-                <option key={pt} value={pt}>{PROVIDER_LABELS[pt] || pt}</option>
-              ))}
+            <select className="v2-set-select" style={{ width: '100%' }} value={provider} disabled={editMode} onChange={(e) => { setProvider(e.target.value); setModels(null); }}>
+              {provTypes.map((pt) => <option key={pt} value={pt}>{PROVIDER_LABELS[pt] || pt}</option>)}
             </select>
           </div>
           <div className="v2-modal-sec">
-            <div className="lab">名字 (在 UI 显示)</div>
-            <input value={d.name} onChange={(e) => set({ name: e.target.value })} placeholder="如：GPT-4o · 工作号" />
+            <div className="lab">API Key {editMode && <span style={{ color: 'var(--c-ink-4)' }}>(不改就留空)</span>}</div>
+            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-…" />
           </div>
           <div className="v2-modal-sec">
-            <div className="lab">短名 (可选，chip 上显示)</div>
-            <input value={d.shortname || ''} onChange={(e) => set({ shortname: e.target.value })} placeholder="如：4o" />
-          </div>
-          <div className="v2-modal-sec">
-            <div className="lab">API Key {d.config_id && <span style={{ color: 'var(--c-ink-4)' }}>(不改就留空)</span>}</div>
-            <input type="password" value={d.api_key || ''} onChange={(e) => set({ api_key: e.target.value })} placeholder="sk-…" />
-          </div>
-          <div className="v2-modal-sec">
-            <div className="lab">API URL (可选 — 自托管 / proxy)</div>
-            <input value={d.api_url || ''} onChange={(e) => set({ api_url: e.target.value })} placeholder="https://api.openai.com/v1" />
+            <div className="lab">Base URL <span style={{ color: 'var(--c-ink-4)' }}>(可选 — 自托管 / proxy)</span></div>
+            <input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://api.openai.com/v1" />
           </div>
           <div className="v2-modal-sec">
             <div className="lab" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span>模型</span>
-              <button className="v2-set-btn" style={{ marginLeft: 'auto' }} onClick={() => void discover()} disabled={discovering}>
-                {discovering ? '拉取中…' : '从 API 列出'}
+              <span>可用模型 {sel.size > 0 && <span style={{ color: 'var(--c-ink-4)' }}>· 选了 {sel.size}</span>}</span>
+              <button className="v2-set-btn" style={{ marginLeft: 'auto' }} onClick={() => void fetchModels()} disabled={fetching}>
+                {fetching ? '拉取中…' : models ? '重新拉取' : '拉取模型'}
               </button>
             </div>
-            <input value={d.model || ''} onChange={(e) => set({ model: e.target.value })} placeholder="如：gpt-4o" />
-            {discoverList && discoverList.length > 0 && (
-              <div className="v2-ctxpop-list" style={{ marginTop: 8, maxHeight: 200, overflowY: 'auto' }}>
-                {discoverList.map((m) => (
-                  <div
-                    key={m.id}
-                    className={`v2-ctxpop-item${d.model === m.id ? ' active' : ''}`}
-                    onClick={() => set({ model: m.id })}
-                  >
-                    <div className="nm">{m.name}<small>{m.id}</small></div>
-                  </div>
+            {!models && !fetching && <div className="v2-set-empty" style={{ margin: 0 }}>填好 Key 后点「拉取模型」从 {PROVIDER_LABELS[provider] || provider} 动态获取</div>}
+            {models && models.length === 0 && !fetching && <div className="v2-set-empty" style={{ margin: 0 }}>没拉到模型 — 检查 Key / URL</div>}
+            {models && models.length > 0 && (
+              <div className="v2-cred-pick">
+                {models.map((m) => (
+                  <label key={m.id} className={`v2-cred-pick-row${sel.has(m.id) ? ' on' : ''}`}>
+                    <input type="checkbox" checked={sel.has(m.id)} onChange={() => toggle(m.id)} />
+                    <code>{m.id}</code>
+                    {m.name && m.name !== m.id && <span className="nm">{m.name}</span>}
+                  </label>
                 ))}
               </div>
             )}
           </div>
-          <div className="v2-modal-sec">
-            <div className="v2-set-row" style={{ padding: 0 }}>
-              <div className="v2-set-row-l"><div className="lab">启用</div></div>
-              <Switch checked={d.enabled} onChange={(v) => set({ enabled: v })} />
-            </div>
-            <div className="v2-set-row" style={{ padding: 0 }}>
-              <div className="v2-set-row-l"><div className="lab">在创作面板可选</div><div className="sub">用于生图/视频；通常仅给媒体能力的模型开</div></div>
-              <Switch checked={!!d.media_visible} onChange={(v) => set({ media_visible: v })} />
-            </div>
-          </div>
+          {err && <div className="v2-set-empty" style={{ color: 'var(--c-danger)', margin: 0 }}>{err}</div>}
         </div>
         <div className="v2-modal-foot">
           <button className="v2-mbtn" onClick={onClose} disabled={busy}>取消</button>

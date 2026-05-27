@@ -10,22 +10,29 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeHighlight from 'rehype-highlight';
 import { basename, PERM_META, type TranscriptMessage, type SlashCommand, type SessionSummary, type PermissionRequest, type QuestionRequest, type TabGroup as TabGroupT } from './services/localAgent';
 import type { LocalAgentState, LayoutNode, DropSide, Tab } from './useLocalAgent';
 import { TAB_COLORS } from './useLocalAgent';
-import { IconSend, IconAgentCode, IconPlus, IconChevron, IconTrash } from './icons';
+import { IconSend, IconAgentCode, IconPlus, IconChevron, IconTrash, IconSkill } from './icons';
+import { CodeBlock, PreBlock, mdRehypePlugins } from './codeBlock';
 
-const MD: React.FC<{ text: string }> = React.memo(({ text }) => (
+// 公共组件：链接新窗口打开、宽表格局部横滚。
+const MD_COMMON = {
+  a: ({ node: _n, ...p }: any) => <a {...p} target="_blank" rel="noreferrer noopener" />,
+  table: ({ node: _n, ...p }: any) => <div className="v2-la-xscroll"><table {...p} /></div>,
+};
+// 定稿态：用 Shiki 高亮代码。
+const MD_RICH = { ...MD_COMMON, code: CodeBlock, pre: PreBlock } as React.ComponentProps<typeof ReactMarkdown>['components'];
+// 流式态：代码走原生 <pre>，不上 Shiki —— 否则每个 rAF tick 都对增长中的代码重新高亮，
+// CPU/内存暴涨直接把渲染进程拖崩（黑屏）。定稿后再用 MD_RICH 高亮一次。
+const MD_PLAIN = { ...MD_COMMON } as React.ComponentProps<typeof ReactMarkdown>['components'];
+
+const MD: React.FC<{ text: string; live?: boolean }> = React.memo(({ text, live }) => (
   <div className="v2-md">
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
-      rehypePlugins={[rehypeHighlight]}
-      components={{
-        a: ({ node: _n, ...p }) => <a {...p} target="_blank" rel="noreferrer noopener" />,
-        // 宽表格在自己的容器里横向滚动，不外溢成页面水平条。
-        table: ({ node: _n, ...p }) => <div className="v2-la-xscroll"><table {...p} /></div>,
-      }}
+      rehypePlugins={live ? [] : mdRehypePlugins}
+      components={live ? MD_PLAIN : MD_RICH}
     >{text}</ReactMarkdown>
   </div>
 ));
@@ -213,11 +220,6 @@ export const LocalAgentTabs: React.FC<{ la: LocalAgentState }> = ({ la }) => {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [dropAt, setDropAt] = useState<string | null>(null);   // 分组重排：悬停的锚点（cwd 或 'end'）
   const openMenu = (e: React.MouseEvent, kind: 'tab' | 'group', id: string) => setMenu({ x: e.clientX, y: e.clientY, kind, id });
-  // 点分组（非折叠按钮）→ 显示该组的分屏：激活组里某个已平铺的窗格，没有则激活首个成员。
-  const activateGroup = (members: Tab[]) => {
-    const inLay = members.find((m) => la.gridCwds.includes(m.cwd));
-    la.setActiveTab((inLay || members[0]).cwd);
-  };
 
   // 顶栏重排放置区：接收 'text/group'（整组）或 'text/cwd'（单标签），移到 anchor 之前（'end'=末尾）。
   const groupDrop = (anchor: string): React.HTMLAttributes<HTMLDivElement> => ({
@@ -240,15 +242,19 @@ export const LocalAgentTabs: React.FC<{ la: LocalAgentState }> = ({ la }) => {
 
   // 把已聚拢的标签按 groupId 折成渲染单元：连续同组 → 一个分组块，否则单标签。
   type Unit = { kind: 'tab'; tab: Tab } | { kind: 'group'; group: TabGroupT; members: Tab[] };
+  // 每个分组只渲染一个单元（在其首个成员的位置），把所有成员聚到一起——
+  // 即便 tabs 里成员暂不连续也不会出现重复 key / 重复分组块。
   const units: Unit[] = [];
-  for (let i = 0; i < la.tabs.length;) {
-    const t = la.tabs[i];
+  const emittedGroups = new Set<string>();
+  for (const t of la.tabs) {
     const g = t.groupId ? la.groups.find((x) => x.id === t.groupId) : undefined;
     if (t.groupId && g) {
-      const members: Tab[] = [];
-      while (i < la.tabs.length && la.tabs[i].groupId === t.groupId) { members.push(la.tabs[i]); i++; }
-      units.push({ kind: 'group', group: g, members });
-    } else { units.push({ kind: 'tab', tab: t }); i++; }
+      if (emittedGroups.has(g.id)) continue;   // 该分组已渲染过 → 跳过后续散落成员
+      emittedGroups.add(g.id);
+      units.push({ kind: 'group', group: g, members: la.tabs.filter((x) => x.groupId === g.id) });
+    } else {
+      units.push({ kind: 'tab', tab: t });
+    }
   }
 
   return (
@@ -266,11 +272,10 @@ export const LocalAgentTabs: React.FC<{ la: LocalAgentState }> = ({ la }) => {
             className="v2-la-group-chip"
             draggable
             onDragStart={(e) => { e.dataTransfer.setData('text/group', u.group.id); e.dataTransfer.effectAllowed = 'move'; }}
-            onClick={() => activateGroup(u.members)}
+            onClick={() => la.toggleGroup(u.group.id)}
             onContextMenu={(e) => { e.preventDefault(); openMenu(e, 'group', u.group.id); }}
-            title="点击显示该组分屏 · 左侧按钮折叠 · 拖动重排 · 右键更多"
+            title="点击折叠/展开组内标签 · 拖动重排 · 右键更多"
           >
-            <button className="caret" title={u.group.collapsed ? '展开' : '折叠'} onClick={(e) => { e.stopPropagation(); la.toggleGroup(u.group.id); }}>{u.group.collapsed ? '▸' : '▾'}</button>
             <span className="gdot" />
             {renaming === u.group.id ? (
               <input
@@ -508,8 +513,9 @@ const LocalAgentPane: React.FC<{ la: LocalAgentState; cwd: string; inGrid?: bool
   }, [sessionId, loadingSession, cwd, la.activeCwd, la.current?.live]);
   useEffect(() => {
     const ta = taRef.current; if (!ta) return;
-    if (inGrid) { ta.style.height = ''; return; }   // 分屏：固定单行，高度交给 CSS
-    ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+    // 自适应高度：换行时撑高，显示每一行。分屏窗格较小，封顶更低。
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(ta.scrollHeight, inGrid ? 120 : 200)}px`;
   }, [draft, inGrid]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -533,7 +539,6 @@ const LocalAgentPane: React.FC<{ la: LocalAgentState; cwd: string; inGrid?: bool
   // 焦点高亮/染色统一用「所属分组」的颜色（不再每个 session 一个色）。
   const group = tab.groupId ? la.groups.find((g) => g.id === tab.groupId) : undefined;
   const paneColor = group?.color ?? tab.color;
-  const lastIsAgent = turns.length > 0 && turns[turns.length - 1].role === 'agent';
 
   // 拖到本窗格哪条边（最近边），就从那一侧分裂；拖的是另一个窗格则=移动重排。
   const computeSide = (e: React.DragEvent): DropSide => {
@@ -588,11 +593,11 @@ const LocalAgentPane: React.FC<{ la: LocalAgentState; cwd: string; inGrid?: bool
           {!loadingSession && turns.map((t, i) => (
             t.role === 'user'
               ? <UserTurn key={i} text={t.text} />
-              : <AgentTurn key={i} blocks={t.blocks} provider={la.provider} streaming={t.streaming} />
+              : <AgentTurn key={i} blocks={t.blocks} provider={la.provider} streaming={t.streaming} working={i === turns.length - 1 && running && !perm && !question} />
           ))}
-          {/* 还没吐字但回合在跑：给个带头像的「思考中」轮，定在左侧，不要孤零零的滚动行。 */}
-          {!loadingSession && running && !livePreview && !perm && !question && !lastIsAgent && (
-            <AgentTurn blocks={[]} provider={la.provider} streaming pendingLabel={status || '正在处理…'} />
+          {/* 回合在跑但还没有 agent 轮（刚发出/工具前）：给个带头像的「寒暄」轮，定在左侧。 */}
+          {!loadingSession && running && !perm && !question && (turns.length === 0 || turns[turns.length - 1].role === 'user') && (
+            <AgentTurn blocks={[]} provider={la.provider} working />
           )}
           {!loadingSession && !running && status && <div className="v2-la-note err">{status}</div>}
         </div>
@@ -621,7 +626,7 @@ const LocalAgentPane: React.FC<{ la: LocalAgentState; cwd: string; inGrid?: bool
         )}
         <div className={`v2-composer${inGrid ? ' v2-la-slim' : ''}`} data-mode="chat">
           <div className="v2-box">
-            {inGrid && <span className="v2-la-prompt" aria-hidden>›</span>}
+            {inGrid && <span className="v2-la-prompt" aria-hidden><IconSkill /></span>}
             {slashOpen && (
               <div className="v2-la-slash">
                 <div className="v2-la-slash-hd">命令 · ↑↓ 选择 · ⏎/Tab 插入 · esc 关闭</div>
@@ -648,9 +653,10 @@ const LocalAgentPane: React.FC<{ la: LocalAgentState; cwd: string; inGrid?: bool
             )}
             <textarea
               ref={taRef}
+              rows={1}
               placeholder={
                 !current?.live ? `${current?.label || la.provider} 暂不支持对话`
-                  : sessionId ? '续聊本会话…（/ 唤出命令 · Tab 切权限模式）' : '描述你的任务…（/ 唤出命令 · Tab 切权限模式）'
+                  : sessionId ? '' : '描述你的任务…（/ 唤出命令 · Tab 切权限模式）'
               }
               value={draft}
               disabled={!current?.live}
@@ -826,7 +832,7 @@ const UserTurn: React.FC<{ text: string }> = ({ text }) => (
 const TURN_CAP = 30;
 const isSubagent = (b: AgentBlock) => b.k === 'tool' && ((b.name || '').toLowerCase() === 'task' || (b.children?.length ?? 0) > 0);
 
-const AgentTurn: React.FC<{ blocks: AgentBlock[]; provider: string; streaming?: boolean; pendingLabel?: string }> = ({ blocks, provider, streaming, pendingLabel }) => {
+const AgentTurn: React.FC<{ blocks: AgentBlock[]; provider: string; streaming?: boolean; working?: boolean }> = ({ blocks, provider, streaming, working }) => {
   const [showAll, setShowAll] = useState(false);
   const overflow = blocks.length - TURN_CAP;
   const shown = (showAll || overflow <= 0) ? blocks : blocks.slice(blocks.length - TURN_CAP);
@@ -853,17 +859,39 @@ const AgentTurn: React.FC<{ blocks: AgentBlock[]; provider: string; streaming?: 
                 : <SubagentCard key={k} b={it.row[0] as Extract<Block, { k: 'tool' }>} />)
             : <AgentBlockView key={k} b={it.one} live={streaming && k === items.length - 1} />
         ))}
-        {(pendingLabel || (streaming && blocks.length === 0)) && <ThinkingPulse label={pendingLabel} />}
+        {/* 执行中始终在底部显示「寒暄」状态行：token 上下行动画 + 翻动的小词 + 计时（类 Claude CLI）。 */}
+        {working && <RunningTicker />}
       </div>
     </div>
   );
 };
 
-// Calm, single-line pending indicator — quiet italic text that breathes (opacity
-// only, no bounce), matching the main chat's "正在思考…" rather than dancing dots.
-const ThinkingPulse: React.FC<{ label?: string }> = ({ label }) => (
-  <div className="v2-la-pulse">{label || '正在处理…'}</div>
-);
+// 执行中状态行（仿 Claude CLI 的循环 gerund）：左侧 token「上下行」律动条 = 还在收发，
+// 中间翻动的小词（换词即「还活着」的证据，几个带 落墨/誊写 的纸墨调性），右侧计时。
+const TICKER_WORDS = [
+  '琢磨中', '推敲中', '盘算中', '酝酿中', '斟酌中', '梳理中', '构思中', '掂量中',
+  '捣鼓中', '运筹中', '码字中', '查阅中', '推演中', '打磨中', '誊写中', '落墨中',
+];
+function fmtElapsed(s: number): string {
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+const RunningTicker: React.FC = () => {
+  const [idx, setIdx] = useState(() => Math.floor(Math.random() * TICKER_WORDS.length));
+  const [elapsed, setElapsed] = useState(0);
+  const startRef = useRef(Date.now());
+  useEffect(() => {
+    const word = window.setInterval(() => setIdx((x) => (x + 1) % TICKER_WORDS.length), 2600);
+    const clock = window.setInterval(() => setElapsed(Math.round((Date.now() - startRef.current) / 1000)), 1000);
+    return () => { window.clearInterval(word); window.clearInterval(clock); };
+  }, []);
+  return (
+    <div className="v2-la-ticker" aria-live="polite">
+      <span className="tok" aria-hidden><i /><i /><i /><i /></span>
+      <span className="w" key={idx}>{TICKER_WORDS[idx]}</span>
+      {elapsed > 0 && <span className="m">{fmtElapsed(elapsed)}</span>}
+    </div>
+  );
+};
 
 // `live` = this is the actively-streaming tail block → show a blinking terminal
 // caret so the stream always reads as alive (and visually distinct) even mid-token
@@ -877,7 +905,7 @@ const AgentBlockView: React.FC<{ b: AgentBlock; live?: boolean }> = ({ b, live }
       </details>
     );
   }
-  if (b.k === 'text') return <div className={`v2-la-prose${live ? ' live' : ''}`}><MD text={b.text} /></div>;
+  if (b.k === 'text') return <div className={`v2-la-prose${live ? ' live' : ''}`}><MD text={b.text} live={live} /></div>;
   return <ToolCard b={b} />;
 };
 

@@ -460,7 +460,8 @@ export async function truncateMessagesFrom(session_id: string, message_id: strin
   const url = `${API_BASE}/sessions/${encodeURIComponent(session_id)}/messages?from=${encodeURIComponent(message_id)}&inclusive=true`;
   const response = await authFetch(url, { method: 'DELETE' });
   if (!response.ok) {
-    throw new Error(`Failed to truncate messages: ${response.statusText}`);
+    const body = await response.text().catch(() => '');
+    throw new Error(`Failed to truncate messages: ${response.status} ${body.slice(0, 200)}`);
   }
 }
 

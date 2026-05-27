@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   localAgent, loadProjects, addProject as addProjectStore, removeProject as removeProjectStore,
-  loadTabsState, saveTabsState, PERM_MODES,
+  loadTabsState, saveTabsState, loadPermBySession, savePermBySession, PERM_MODES,
   type DetectedProvider, type ProviderId, type SessionSummary, type TranscriptMessage, type LocalProject,
   type PermMode, type SlashCommand, type PermissionRequest, type PermissionDecision, type QuestionRequest,
   type TabGroup,
@@ -144,12 +144,12 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   const [boot] = useState(() => {
     const { tabs: s, activeCwd: a, groups: g, layout: l } = loadTabsState();
     const gidSet = new Set(g.map((x) => x.id));
-    const t: Tab[] = s.map((x) => ({ ...emptyTab(x.cwd, x.sessionId, x.title), groupId: (x.groupId && gidSet.has(x.groupId)) ? x.groupId : null, pendingLoad: !!x.sessionId }));
+    const t: Tab[] = s.map((x) => ({ ...emptyTab(x.cwd, x.sessionId, x.title), groupId: (x.groupId && gidSet.has(x.groupId)) ? x.groupId : null, permMode: (x.permMode && PERM_MODES.includes(x.permMode)) ? x.permMode : 'default', pendingLoad: !!x.sessionId }));
     const valid = new Set(t.map((x) => x.cwd));
     let lay: LayoutNode | null = null;
     if (l) { const pruned = pruneLayout(l as LayoutNode, valid); if (pruned && pruned.kind === 'split') lay = pruned; }
     const active = a && t.some((x) => x.cwd === a) ? a : (t.length ? t[t.length - 1].cwd : null);
-    return { tabs: t, activeCwd: active, groups: g, layout: lay };
+    return { tabs: clusterTabs(t), activeCwd: active, groups: g, layout: lay };
   });
 
   // 多标签：每个 cwd 一个标签；activeCwd 是当前激活标签。
@@ -161,6 +161,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   // cwd → 本回合的 session_id（init/result 捕获，回合结束写回标签）。常驻会话按 cwd 路由事件。
   const pendingByCwd = useRef<Map<string, string>>(new Map());
   const detectedRef = useRef(false);
+  const permMemRef = useRef<Record<string, PermMode>>(loadPermBySession());   // sessionId → 上次发送时的权限级别
   // 事件处理函数放 ref，订阅一次也总调用最新闭包（避免 provider/projects 变了仍用旧的）。
   const handleEventRef = useRef<(cwd: string, ev: any) => void>(() => {});
 
@@ -356,14 +357,20 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
 
   const openSession = useCallback(async (cwd: string, sid: string, title: string) => {
     upsertTab(cwd, sid, title);
-    patchTab(cwd, { loading: true });
+    const pm = permMemRef.current[sid] || 'default';
+    // 回显：默认切到该会话上次发送时记住的权限级别。
+    patchTab(cwd, { loading: true, permMode: pm });
+    // 预热：立刻起常驻进程（含 resume 读盘）；冷启在「载入会话…」期间付掉，发送时已暖。
+    if (current?.live) void localAgent.warm({ provider, cwd, sessionId: sid, permMode: pm });
     const { messages: msgs } = await localAgent.readSession(provider, cwd, sid);
     patchTab(cwd, { messages: msgs, loading: false });
-  }, [provider, upsertTab, patchTab]);
+  }, [provider, current, upsertTab, patchTab]);
 
   const newSession = useCallback((cwd: string) => {
     upsertTab(cwd, null, '新会话');
-  }, [upsertTab]);
+    // 预热新会话：先把进程起好，首条消息即暖。
+    if (current?.live) void localAgent.warm({ provider, cwd, sessionId: null, permMode: 'default' });
+  }, [provider, current, upsertTab]);
 
   const closeTab = useCallback((cwd: string) => {
     dropSmooth(cwd);
@@ -384,7 +391,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (firstSaveRef.current) { firstSaveRef.current = false; return; }
     const liveGroupIds = new Set(tabs.map((t) => t.groupId).filter(Boolean));
     saveTabsState(
-      tabs.map((t) => ({ cwd: t.cwd, sessionId: t.sessionId, title: t.title, groupId: t.groupId ?? null })),
+      tabs.map((t) => ({ cwd: t.cwd, sessionId: t.sessionId, title: t.title, groupId: t.groupId ?? null, permMode: t.permMode })),
       activeCwd,
       groups.filter((g) => liveGroupIds.has(g.id)),
       layout,
@@ -496,7 +503,8 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (t === 'system' && ev.subtype === 'init') {
       if (parentId) return;
       if (ev.session_id) pendingByCwd.current.set(cwd, ev.session_id);
-      patchTab(cwd, { status: 'Agent 处理中…' });
+      // 预热（用户还没发送）时 init 也会来——此时 running=false，别显示「处理中」。
+      patchTab(cwd, (tab) => (tab.running ? { status: 'Agent 处理中…' } : {}));
       return;
     }
     if (t === 'stream_event') {
@@ -558,10 +566,13 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     const pending = pendingByCwd.current.get(cwd) || null;
     patchTab(cwd, (tab) => {
       if (!tab.running && tab.liveMsgs.length === 0 && !tab.livePreview) return {}; // 已收尾，避免重复
+      const sid = pending || tab.sessionId;
+      // 记住这个会话「最后一次发送时的权限级别」，重开历史会话时默认切回它。
+      if (sid) { permMemRef.current[sid] = tab.permMode; savePermBySession(permMemRef.current); }
       return {
         messages: [...tab.messages, ...tab.liveMsgs],
         liveMsgs: [], livePreview: '', running: false, perm: null, question: null,
-        sessionId: pending || tab.sessionId,
+        sessionId: sid,
         status: errStatus || '',
       };
     });

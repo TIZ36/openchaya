@@ -125,7 +125,7 @@ const KnowledgeView: React.FC = () => {
         {conn === 'down' && <Down err={connErr} onRetry={probe} />}
         {conn === 'probing' && <KbEmpty title="连接中…" />}
         {conn === 'ok' && tab === 'memories' && <MemoriesTab domain={domain} />}
-        {conn === 'ok' && tab === 'documents' && <DocumentsTab domain={domain} />}
+        {conn === 'ok' && tab === 'documents' && <DocumentsTab domain={domain} domains={domains} />}
         {conn === 'ok' && tab === 'search' && <SearchTab domain={domain} />}
       </div>
 
@@ -280,7 +280,7 @@ const MemoriesTab: React.FC<{ domain: string | null }> = ({ domain }) => {
       {loading && !list && <KbEmpty title="加载中…" />}
       {list && list.length === 0 && <KbEmpty title="还没有记忆" hint="点右上「＋ 新记忆」加一条，或在文档里 ingest。" />}
       {list && list.length > 0 && (
-        <div className="v2-kb-list fixed">
+        <div className="v2-kb-list">
           {list.map((m) => (
             <MemoryRow key={m.id} m={m} onPin={() => void onPin(m)} onEdit={() => setEditing(m)} onDelete={() => void onDelete(m)} />
           ))}
@@ -304,8 +304,8 @@ const MemoryRow: React.FC<{ m: Memory; onPin: () => void; onEdit: () => void; on
     <div className="hd">
       <span className={`v2-pill ${KIND_TONES[m.kind]}`}>{KIND_LABELS[m.kind]}</span>
       {m.scope && m.scope !== 'workspace' && <span className="v2-pill mute">scope: {m.scope}</span>}
-      {m.tags?.slice(0, 4).map((t) => <span key={t} className="v2-pill mute">#{t}</span>)}
-      {m.tags && m.tags.length > 4 && <span className="v2-pill mute">+{m.tags.length - 4}</span>}
+      {m.tags?.slice(0, 3).map((t) => <span key={t} className="v2-pill mute">#{t}</span>)}
+      {m.tags && m.tags.length > 3 && <span className="v2-pill mute" title={m.tags.slice(3).map((t) => `#${t}`).join(' ')}>+{m.tags.length - 3}</span>}
       <span className="grow" />
       <div className="acts">
         <button className={`iconbtn${m.pinned ? ' on' : ''}`} title={m.pinned ? '取消置顶' : '置顶'} onClick={onPin}><IconPin filled={m.pinned} /></button>
@@ -313,7 +313,7 @@ const MemoryRow: React.FC<{ m: Memory; onPin: () => void; onEdit: () => void; on
         <button className="iconbtn danger" title="删除" onClick={onDelete}><IconTrash /></button>
       </div>
     </div>
-    <div className="body">{m.content}</div>
+    <ExpandableBody text={m.content} lines={5} />
     <div className="ft">
       <span>{new Date(m.created_at).toLocaleString('zh-CN', { hour12: false })}</span>
       <span>by {m.author_agent || 'unknown'}</span>
@@ -424,10 +424,11 @@ function docDomains(d: Document): string[] {
   return [];
 }
 
-const DocumentsTab: React.FC<{ domain: string | null }> = ({ domain }) => {
+const DocumentsTab: React.FC<{ domain: string | null; domains: Tag[] }> = ({ domain, domains }) => {
   const [list, setList] = useState<Document[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [editingDoc, setEditingDoc] = useState<Document | null>(null);
 
   const load = useCallback(async () => {
     try { const r = await smartnoteDocuments.list(); setList(r.documents || []); }
@@ -471,6 +472,7 @@ const DocumentsTab: React.FC<{ domain: string | null }> = ({ domain }) => {
                   : <span className="v2-pill warn">待切块</span>}
                 {docDomains(d).map((dm) => <span key={dm} className="v2-pill soft">@{dm}</span>)}
                 <span className="grow" />
+                <button className="iconbtn" title="配置知识域" onClick={() => setEditingDoc(d)}><IconEdit /></button>
                 {!d.ingested_at && (
                   <button className="v2-set-btn" disabled={busy === d.id} onClick={() => void onIngest(d)}>
                     {busy === d.id ? '处理中…' : '切块入库'}
@@ -490,7 +492,95 @@ const DocumentsTab: React.FC<{ domain: string | null }> = ({ domain }) => {
       {uploadOpen && (
         <DocumentCreateModal domain={domain} onClose={() => setUploadOpen(false)} onCreated={() => { setUploadOpen(false); void load(); }} />
       )}
+
+      {editingDoc && (
+        <DocumentDomainsModal
+          doc={editingDoc}
+          domains={domains}
+          onClose={() => setEditingDoc(null)}
+          onSaved={() => { setEditingDoc(null); void load(); }}
+        />
+      )}
     </>
+  );
+};
+
+/** Assign/unassign knowledge domains on an existing document. Patching
+ *  metadata.domains re-tags the doc's chunks in place (cloud-side), so an old
+ *  already-ingested book becomes reachable via `@域` without re-chunking. */
+const DocumentDomainsModal: React.FC<{
+  doc: Document;
+  domains: Tag[];
+  onClose: () => void;
+  onSaved: () => void;
+}> = ({ doc, domains, onClose, onSaved }) => {
+  const [picked, setPicked] = useState<string[]>(docDomains(doc));
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const toggle = (name: string) =>
+    setPicked((p) => p.includes(name) ? p.filter((x) => x !== name) : [...p, name]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      // metadata REPLACES the stored object → merge, only overriding domains.
+      const meta: Record<string, unknown> = { ...(doc.metadata || {}) };
+      if (picked.length) meta.domains = picked; else delete meta.domains;
+      delete (meta as any).domain; // collapse legacy single-domain field into domains
+      await smartnoteDocuments.patch(doc.id, { metadata: meta });
+      onSaved();
+    } catch (e: any) { window.alert(e?.message || '保存失败'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="v2-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="v2-modal-hd">
+          <h3>配置知识域</h3>
+          <button className="x" onClick={onClose}>✕</button>
+        </div>
+        <div className="v2-modal-body">
+          <div className="v2-modal-sec">
+            <div className="lab">文档</div>
+            <div className="v2-modal-note" style={{ marginTop: 2 }}>{doc.name}</div>
+          </div>
+          <div className="v2-modal-sec">
+            <div className="lab">归属域（可多选）</div>
+            {domains.length === 0 ? (
+              <div className="v2-modal-note">还没有知识域。先在上方「＋ 域」新建一个。</div>
+            ) : (
+              <div className="v2-kb-domains" style={{ padding: 0, border: 'none' }}>
+                {domains.map((d) => (
+                  <button
+                    key={d.name}
+                    className={`v2-kb-dom${picked.includes(d.name) ? ' on' : ''}`}
+                    onClick={() => toggle(d.name)}
+                  >
+                    <span className="dot" style={{ background: domainColor(d) }} />{d.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="v2-modal-note">
+              {doc.ingested_at
+                ? <>保存后，已切块的内容会即时重新打上所选域标签，<code>@域</code> 立即可检索到——无需重新切块。</>
+                : <>这份文档还没切块。配置好域后点「切块入库」，切出的块会带上所选域标签。</>}
+            </div>
+          </div>
+        </div>
+        <div className="v2-modal-foot">
+          <button className="v2-mbtn" onClick={onClose} disabled={busy}>取消</button>
+          <button className="v2-mbtn primary" onClick={() => void save()} disabled={busy}>{busy ? '保存中…' : '保存'}</button>
+        </div>
+      </div>
+    </div>
   );
 };
 
@@ -637,19 +727,23 @@ const SearchTab: React.FC<{ domain: string | null }> = ({ domain }) => {
       {!results && <KbEmpty title="还没有检索" hint="上面输入要找的内容，Enter 提交。" />}
       {results && results.length === 0 && <KbEmpty title="没找到" hint="换个关键词或加大 topK。" />}
       {results && results.length > 0 && (
-        <div className="v2-kb-list fixed">
+        <div className="v2-kb-list">
           {results.map((r) => (
             <div key={r.id} className="v2-kb-card">
               <div className="hd">
                 <span className={`v2-pill ${KIND_TONES[r.kind as MemoryKind] || 'mute'}`}>{KIND_LABELS[r.kind as MemoryKind] || r.kind}</span>
-                <span className="v2-pill mute">分 {r.score.toFixed(3)}</span>
-                {r.vector_score > 0 && <span className="v2-pill mute">向量 {r.vector_score.toFixed(2)}</span>}
-                {r.lexical_score > 0 && <span className="v2-pill mute">关键词 {r.lexical_score.toFixed(2)}</span>}
                 {r.pinned && <span className="v2-pill ok">★ 置顶</span>}
                 {r.tags?.slice(0, 3).map((t) => <span key={t} className="v2-pill mute">#{t}</span>)}
+                {r.tags && r.tags.length > 3 && <span className="v2-pill mute" title={r.tags.slice(3).map((t) => `#${t}`).join(' ')}>+{r.tags.length - 3}</span>}
               </div>
-              <div className="body">{r.content}</div>
+              <ExpandableBody text={r.content} lines={4} />
               <div className="ft">
+                <span className="v2-kb-score">
+                  {r.score.toFixed(2)}
+                  {r.vector_score > 0 && ` · 向量 ${r.vector_score.toFixed(2)}`}
+                  {r.lexical_score > 0 && ` · 词 ${r.lexical_score.toFixed(2)}`}
+                </span>
+                <span className="grow" />
                 <span>by {r.author_agent || 'unknown'}</span>
                 <span>{new Date(r.created_at).toLocaleString('zh-CN', { hour12: false })}</span>
               </div>
@@ -662,6 +756,42 @@ const SearchTab: React.FC<{ domain: string | null }> = ({ domain }) => {
 };
 
 /* ============ small bits ============ */
+
+/** Card body that clamps long text to `lines`, fading the cut, and reveals an
+ *  inline 展开/收起 only when the content actually overflows. Cards grow to fit
+ *  short content, so nothing is hard-cut or pushed past the viewport. */
+const ExpandableBody: React.FC<{ text: string; lines?: number }> = ({ text, lines = 5 }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || expanded) return; // while expanded keep the toggle; remeasure on collapse
+    const check = () => setOverflowing(el.scrollHeight - el.clientHeight > 2);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [text, expanded]);
+
+  const clamped = !expanded;
+  return (
+    <>
+      <div
+        className={`v2-kb-body-wrap${clamped ? ' clamped' : ''}${clamped && overflowing ? ' has-more' : ''}`}
+        style={{ ['--kb-clamp' as any]: lines }}
+      >
+        <div ref={ref} className="body">{text}</div>
+      </div>
+      {overflowing && (
+        <button className="v2-kb-expand" onClick={() => setExpanded((e) => !e)}>
+          {expanded ? '收起' : '展开'}
+        </button>
+      )}
+    </>
+  );
+};
 
 const ConnDot: React.FC<{ state: ConnState }> = ({ state }) => {
   const color =

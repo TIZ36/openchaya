@@ -5,9 +5,22 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// react-shiki statically imports its own dist/style.css (uses `@layer base`,
+// which Tailwind v3's PostCSS rejects without an in-file `@tailwind base`). We
+// render with addDefaultStyles={false} and style code blocks ourselves, so
+// blank out that stylesheet to keep it out of the Tailwind pipeline.
+const stripReactShikiCss = {
+  name: 'strip-react-shiki-css',
+  enforce: 'pre' as const,
+  load(id: string) {
+    if (id.includes('react-shiki') && id.endsWith('style.css')) return '';
+    return null;
+  },
+};
+
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [stripReactShikiCss, react()],
   base: './',
   server: {
     host: '0.0.0.0',

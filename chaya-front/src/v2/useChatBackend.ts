@@ -90,6 +90,9 @@ export function useChatBackend(typewriter: TypewriterConfig = DEFAULT_TYPEWRITER
   const reconnectAttempt = useRef(0);
   const reconnectTimer = useRef<number | null>(null);
   const activeSidRef = useRef<string | null>(null);
+  /** 始终镜像最新 messages，供事件回调同步读取（setS 的 updater 是延迟执行的，
+   *  不能在调用处立刻读到 updater 内赋的值——回退/编辑就栽在这个坑上）。 */
+  const messagesRef = useRef<Message[]>([]);
   /** sid → true iff it's a teahouse conversation. Used by sendMessage to route
    *  the WS envelope type without depending on render-time state. */
   const teahouseSidsRef = useRef<Set<string>>(new Set());
@@ -126,6 +129,9 @@ export function useChatBackend(typewriter: TypewriterConfig = DEFAULT_TYPEWRITER
       return { ...prev, stream: null, thinking: false, sending: false, messages: [...dedup, msg] };
     });
   }, []);
+
+  // 保持 messagesRef 与 state 同步。
+  useEffect(() => { messagesRef.current = s.messages; }, [s.messages]);
 
   const resetChatSmooth = useCallback(() => {
     smoothRef.current = null;
@@ -317,16 +323,20 @@ export function useChatBackend(typewriter: TypewriterConfig = DEFAULT_TYPEWRITER
 
         // Smoothing ON and the visible text hasn't caught up → let the pump finish
         // draining, then merge (text stays identical, no jump). Otherwise merge now.
+        // 回合结束后静默对齐 DB 真值：把乐观的 local- id 换成真实 UUID，
+        // 这样「回退 / 回退并编辑」总能拿到有效锚点删库（后端不发 new_message 也不怕）。
+        const reconcileIds = () => { const sid = activeSidRef.current; if (sid) void loadMessages(sid, /*silent*/ true); };
         const sm = smoothRef.current;
         const fullLen = content.length || (sm ? sm.raw.length : 0);
         if (twRef.current.enabled && sm && sm.id === id && sm.disp < fullLen) {
           if (content.length > sm.raw.length) sm.raw = content;
-          sm.finalize = () => mergeAssistantDone(id, content || sm.raw, reasoning);
+          sm.finalize = () => { mergeAssistantDone(id, content || sm.raw, reasoning); reconcileIds(); };
           ensureChatPump();
           return;
         }
         smoothRef.current = null;
         mergeAssistantDone(id, content, reasoning);
+        reconcileIds();
         return;
       }
       if (type === 'new_message') {
@@ -596,56 +606,42 @@ export function useChatBackend(typewriter: TypewriterConfig = DEFAULT_TYPEWRITER
     const sid = activeSidRef.current;
     if (!sid) return false;
 
-    // Optimistic local slice: drop the anchor + everything after it.
-    let found = false;
-    let anchorIdx = -1;
-    setS((p) => {
-      const idx = p.messages.findIndex((m) => m.message_id === messageId);
-      if (idx < 0) return p;
-      found = true;
-      anchorIdx = idx;
-      return {
-        ...p,
-        messages: p.messages.slice(0, idx),
-        stream: null,
-        thinking: false,
-        sending: false,
-        // A quote pointing at a now-deleted message would dangle — clear it.
-        quoted: p.quoted?.messageId === messageId ? null : p.quoted,
-      };
-    });
-    if (!found) return false;
+    // 关键：从 messagesRef 同步取当前消息算下标。绝不能依赖 setS updater 里赋的值——
+    // updater 是延迟执行的，调用处立刻读必为初值（这正是回退一直没真删的根因）。
+    const anchorIdx = messagesRef.current.findIndex((m) => m.message_id === messageId);
+    if (anchorIdx < 0) return false;
 
-    // Resolve the persisted DB id for the anchor. Optimistic sends keep a
-    // `local-…` id and the backend emits no `new_message`, so ids are never
-    // reconciled live — a 回退 on the user's own freshly-sent message would
-    // otherwise skip the DB delete (the row survives and reappears on reload).
-    // Optimistic rows and DB rows stay in lockstep order within the loaded
-    // window, so map the anchor to DB truth by position.
-    const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(s);
+    // 乐观本地切片：删掉锚点及其之后。
+    setS((p) => ({
+      ...p,
+      messages: p.messages.slice(0, anchorIdx),
+      stream: null,
+      thinking: false,
+      sending: false,
+      // 指向被删消息的引用会悬空 → 清掉。
+      quoted: p.quoted?.messageId === messageId ? null : p.quoted,
+    }));
+
+    // 解析锚点的持久化 UUID。乐观发送的消息带 `local-…` id（后端不发 new_message），
+    // 这类锚点按位置映射到 DB 真值（已加载消息全部 asc 同序）。
+    const isUuid = (x: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(x);
     let anchorId = messageId;
     if (!isUuid(anchorId)) {
       try {
         const res = await getSessionMessages(sid, 1, 50);
         const db = res.messages || [];
-        if (anchorIdx >= 0 && anchorIdx < db.length && isUuid(db[anchorIdx].message_id)) {
-          anchorId = db[anchorIdx].message_id;
-        }
-      } catch { /* fall through to the guard below */ }
+        if (anchorIdx < db.length && isUuid(db[anchorIdx].message_id)) anchorId = db[anchorIdx].message_id;
+      } catch { /* 落到下方守卫 */ }
     }
-
     if (!isUuid(anchorId)) {
-      // Couldn't map to a persisted row — nothing to delete server-side; resync
-      // so the UI reflects DB truth instead of silently diverging.
-      void loadMessages(sid, /*silent*/ true);
-      return found;
+      void loadMessages(sid, /*silent*/ true);   // 映射不到持久行 → 与 DB 重新对齐
+      return true;
     }
     try {
       await svcTruncateMessagesFrom(sid, anchorId);
       return true;
     } catch (e) {
       console.warn('[v2] revertToMessage failed', e);
-      // Resync with server truth so the UI doesn't drift from the DB.
       void loadMessages(sid, /*silent*/ true);
       return false;
     }

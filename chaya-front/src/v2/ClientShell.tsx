@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeHighlight from 'rehype-highlight';
-import 'highlight.js/styles/github.css';
+import { CodeBlock, PreBlock, mdRehypePlugins } from './codeBlock';
 import './theme.css';
 import { api } from '../utils/apiClient';
 import type { Session, Message } from '../services/chat';
@@ -148,7 +147,9 @@ const ShellInner: React.FC = () => {
       .catch(() => {})
       .finally(() => setDomainsLoading(false));
   }, []);
-  useEffect(() => { loadDomains(); }, [loadDomains, settingsOpen]);
+  // Reload domains on mount, when settings close, and when returning to a chat
+  // view — so a domain just created in 知识库 is @-mentionable without a restart.
+  useEffect(() => { loadDomains(); }, [loadDomains, settingsOpen, activeNav]);
 
   // chat-mode attachments (images sent inline with the next user message)
   const [attachments, setAttachments] = useState<Array<{ id: string; data: string; mimeType: string; fileName?: string }>>([]);
@@ -496,7 +497,13 @@ const ShellInner: React.FC = () => {
         // Mark persisted up-front so a re-entrant settle can't double-POST.
         persistedBatchRef.current.add(batchId);
         try {
-          await persistCreationAssistantImages(persistSid, settled);
+          if (localSlots.some(Boolean)) {
+            await persistCreationAssistantImages(persistSid, settled);
+          } else {
+            // No image came back — surface the error(s) as the AI's reply so the
+            // failure (e.g. Gemini geo-block) is visible and persists on reload.
+            await persistCreationError(persistSid, localErrors.filter(Boolean) as string[]);
+          }
           // Await the reload so the persisted image message is in the message
           // list BEFORE we drop the live batch — otherwise there's a flicker,
           // and a lingering batch would render *below* any newer chat message
@@ -552,9 +559,10 @@ const ShellInner: React.FC = () => {
     // arrived — so a slow/failed initial load doesn't silently swallow `@`.
     // The popover shows a loading/empty hint and we (re)fetch on the spot.
     if (m && (domains.length || getSmartnoteApiKey())) {
+      const opening = !mention; // refresh the list on each open, not just when empty —
       setMention({ query: m[1], from: caret - m[1].length - 1, to: caret });
       setMentionIdx(0);
-      if (!domains.length) loadDomains();
+      if (opening) loadDomains(); // so domains created in 知识库 this session show up without a restart
     } else if (mention) {
       setMention(null);
     }
@@ -1279,7 +1287,7 @@ const RowMenu: React.FC<{
 /* ============== subcomponents ============== */
 
 /** Markdown surface for assistant prose — GFM (tables, strikethrough, task
- *  lists) + code highlighting via highlight.js. Wrapped in `.v2-md` so the
+ *  lists) + Shiki code highlighting (see codeBlock.tsx). Wrapped in `.v2-md` so the
  *  app's typography rules can scope all child elements without leaking.
  *  Streaming-safe: react-markdown re-parses on each render, but our batched
  *  chunk flushing (32 chars / 16ms) keeps the cost bounded. */
@@ -1287,10 +1295,12 @@ const MD: React.FC<{ text: string }> = React.memo(({ text }) => (
   <div className="v2-md">
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
-      rehypePlugins={[rehypeHighlight]}
+      rehypePlugins={mdRehypePlugins}
       components={{
         a: ({ node: _n, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" />,
-      }}
+        code: CodeBlock,
+        pre: PreBlock,
+      } as React.ComponentProps<typeof ReactMarkdown>['components']}
     >{text}</ReactMarkdown>
   </div>
 ));
@@ -1641,6 +1651,21 @@ async function persistCreationAssistantImages(sid: string, b: Batch): Promise<vo
   await api.post(`/api/sessions/${sid}/messages`, {
     role: 'assistant', content: creationDoneCaption(media.length, b.elapsedMs),
     source: 'create', ext: { media, creation_batch: true, elapsed_ms: b.elapsedMs },
+  });
+}
+
+/** Persist a failed creation batch as an assistant message so the error shows
+ *  up as the AI's reply (and survives reload), instead of vanishing with the
+ *  live batch. Used when a batch produced no images — every slot errored
+ *  (e.g. Gemini's "User location is not supported for the API use" geo-block). */
+async function persistCreationError(sid: string, errors: string[]): Promise<void> {
+  const uniq = Array.from(new Set(errors.map((e) => (e || '').trim()).filter(Boolean)));
+  const detail = uniq.length ? uniq.join('\n\n') : '未知错误';
+  await api.post(`/api/sessions/${sid}/messages`, {
+    role: 'assistant',
+    content: `⚠️ 生图失败\n\n${detail}`,
+    source: 'create',
+    ext: { creation_error: true },
   });
 }
 

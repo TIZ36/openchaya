@@ -78,6 +78,13 @@ function createWindow() {
     shell.openExternal(url);
     return { action: 'deny' };
   });
+
+  // 渲染进程崩溃（OOM 等）→ 别留黑屏，自动重载恢复（标签/分组/分屏从 localStorage 回显）。
+  win.webContents.on('render-process-gone', (_e, details) => {
+    console.error('[main] render-process-gone:', details && details.reason);
+    if (!win.isDestroyed()) { try { win.webContents.reload(); } catch { /* */ } }
+  });
+  win.webContents.on('unresponsive', () => console.warn('[main] renderer unresponsive'));
 }
 
 // 本地 Agent 桥：纯本地功能，与后端无关。仅注册一次。

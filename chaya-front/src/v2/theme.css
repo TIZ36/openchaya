@@ -2,6 +2,9 @@
    Scoped to .chaya-v2 to coexist with the legacy Paper shell. */
 
 .chaya-v2 {
+  /* Drives Shiki's light-dark() dual theme (see codeBlock.tsx). Dark mode is
+     an attribute, not a class/media query, so color-scheme is set per mode. */
+  color-scheme: light;
   /* palette */
   --c-bg:           #ffffff;
   --c-sidebar:      #f9f9f9;
@@ -81,6 +84,7 @@
 
 /* ---- default (mono) dark ---- */
 .chaya-v2[data-mode="dark"] {
+  color-scheme: dark;
   --c-bg: #1a1a1a; --c-sidebar: #1f1f1f;
   --c-ink: #ececec; --c-ink-2: #c4c4c4; --c-ink-3: #969696; --c-ink-4: #6e6e6e;
   --c-hover: #2a2a2a; --c-hover-soft: #232323; --c-selected: #343434; --c-rule: #2e2e2e;
@@ -184,6 +188,36 @@ html[data-font="silkscreen"] .chaya-v2 button { font-family: 'Playfair Display',
 .chaya-v2 ::-webkit-scrollbar-corner { background: transparent; }
 .chaya-v2 button, .chaya-v2 input, .chaya-v2 textarea {
   font: inherit; color: inherit; background: transparent; border: 0; outline: 0;
+}
+
+/* 选区：染一层极淡的 accent（纸上铅笔划过），不再用浏览器默认的刺眼蓝。 */
+.chaya-v2 ::selection { background: color-mix(in oklab, var(--c-accent) 16%, var(--c-bg)); color: var(--c-ink); }
+
+/* 键盘焦点环：仅 :focus-visible（键盘导航）才出现，鼠标点击不打扰。
+   安静的 accent 描边 + 2px 留白，呼应「沉静 + 稀疏 accent」。输入框自有边框聚焦态，不重复加环。 */
+.chaya-v2 button:focus-visible,
+.chaya-v2 a:focus-visible,
+.chaya-v2 [role="button"]:focus-visible,
+.chaya-v2 [tabindex]:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--c-accent) 52%, transparent);
+  outline-offset: 2px;
+  border-radius: var(--c-radius-sm);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chaya-v2 button:focus-visible, .chaya-v2 a:focus-visible,
+  .chaya-v2 [role="button"]:focus-visible, .chaya-v2 [tabindex]:focus-visible {
+    transition: outline-color 140ms var(--c-ease), outline-offset 140ms var(--c-ease);
+  }
+}
+
+/* 全局：用户要求减少动效时，把所有过渡/动画压到近乎瞬时（保留功能、去掉运动）。 */
+@media (prefers-reduced-motion: reduce) {
+  .chaya-v2 *, .chaya-v2 *::before, .chaya-v2 *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* ===== app shell ===== */
@@ -503,8 +537,10 @@ html[data-electron="true"] .chaya-v2 .v2-msgs { max-width: 920px; }
   border-radius: var(--c-radius-xs);
   color: var(--c-ink);
 }
-/* Code block */
-.chaya-v2 .v2-md pre {
+/* Code block — Shiki (see codeBlock.tsx). The .v2-code wrapper carries the
+ * paper surface + rule; Shiki's inner <pre> is forced transparent so the warm
+ * surface shows through in both light & dark (token colours come from Shiki). */
+.chaya-v2 .v2-md .v2-code {
   margin: 8px 0 12px;
   padding: 12px 14px;
   background: var(--c-sidebar);
@@ -514,11 +550,16 @@ html[data-electron="true"] .chaya-v2 .v2-msgs { max-width: 920px; }
   font-size: 12.5px;
   line-height: 1.55;
 }
-.chaya-v2 .v2-md pre code {
+.chaya-v2 .v2-md .v2-code pre {
+  margin: 0;
+  padding: 0;
+  background: transparent !important;
+  font-family: var(--c-mono);
+}
+.chaya-v2 .v2-md .v2-code code {
   background: transparent;
   padding: 0;
   font-family: var(--c-mono);
-  color: var(--c-ink);
 }
 /* Blockquote — left rule, muted text */
 .chaya-v2 .v2-md blockquote {
@@ -881,6 +922,15 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-panel .v2-opt.active .v2-opt-del:hover { background: color-mix(in oklab, var(--c-bg) 16%, transparent); color: var(--c-bg); }
 .chaya-v2 .v2-panel .v2-opt .v2-opt-custom { font-size: 10px; padding: 0 4px; border-radius: var(--c-radius-xs); background: var(--c-hover-soft); color: var(--c-ink-3); margin-left: 4px; letter-spacing: 0.08em; }
 .chaya-v2 .v2-panel .v2-opt.active .v2-opt-custom { background: color-mix(in oklab, var(--c-bg) 18%, transparent); color: var(--c-bg); }
+/* the knowledge memory modal reuses the option-grid chips but lives outside
+   .v2-panel, so the grid styling above never reached it (chips fell back to raw
+   stacked divs). Restate the essentials scoped to the modal. */
+.chaya-v2 .v2-modal .v2-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; }
+.chaya-v2 .v2-modal .v2-opt { padding: 8px 12px; border-radius: var(--c-radius-md); cursor: pointer; font-size: 13px; color: var(--c-ink); background: var(--c-surface); transition: background 140ms var(--c-ease); display: flex; align-items: baseline; gap: 6px; }
+.chaya-v2 .v2-modal .v2-opt:hover { background: var(--c-hover); }
+.chaya-v2 .v2-modal .v2-opt.active { background: var(--c-ink); color: var(--c-bg); font-weight: 500; }
+.chaya-v2 .v2-modal .v2-opt small { color: var(--c-ink-4); font-size: 11px; letter-spacing: 0.06em; margin-left: auto; }
+.chaya-v2 .v2-modal .v2-opt.active small { color: color-mix(in oklab, var(--c-bg) 62%, transparent); }
 .chaya-v2 .v2-panel .v2-row-input { display: flex; gap: 6px; margin-top: 10px; }
 .chaya-v2 .v2-panel .v2-row-input input,
 .chaya-v2 .v2-panel .v2-row-input textarea { flex: 1; padding: 8px 12px; border-radius: var(--c-radius-md); background: var(--c-surface); font-size: 13px; color: var(--c-ink); resize: none; min-height: 36px; }
@@ -980,6 +1030,43 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-pill.solid { background: var(--c-ink); color: var(--c-bg); font-weight: 500; }
 .chaya-v2 .v2-pill.warn { background: var(--c-warn-bg); color: var(--c-warn); }
 .chaya-v2 .v2-pill.soft { background: var(--c-accent-bg); color: var(--c-ink-3); }
+
+/* ---- 模型管理：凭证卡（一个 provider = 一份 key）+ 其下动态模型 ---- */
+.chaya-v2 .v2-cred-count { font-size: 11.5px; color: var(--c-ink-4); padding: 0 2px 10px; }
+.chaya-v2 .v2-cred { border: 1px solid var(--c-rule); border-radius: var(--c-radius-lg); margin-bottom: 12px; overflow: hidden; background: var(--c-bg); }
+.chaya-v2 .v2-cred-hd { display: flex; align-items: center; gap: 11px; padding: 12px 14px; border-bottom: 1px solid var(--c-rule); }
+.chaya-v2 .v2-cred-hd .av { width: 30px; height: 30px; flex: 0 0 auto; border-radius: var(--c-radius-md); display: grid; place-items: center; font-weight: 600; font-size: 14px; background: var(--c-surface); color: var(--c-ink-2); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--c-ink) 7%, transparent); }
+.chaya-v2 .v2-cred-hd .av[data-p="openai"] { background: rgba(46,125,82,0.12); color: #2e7d52; }
+.chaya-v2 .v2-cred-hd .av[data-p="anthropic"] { background: rgba(217,119,87,0.14); color: #b8502e; }
+.chaya-v2 .v2-cred-hd .av[data-p="gemini"] { background: rgba(94,139,208,0.16); color: #4f6bb0; }
+.chaya-v2 .v2-cred-hd .av[data-p="deepseek"] { background: rgba(79,70,229,0.13); color: #4f46e5; }
+.chaya-v2 .v2-cred-hd .meta { flex: 1; min-width: 0; }
+.chaya-v2 .v2-cred-hd .meta .nm { font-size: 14px; color: var(--c-ink); font-weight: 500; }
+.chaya-v2 .v2-cred-hd .meta .sub { display: flex; align-items: center; gap: 7px; margin-top: 3px; }
+.chaya-v2 .v2-cred-hd .meta .sub .cnt { font-size: 11.5px; color: var(--c-ink-4); }
+.chaya-v2 .v2-cred-hd .acts { display: flex; gap: 6px; flex: 0 0 auto; }
+.chaya-v2 .v2-cred-models { display: flex; flex-direction: column; }
+.chaya-v2 .v2-cred-model { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--c-rule); }
+.chaya-v2 .v2-cred-model:last-child { border-bottom: 0; }
+.chaya-v2 .v2-cred-model.is-default { background: color-mix(in oklab, var(--c-accent) 4%, var(--c-bg)); }
+.chaya-v2 .v2-cred-model .star { flex: 0 0 auto; font-size: 14px; color: var(--c-ink-4); cursor: pointer; line-height: 1; transition: color 140ms var(--c-ease); }
+.chaya-v2 .v2-cred-model .star.on { color: var(--c-warn); }
+.chaya-v2 .v2-cred-model .star:disabled { opacity: 0.4; cursor: default; }
+.chaya-v2 .v2-cred-model .mid { font-family: var(--c-mono); font-size: 12.5px; color: var(--c-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.chaya-v2 .v2-cred-model .grow { flex: 1; }
+.chaya-v2 .v2-cred-model .tg { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.chaya-v2 .v2-cred-model .tg > span { font-size: 11px; color: var(--c-ink-4); }
+.chaya-v2 .v2-cred-model .del { flex: 0 0 auto; width: 22px; height: 22px; display: grid; place-items: center; border-radius: var(--c-radius-xs); color: var(--c-ink-4); font-size: 11px; cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-cred-model .del:hover { background: var(--c-hover); color: var(--c-danger); }
+/* 凭证 modal 里的「可用模型」多选 */
+.chaya-v2 .v2-cred-pick { margin-top: 8px; max-height: 260px; overflow-y: auto; border: 1px solid var(--c-rule); border-radius: var(--c-radius-md); }
+.chaya-v2 .v2-cred-pick-row { display: flex; align-items: center; gap: 9px; padding: 8px 11px; border-bottom: 1px solid var(--c-rule); cursor: pointer; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-cred-pick-row:last-child { border-bottom: 0; }
+.chaya-v2 .v2-cred-pick-row:hover { background: var(--c-hover-soft); }
+.chaya-v2 .v2-cred-pick-row.on { background: color-mix(in oklab, var(--c-accent) 5%, var(--c-bg)); }
+.chaya-v2 .v2-cred-pick-row input { width: auto !important; flex: 0 0 auto; accent-color: var(--c-accent); }
+.chaya-v2 .v2-cred-pick-row code { font-family: var(--c-mono); font-size: 12.5px; color: var(--c-ink); }
+.chaya-v2 .v2-cred-pick-row .nm { font-size: 11.5px; color: var(--c-ink-4); margin-left: auto; white-space: nowrap; }
 
 .chaya-v2 .v2-switch { width: 36px; height: 22px; border-radius: 999px; background: var(--c-selected); position: relative; cursor: pointer; transition: background 200ms var(--c-ease); padding: 0; }
 .chaya-v2 .v2-switch .thumb { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.18); transition: left 200ms var(--c-ease-spring); }
@@ -1250,17 +1337,31 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-kb-list.even { grid-auto-rows: 1fr; align-items: stretch; }
 .chaya-v2 .v2-kb-list.even .v2-kb-card { display: flex; flex-direction: column; }
 .chaya-v2 .v2-kb-list.even .v2-kb-card .ft { margin-top: auto; }
-/* .fixed (document-chunk search results): uniform fixed-height cards. Don't show
-   the whole chunk — clamp the body to the lines that fit; the rest is implied.
-   header pinned top, footer pinned bottom, so every card lines up edge-to-edge. */
-.chaya-v2 .v2-kb-list.fixed { grid-auto-rows: 184px; align-items: stretch; }
-.chaya-v2 .v2-kb-list.fixed .v2-kb-card { display: flex; flex-direction: column; overflow: hidden; }
-.chaya-v2 .v2-kb-list.fixed .v2-kb-card .hd { flex: 0 0 auto; }
-.chaya-v2 .v2-kb-list.fixed .v2-kb-card .body {
-  flex: 1 1 auto; min-height: 0; overflow: hidden;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4;
+/* Memory / search cards size to their content (the grid is already top-aligned),
+   so nothing is ever pushed past the viewport. A long body is *softly* clamped —
+   line-clamped with a fade and an inline 展开/收起 — never hard-cut, never spilled.
+   (Replaces the old grid-auto-rows:184px + overflow:hidden, which clipped long
+   memories mid-sentence and let a tall pill header crush the body.) */
+.chaya-v2 .v2-kb-body-wrap { position: relative; }
+.chaya-v2 .v2-kb-body-wrap.clamped .body {
+  display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden;
+  -webkit-line-clamp: var(--kb-clamp, 5);
 }
-.chaya-v2 .v2-kb-list.fixed .v2-kb-card .ft { flex: 0 0 auto; margin-top: auto; }
+/* fade the last clamped line into the card so the cut reads as intentional */
+.chaya-v2 .v2-kb-body-wrap.has-more::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2.1em;
+  background: linear-gradient(to top, var(--c-bg), transparent);
+  pointer-events: none;
+}
+.chaya-v2 .v2-kb-expand {
+  margin-top: 7px; font-size: 12px; color: var(--c-ink-3); cursor: pointer;
+  background: none; padding: 0; align-self: flex-start;
+  transition: color var(--c-dur) var(--c-ease);
+}
+.chaya-v2 .v2-kb-expand:hover { color: var(--c-ink); }
+/* search result: scores collapse into one quiet tabular metaline in the footer */
+.chaya-v2 .v2-kb-card .ft .grow { flex: 1; }
+.chaya-v2 .v2-kb-card .ft .v2-kb-score { color: var(--c-ink-3); font-variant-numeric: tabular-nums; }
 /* A memory is a card pressed onto the page: hairline rule, no flat-gray fill, lifts on hover. */
 .chaya-v2 .v2-kb-card { background: var(--c-bg); border: 1px solid var(--c-rule); border-radius: var(--c-radius-lg); padding: 14px 16px; transition: border-color var(--c-dur) var(--c-ease), box-shadow var(--c-dur) var(--c-ease); position: relative; }
 .chaya-v2 .v2-kb-card:hover { border-color: var(--c-ink-4); box-shadow: var(--c-shadow-soft); }
@@ -1279,7 +1380,7 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-kb-card .hd .iconbtn:hover { background: var(--c-hover); color: var(--c-ink); }
 .chaya-v2 .v2-kb-card .hd .iconbtn.on { color: var(--c-warn); opacity: 1; }
 .chaya-v2 .v2-kb-card .hd .iconbtn.danger:hover { background: var(--c-danger-bg); color: var(--c-danger); }
-.chaya-v2 .v2-kb-card .body { font-size: 14px; line-height: 1.62; color: var(--c-ink); white-space: pre-wrap; word-break: break-word; cursor: text; }
+.chaya-v2 .v2-kb-card .body { font-size: 14px; line-height: 1.62; color: var(--c-ink); white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; cursor: text; }
 .chaya-v2 .v2-kb-card .body.doc-name { display: flex; align-items: center; gap: 8px; font-weight: 500; white-space: normal; }
 .chaya-v2 .v2-kb-card .body.doc-name .doc-ic { display: inline-grid; place-items: center; color: var(--c-ink-3); flex: 0 0 auto; }
 .chaya-v2 .v2-kb-card .body.doc-name .doc-ic svg { width: 16px; height: 16px; }
@@ -1460,9 +1561,6 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
   color: color-mix(in oklab, var(--g) 60%, var(--c-ink)); font-size: 12px; font-weight: 600; border-radius: var(--c-radius-md);
   -webkit-app-region: no-drag; transition: background 140ms var(--c-ease); }
 .chaya-v2 .v2-la-group-chip:hover { background: color-mix(in oklab, var(--g) 16%, transparent); }
-/* 左侧小按钮：折叠/展开（不改主区显示内容）。 */
-.chaya-v2 .v2-la-group-chip .caret { flex: 0 0 auto; width: 16px; height: 16px; display: grid; place-items: center; font-size: 9px; border-radius: var(--c-radius-xs); color: color-mix(in oklab, var(--g) 55%, var(--c-ink-3)); cursor: pointer; }
-.chaya-v2 .v2-la-group-chip .caret:hover { background: color-mix(in oklab, var(--g) 24%, transparent); }
 .chaya-v2 .v2-la-group-chip .gdot { width: 9px; height: 9px; border-radius: 50%; background: var(--g); flex: 0 0 auto; }
 .chaya-v2 .v2-la-group-chip .gname { white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
 .chaya-v2 .v2-la-group-chip .gcnt { font-size: 11px; font-weight: 600; color: var(--c-bg); background: var(--g); border-radius: 9px; padding: 0 6px; line-height: 16px; }
@@ -1506,17 +1604,25 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-la-tl { max-width: 960px; margin: 0 auto; padding: 8px 24px 0; overflow-x: clip; }
 
 /* CLI 是信息稀疏、低关注度的对话：整体比主聊天更紧凑（字号小、行距密、留白少）。 */
-.chaya-v2 .v2-la-turn { display: flex; margin: 0 0 15px; animation: v2-fadeUp 220ms var(--c-ease) both; }
+.chaya-v2 .v2-la-turn { display: flex; margin: 0 0 18px; animation: v2-fadeUp 220ms var(--c-ease) both; }
 
-/* 用户轮：右对齐柔色气泡（同主聊天 .v2-msg.user .v2-bubble，略小） */
+/* 用户轮：右对齐气泡，做出「压进纸里」的 letterpress deboss——
+   极淡的暖色底 + 1px 同色内描边 + 顶部一道很轻的内阴影（凹陷感），不是浮起的卡片。 */
 .chaya-v2 .v2-la-turn.user { justify-content: flex-end; }
-.chaya-v2 .v2-la-ubub { max-width: 78%; min-width: 0; background: var(--c-hover-soft); border-radius: var(--c-radius-lg); padding: 7px 13px; }
+.chaya-v2 .v2-la-ubub {
+  max-width: 78%; min-width: 0;
+  background: color-mix(in oklab, var(--c-accent) 4%, var(--c-hover-soft));
+  border-radius: var(--c-radius-lg); padding: 8px 14px;
+  box-shadow:
+    inset 0 1px 1.5px rgba(0, 0, 0, 0.06),
+    inset 0 0 0 1px color-mix(in oklab, var(--c-ink) 6%, transparent);
+}
 /* 长无空格串（路径/URL）也要换行，别撑出水平滚动条 */
 .chaya-v2 .v2-la-ubub p { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font-size: 13px; color: var(--c-ink); line-height: 1.5; }
 
 /* agent 轮：左对齐，provider 头像锚定身份 + 正文列 */
 .chaya-v2 .v2-la-turn.agent { gap: 12px; }
-.chaya-v2 .v2-la-ava { width: 26px; height: 26px; flex: 0 0 auto; border-radius: 50%; display: grid; place-items: center; margin-top: 1px; }
+.chaya-v2 .v2-la-ava { width: 26px; height: 26px; flex: 0 0 auto; border-radius: 50%; display: grid; place-items: center; margin-top: 1px; box-shadow: inset 0 0 0 1px color-mix(in oklab, currentColor 22%, transparent); }
 .chaya-v2 .v2-la-ava svg { width: 15px; height: 15px; }
 /* 头像底色用 provider 品牌色的淡淡一层（sparing accent：只够认出身份） */
 .chaya-v2 .v2-la-ava.prov-claude { background: rgba(217,119,87,0.14); color: #b8502e; }
@@ -1528,19 +1634,30 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 /* 每个块都收在列宽内：宽代码块在自己内部横向滚动，不外溢成页面水平条 */
 .chaya-v2 .v2-la-turn-body > * { min-width: 0; max-width: 100%; }
 .chaya-v2 .v2-la-prose, .chaya-v2 .v2-la-prose .v2-md { min-width: 0; max-width: 100%; }
-.chaya-v2 .v2-la-prose .v2-md pre { max-width: 100%; }
+.chaya-v2 .v2-la-prose .v2-md pre,
+.chaya-v2 .v2-la-prose .v2-md .v2-code { max-width: 100%; }
 
-/* agent 正文：裸排版散文，比主聊天更紧凑（13px / 1.5），信息稀疏故收紧。 */
-.chaya-v2 .v2-la-prose { font-size: 13px; color: var(--c-ink); line-height: 1.5; overflow-wrap: anywhere; }
+/* agent 正文：裸排版散文，紧凑但有呼吸（13px / 1.58）——行距略放、段距更明显，
+   读起来有节奏感而不显松垮（宽列更需要一点行距）。 */
+.chaya-v2 .v2-la-prose { font-size: 13px; color: var(--c-ink); line-height: 1.58; overflow-wrap: anywhere; }
 .chaya-v2 .v2-la-prose .v2-md,
 .chaya-v2 .v2-la-prose .v2-md p,
-.chaya-v2 .v2-la-prose .v2-md li { font-size: 13px; line-height: 1.5; }
-.chaya-v2 .v2-la-prose .v2-md p { margin-bottom: 7px; }
-.chaya-v2 .v2-la-prose .v2-md ul, .chaya-v2 .v2-la-prose .v2-md ol { margin-bottom: 7px; }
+.chaya-v2 .v2-la-prose .v2-md li { font-size: 13px; line-height: 1.58; }
+.chaya-v2 .v2-la-prose .v2-md p { margin-bottom: 9px; }
+.chaya-v2 .v2-la-prose .v2-md ul, .chaya-v2 .v2-la-prose .v2-md ol { margin-bottom: 9px; }
 .chaya-v2 .v2-la-prose .v2-md h1 { font-size: 16px; }
 .chaya-v2 .v2-la-prose .v2-md h2 { font-size: 14.5px; }
 .chaya-v2 .v2-la-prose .v2-md h3 { font-size: 13.5px; }
 .chaya-v2 .v2-la-prose .v2-md h4 { font-size: 13px; }
+/* clear · 可读性：正文文本块限制在舒适测度（~74ch），宽列里不再拉成疲劳长行；
+   代码块 / 表格 / 引用容器不限宽，仍占满列宽。生成留白即「考究、沉静」。 */
+.chaya-v2 .v2-la-prose .v2-md > p,
+.chaya-v2 .v2-la-prose .v2-md > ul,
+.chaya-v2 .v2-la-prose .v2-md > ol,
+.chaya-v2 .v2-la-prose .v2-md > h1,
+.chaya-v2 .v2-la-prose .v2-md > h2,
+.chaya-v2 .v2-la-prose .v2-md > h3,
+.chaya-v2 .v2-la-prose .v2-md > h4 { max-width: 42em; }
 /* Live stream caret — a terminal block cursor at the end of the streaming text,
  * so the tail always reads as alive/distinct (opacity blink only, no motion). */
 .chaya-v2 .v2-la-prose.live .v2-md > :last-child::after {
@@ -1563,17 +1680,23 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-la-think .bd { margin-top: 5px; padding-left: 12px; border-left: 1.5px solid var(--c-rule); color: var(--c-ink-4); font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* 进行中：三点呼吸 */
-/* Single calm line — quiet italic text that gently breathes (opacity only, no
- * bounce), matching the main chat's "正在思考…" tone. */
-.chaya-v2 .v2-la-pulse {
-  font-size: 13px; font-style: italic; color: var(--c-ink-3);
-  padding: 2px 0; line-height: 1.6;
-  animation: v2-la-think 1.8s ease-in-out infinite;
-}
-@keyframes v2-la-think { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.95; } }
+/* 执行中「寒暄」状态行（仿 Claude CLI）：token 上下行律动条 + 翻动小词 + 计时。
+ * 词在翻 = 回合还活着；律动条 = 还在收发 token。左缩进 38px 对齐 agent 正文列。 */
+.chaya-v2 .v2-la-ticker { display: flex; align-items: center; gap: 8px; padding: 4px 0 8px 38px; font-size: 12px; color: var(--c-ink-4); font-style: italic; }
+.chaya-v2 .v2-la-ticker .tok { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; font-style: normal; flex: 0 0 auto; }
+.chaya-v2 .v2-la-ticker .tok i { width: 2.5px; height: 4px; border-radius: 1px; background: var(--c-accent); opacity: 0.6; animation: v2-la-tok 0.9s ease-in-out infinite; }
+.chaya-v2 .v2-la-ticker .tok i:nth-child(2) { animation-delay: 0.15s; }
+.chaya-v2 .v2-la-ticker .tok i:nth-child(3) { animation-delay: 0.3s; }
+.chaya-v2 .v2-la-ticker .tok i:nth-child(4) { animation-delay: 0.45s; }
+@keyframes v2-la-tok { 0%, 100% { height: 4px; opacity: 0.5; } 50% { height: 12px; opacity: 1; } }
+.chaya-v2 .v2-la-ticker .w { color: var(--c-ink-3); animation: v2-la-word-in 360ms var(--c-ease); }
+.chaya-v2 .v2-la-ticker .m { font-style: normal; font-size: 11px; color: var(--c-ink-4); font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+.chaya-v2 .v2-la-ticker .m::before { content: '·'; margin-right: 6px; }
+@keyframes v2-la-word-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes v2-la-breathe { 0%,100% { opacity: 0.3; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-1px); } }
 @media (prefers-reduced-motion: reduce) {
-  .chaya-v2 .v2-la-pulse { animation: none; opacity: 0.7; }
+  .chaya-v2 .v2-la-ticker .tok i, .chaya-v2 .v2-la-ticker .w { animation: none; }
+  .chaya-v2 .v2-la-ticker .tok i { height: 9px; opacity: 0.8; }
 }
 
 .chaya-v2 .v2-la-note { font-size: 12px; padding: 4px 0 8px 38px; }
@@ -1626,23 +1749,25 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-la-split-a { display: flex; min-width: 0; min-height: 0; flex: 0 0 auto; overflow: hidden; }
 .chaya-v2 .v2-la-split-b { display: flex; min-width: 0; min-height: 0; flex: 1 1 auto; overflow: hidden; }
 .chaya-v2 .v2-la-split-a > *, .chaya-v2 .v2-la-split-b > * { flex: 1 1 auto; min-width: 0; min-height: 0; }
-.chaya-v2 .v2-la-divider { flex: 0 0 1px; background: var(--c-rule); position: relative; z-index: 5; touch-action: none; }
+.chaya-v2 .v2-la-divider { flex: 0 0 1px; background: var(--c-rule); position: relative; z-index: 5; touch-action: none; transition: background 140ms var(--c-ease); }
 .chaya-v2 .v2-la-divider.row { cursor: col-resize; }
 .chaya-v2 .v2-la-divider.col { cursor: row-resize; }
 .chaya-v2 .v2-la-divider::after { content: ''; position: absolute; }   /* 加宽命中区 */
 .chaya-v2 .v2-la-divider.row::after { top: 0; bottom: 0; left: -4px; right: -4px; }
 .chaya-v2 .v2-la-divider.col::after { left: 0; right: 0; top: -4px; bottom: -4px; }
-.chaya-v2 .v2-la-divider:hover, .chaya-v2 body.v2-la-resizing .v2-la-divider { background: var(--c-accent); }
+/* hover 只是轻轻加深（sparing accent）；真正在拖动时才上 accent，明确「正在调整」。 */
+.chaya-v2 .v2-la-divider:hover { background: var(--c-ink-4); }
+.chaya-v2 body.v2-la-resizing .v2-la-divider { background: var(--c-accent); }
 body.v2-la-resizing { user-select: none; }
 /* 分屏里内容列不再钉死 960，跟随窗格宽度自适应。 */
 .chaya-v2 .v2-la-grid-root .v2-la-tl { max-width: none; padding: 8px 16px 0; }
 .chaya-v2 .v2-la-grid-root .v2-la-pane .v2-composer { max-width: none; }
 .chaya-v2 .v2-la-grid-root .v2-la-anchor { max-width: none; }
 
-/* 焦点窗格：边框染窗格色 + 顶部 header 染同色（浅玻璃），一眼看出谁在接收输入。 */
+/* 焦点窗格：只染顶部 header（session tab）同窗格色，不再画整圈描边
+ * （那圈 inset 描边的顶边会被 header 不透明背景盖掉，显得"边框不完整"）。 */
 .chaya-v2 .v2-la-grid-root .v2-la-pane.focused {
   background: var(--c-bg);
-  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--pane) 72%, transparent);
 }
 .chaya-v2 .v2-la-grid-root .v2-la-pane.focused .v2-la-pane-hd {
   background: color-mix(in oklab, var(--pane) 16%, var(--c-bg));
@@ -1665,10 +1790,12 @@ body.v2-la-resizing { user-select: none; }
 
 /* ---- 分屏窗格里的「类终端」精简输入框：单条、细、密，腾出竖向空间给会话。 ---- */
 .chaya-v2 .v2-la-pane.ingrid .v2-composer-wrap { padding: 2px 10px 8px; }
-.chaya-v2 .v2-la-slim .v2-box { display: flex; align-items: center; gap: 6px; padding: 3px 8px; min-height: 0; border-radius: var(--c-radius-md); }
-.chaya-v2 .v2-la-slim .v2-la-prompt { flex: 0 0 auto; color: var(--c-ink-4); font-weight: 700; font-size: 13px; line-height: 1; }
+.chaya-v2 .v2-la-slim .v2-box { display: flex; align-items: flex-end; gap: 6px; padding: 3px 8px; min-height: 0; border-radius: var(--c-radius-md); }
+/* App-logo triangle, fixed at the first line (stays at top as the box grows). */
+.chaya-v2 .v2-la-slim .v2-la-prompt { flex: 0 0 auto; align-self: flex-start; display: flex; align-items: center; height: 20px; color: var(--c-ink-4); }
+.chaya-v2 .v2-la-slim .v2-la-prompt svg { width: 13px; height: 13px; }
 /* 单行高度，不随内容增高（多行则在这一行内纵向滚动）。 */
-.chaya-v2 .v2-la-slim textarea { flex: 1 1 auto; min-height: 0; height: 20px; max-height: 20px; padding: 1px 0; font-size: 12.5px; line-height: 18px; overflow-y: auto; }
+.chaya-v2 .v2-la-slim textarea { flex: 1 1 auto; min-height: 18px; max-height: 120px; padding: 1px 0; font-size: 12.5px; line-height: 18px; overflow-y: auto; }
 .chaya-v2 .v2-la-slim .v2-row { flex: 0 0 auto; width: auto; margin: 0; gap: 4px; }
 /* 精简态：上下文/模式收成最小，发送按钮缩小，整体一条线。 */
 .chaya-v2 .v2-la-slim .v2-row .v2-la-ctx { display: none; }
@@ -1761,7 +1888,7 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .v2-la-sub-hd .lab { color: var(--c-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
 .chaya-v2 .v2-la-sub-hd .cnt { margin-left: auto; flex: 0 0 auto; font-size: 11px; color: var(--c-accent-strong); background: var(--c-accent-bg); border-radius: 999px; padding: 1px 8px; }
 .chaya-v2 .v2-la-sub-hd .chev { flex: 0 0 auto; font-size: 9px; color: var(--c-ink-4); }
-.chaya-v2 .v2-la-sub-body { padding: 8px 10px 10px 14px; margin-left: 10px; border-top: 1px solid var(--c-rule); border-left: 2px solid var(--c-accent-bg); display: flex; flex-direction: column; gap: 7px; }
+.chaya-v2 .v2-la-sub-body { padding: 8px 10px 10px 14px; margin-left: 10px; border-top: 1px solid var(--c-rule); border-left: 1px solid var(--c-rule); display: flex; flex-direction: column; gap: 7px; }
 /* 并行子 agent 并排（每张自适应，窄了自动换行） */
 .chaya-v2 .v2-la-subrow { display: flex; flex-wrap: wrap; gap: 8px; }
 .chaya-v2 .v2-la-subrow > .v2-la-sub { flex: 1 1 300px; min-width: 0; }
@@ -1774,8 +1901,11 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .v2-la-tdot.err { background: var(--c-danger); }
 .chaya-v2 .v2-la-tdot.pending { background: var(--c-warn); animation: v2-la-breathe 1.2s var(--c-ease) infinite; }
 
-/* Bash IN/OUT（参考截图） */
-.chaya-v2 .v2-la-io { margin-top: 6px; border: 1px solid var(--c-rule); border-radius: var(--c-radius-md); overflow: hidden; background: var(--c-surface); }
+/* Bash IN/OUT：做成「压进纸里」的凹陷面板（letterpress inset），而非浮起的卡片——
+   略深的底 + 1px 发丝边 + 顶部内阴影，终端输出像被压在页面里。 */
+.chaya-v2 .v2-la-io { margin-top: 6px; border: 1px solid var(--c-rule); border-radius: var(--c-radius-md); overflow: hidden;
+  background: color-mix(in oklab, var(--c-ink) 2.5%, var(--c-surface));
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.035); }
 .chaya-v2 .v2-la-io .row { display: flex; gap: 10px; padding: 8px 12px; }
 .chaya-v2 .v2-la-io .row + .row { border-top: 1px solid var(--c-rule); }
 .chaya-v2 .v2-la-io .lbl { font-size: 10px; font-family: var(--c-mono); letter-spacing: 0.08em; color: var(--c-ink-4); padding-top: 2px; flex: 0 0 26px; }
@@ -1787,8 +1917,11 @@ body.v2-la-resizing { user-select: none; }
 
 /* 代码预览（复用 MD 高亮，融入项目代码风格） */
 .chaya-v2 .v2-la-code { margin-top: 6px; min-width: 0; max-width: 100%; }
-.chaya-v2 .v2-la-code .v2-md, .chaya-v2 .v2-la-code .v2-md pre { min-width: 0; max-width: 100%; }
-.chaya-v2 .v2-la-code .v2-md pre { margin: 0; }
+.chaya-v2 .v2-la-code .v2-md,
+.chaya-v2 .v2-la-code .v2-md pre,
+.chaya-v2 .v2-la-code .v2-md .v2-code { min-width: 0; max-width: 100%; }
+.chaya-v2 .v2-la-code .v2-md pre,
+.chaya-v2 .v2-la-code .v2-md .v2-code { margin: 0; }
 .chaya-v2 .v2-la-tool, .chaya-v2 .v2-la-io { min-width: 0; max-width: 100%; }
 
 /* 宽表格：包一层横向滚动容器，局部滑动，不外溢 */

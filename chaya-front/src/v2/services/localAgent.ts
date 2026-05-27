@@ -89,6 +89,7 @@ interface SendPayload {
   prompt: string;
   permMode?: PermMode;
 }
+type WarmPayload = Omit<SendPayload, 'prompt'>;
 
 interface LocalAgentBridge {
   detect(): Promise<DetectedProvider[]>;
@@ -98,6 +99,7 @@ interface LocalAgentBridge {
   deleteSession(provider: ProviderId, cwd: string, sessionId: string): Promise<{ ok: boolean; trashed?: boolean; error?: string }>;
   listCommands(provider: ProviderId, cwd: string): Promise<SlashCommand[]>;
   send(payload: SendPayload): Promise<{ ok: boolean }>;
+  warm(payload: WarmPayload): Promise<{ ok: boolean }>;
   permissionRespond(permId: string, decision: PermissionDecision): Promise<{ ok: boolean }>;
   interrupt(cwd: string): Promise<{ ok: boolean }>;
   sessionClose(cwd: string): Promise<{ ok: boolean }>;
@@ -127,6 +129,7 @@ export const localAgent = {
   listCommands: (provider: ProviderId, cwd: string) =>
     bridge()?.listCommands(provider, cwd) ?? Promise.resolve([] as SlashCommand[]),
   send: (payload: SendPayload) => bridge()?.send(payload) ?? Promise.resolve({ ok: false }),
+  warm: (payload: WarmPayload) => bridge()?.warm(payload) ?? Promise.resolve({ ok: false }),
   permissionRespond: (permId: string, decision: PermissionDecision) =>
     bridge()?.permissionRespond(permId, decision) ?? Promise.resolve({ ok: false }),
   interrupt: (cwd: string) => bridge()?.interrupt(cwd) ?? Promise.resolve({ ok: false }),
@@ -207,7 +210,7 @@ export interface TabGroup {
  * 打开的标签 —— 持久化（localStorage），下次启动自动续传这些会话。
  * 只存身份（cwd / sessionId / title / groupId），不存对话内容（重开时按 sessionId 读盘续传）。
  * ------------------------------------------------------------------ */
-export interface PersistedTab { cwd: string; sessionId: string | null; title: string; groupId?: string | null; }
+export interface PersistedTab { cwd: string; sessionId: string | null; title: string; groupId?: string | null; permMode?: PermMode; }
 const TABS_KEY = 'chaya.localAgent.openTabs';
 
 export function loadTabsState(): { tabs: PersistedTab[]; activeCwd: string | null; groups: TabGroup[]; layout: unknown } {
@@ -228,4 +231,14 @@ export function loadTabsState(): { tabs: PersistedTab[]; activeCwd: string | nul
 
 export function saveTabsState(tabs: PersistedTab[], activeCwd: string | null, groups: TabGroup[], layout: unknown): void {
   try { localStorage.setItem(TABS_KEY, JSON.stringify({ tabs, activeCwd, groups, layout })); } catch { /* quota */ }
+}
+
+/* 每个会话「最后一次发送时的权限级别」记忆（按 sessionId）。重开历史会话时默认切回该级别。 */
+const PERM_BY_SESSION_KEY = 'chaya.localAgent.permBySession';
+export function loadPermBySession(): Record<string, PermMode> {
+  try { const raw = localStorage.getItem(PERM_BY_SESSION_KEY); const o = raw ? JSON.parse(raw) : null; return (o && typeof o === 'object') ? o : {}; }
+  catch { return {}; }
+}
+export function savePermBySession(map: Record<string, PermMode>): void {
+  try { localStorage.setItem(PERM_BY_SESSION_KEY, JSON.stringify(map)); } catch { /* quota */ }
 }

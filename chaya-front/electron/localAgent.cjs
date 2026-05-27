@@ -457,6 +457,14 @@ function startSession(sender, { cwd, provider, sessionId, permMode }) {
   const input = makeInputQueue();
   const ac = new AbortController();
 
+  // 发事件给渲染层；帧已销毁（渲染进程崩溃/重载）则中断会话并停发，
+  // 避免对着死帧疯狂 send 刷屏报错、也让孤儿 SDK 进程及时收尾。
+  const emit = (ev) => {
+    if (sender.isDestroyed()) { try { ac.abort(); } catch { /* */ } return false; }
+    try { sender.send('localAgent:event', { cwd, ev }); return true; }
+    catch { try { ac.abort(); } catch { /* */ } return false; }
+  };
+
   const canUseTool = (toolName, toolInput, ctx) => new Promise((resolve) => {
     const settle = (decision) => {
       if (decision && decision.behavior === 'allow') {
@@ -471,11 +479,11 @@ function startSession(sender, { cwd, provider, sessionId, permMode }) {
     const permId = `perm-${Math.random().toString(36).slice(2, 10)}`;
     pendingPerms.set(permId, { cwd, settle });
     const isQuestion = toolName === 'AskUserQuestion';
-    sender.send('localAgent:event', { cwd, ev: {
+    emit({
       type: isQuestion ? 'question_request' : 'permission_request', permId, toolName, input: toolInput,
       title: ctx?.title || null, displayName: ctx?.displayName || null, description: ctx?.description || null,
       suggestions: ctx?.suggestions || null,
-    } });
+    });
     if (ctx?.signal) ctx.signal.addEventListener('abort', () => {
       if (pendingPerms.has(permId)) { pendingPerms.delete(permId); settle({ behavior: 'deny', message: '已取消' }); }
     });
@@ -497,22 +505,25 @@ function startSession(sender, { cwd, provider, sessionId, permMode }) {
           // 加载用户/项目/本地设置（CLAUDE.md + 权限 allow/deny 规则），
           // 与终端里的 CC 行为一致：预批准的规则照样生效、提示更少更一致。
           settingSources: ['user', 'project', 'local'],
+          // 不连 ~/.claude.json 的环境 MCP（feishu/gitlab/ruflo 等）——本地编码 agent 用不到，
+          // 而连接它们会给每次冷启加好几秒。需要再单独配。
+          strictMcpConfig: true,
           includePartialMessages: true,
           pathToClaudeCodeExecutable: bin,
           abortController: ac,
           env: childEnv(),
-          stderr: (data) => sender.send('localAgent:event', { cwd, ev: { type: 'stderr', text: String(data) } }),
+          stderr: (data) => emit({ type: 'stderr', text: String(data) }),
           ...(sessionId ? { resume: sessionId } : {}),
         },
       });
       session.query = q;
-      for await (const msg of q) sender.send('localAgent:event', { cwd, ev: msg });
+      for await (const msg of q) { if (!emit(msg)) break; }   // 帧没了就停，别空转
     } catch (e) {
-      if (!ac.signal.aborted) sender.send('localAgent:event', { cwd, ev: { type: 'error', error: String(e && e.message || e) } });
+      if (!ac.signal.aborted) emit({ type: 'error', error: String(e && e.message || e) });
     } finally {
       sessions.delete(cwd);
       clearPerms(cwd, '会话结束');
-      sender.send('localAgent:event', { cwd, ev: { type: 'session_closed' } });
+      emit({ type: 'session_closed' });
     }
   })();
 
@@ -526,6 +537,14 @@ function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode }) {
   if (!s) return { ok: false };
   s.input.push({ type: 'user', message: { role: 'user', content: prompt }, parent_tool_use_id: null });
   return { ok: true };
+}
+
+/** 预热：打开/聚焦会话时就起常驻进程（提前付冷启 + resume 读盘），
+ *  等用户真正发送时已是暖的——首 token 从 ~10s 降到 ~2s。已有则不重起。 */
+function sessionWarm(sender, { cwd, provider, sessionId, permMode }) {
+  if (sessions.has(cwd)) return { ok: true };
+  const s = startSession(sender, { cwd, provider, sessionId, permMode });
+  return { ok: !!s };
 }
 
 /** 中断当前回合，但保留常驻会话（可继续发）。 */
@@ -580,6 +599,7 @@ function registerLocalAgent(ipcMain, dialog) {
   ipcMain.handle('localAgent:deleteSession', (_e, { provider, cwd, sessionId }) => deleteSession(provider, cwd, sessionId));
   ipcMain.handle('localAgent:listCommands', (_e, { provider, cwd }) => listCommands(provider, cwd));
   ipcMain.handle('localAgent:send', (e, payload) => sessionSend(e.sender, payload));
+  ipcMain.handle('localAgent:warm', (e, payload) => sessionWarm(e.sender, payload));
   ipcMain.handle('localAgent:permissionRespond', (_e, { permId, decision }) => permissionRespond(permId, decision));
   ipcMain.handle('localAgent:interrupt', (_e, { cwd }) => sessionInterrupt({ cwd }));
   ipcMain.handle('localAgent:sessionClose', (_e, { cwd }) => sessionClose({ cwd }));
