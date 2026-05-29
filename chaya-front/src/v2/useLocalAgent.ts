@@ -14,7 +14,7 @@ import {
   loadMcpBySession, saveMcpBySession, permModesFor, defaultPermMode,
   type DetectedProvider, type ProviderId, type SessionSummary, type TranscriptMessage, type LocalProject,
   type PermMode, type SlashCommand, type PermissionRequest, type PermissionDecision, type QuestionRequest,
-  type TabGroup, type ModelInfo, type McpStatus,
+  type TabGroup, type ModelInfo, type McpStatus, type Attachment,
 } from './services/localAgent';
 import { api } from '../utils/apiClient';
 import { TYPEWRITER_PRESETS, DEFAULT_TYPEWRITER, FINISH_DRAIN_SEC, type TypewriterConfig } from './typewriter';
@@ -42,6 +42,7 @@ export interface Tab {
   model?: string;          // 每个会话选用的模型（空 = provider 默认）
   mcp?: string[];          // 该会话启用的 MCP server 名字（空 = 不启用）
   mcpStatus?: McpStatus[]; // MCP 连接状态（来自 init / setMcp 回执）
+  attachments?: Attachment[]; // 待发送的参考附件（拖入/选取的文件 + 粘贴图片），发送后清空
 }
 
 // 自动分配的窗格 / 分组色板（沉静、互相可辨；非强饱和，贴合 letterpress 调性）。
@@ -478,6 +479,25 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   // 草稿/发送/中断都按 cwd 寻址（多窗格下每个窗独立）。
   const setDraft = useCallback((cwd: string, v: string) => { patchTab(cwd, { draft: v }); }, [patchTab]);
 
+  /* ---- 参考附件（按 cwd / 窗格独立）：拖入文件、附件按钮选取、粘贴板图片。
+         图片走视觉（image block），其它文件按 @路径 让 agent 读取分析。 ---- */
+  const attSeqRef = useRef(0);
+  const mkAttId = () => `att-${Date.now()}-${attSeqRef.current++}`;
+  const addAttachments = useCallback((cwd: string, atts: Omit<Attachment, 'id'>[]) => {
+    if (!atts.length) return;
+    const withIds = atts.map((a) => ({ ...a, id: mkAttId() }));
+    patchTab(cwd, (t) => ({ attachments: [...(t.attachments || []), ...withIds] }));
+  }, [patchTab]);
+  const removeAttachment = useCallback((cwd: string, id: string) => {
+    patchTab(cwd, (t) => ({ attachments: (t.attachments || []).filter((a) => a.id !== id) }));
+  }, [patchTab]);
+  const pickAttachments = useCallback(async (cwd: string) => {
+    const picked = await localAgent.pickFiles();
+    if (Array.isArray(picked) && picked.length) {
+      addAttachments(cwd, picked.map((p) => ({ kind: p.kind, name: p.name, path: p.path, mime: p.mime, size: p.size, dataUrl: p.dataUrl })));
+    }
+  }, [addAttachments]);
+
   /* ---- 标签分组（类 Chrome 标签组）：合并多个标签、设色、折叠/展开。 ---- */
   const groupSeqRef = useRef(0);
   const createGroupFromTab = useCallback((cwd: string) => {
@@ -672,18 +692,21 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     const tab = tabs.find((t) => t.cwd === cwd);
     if (!cwd || !tab) return;
     const text = tab.draft.trim();
-    if (!text || tab.running) return;
+    const attachments = tab.attachments || [];
+    if ((!text && attachments.length === 0) || tab.running) return;
     if (!current?.installed || !current?.live) { patchTab(cwd, { status: `⚠ ${current?.label || provider} 不可用` }); return; }
     const sid = tab.sessionId;   // 仅首条用于 resume；常驻会话已存在时后端忽略
     // cursor headless 必需 API Key——优先用缓存，没有则现拉（拉不到则主进程会回 error 提示去设置录入）。
     const apiKey = provider === 'cursor' ? (cursorKeyRef.current || await fetchCursorKey()) : undefined;
     dropSmooth(cwd);
+    // 气泡里把附件名缀在用户文本后，让发出去的这一轮一眼看出带了哪些参考。
+    const attNote = attachments.length ? `${text ? '\n' : ''}📎 ${attachments.map((a) => a.name).join('、')}` : '';
     patchTab(cwd, (t) => ({
-      draft: '',
-      messages: [...t.messages, { role: 'user', parts: [{ kind: 'text', text }], ts: null, uuid: null }],
+      draft: '', attachments: [],
+      messages: [...t.messages, { role: 'user', parts: [{ kind: 'text', text: text + attNote }], ts: null, uuid: null }],
       liveMsgs: [], livePreview: '', running: true, status: '处理中…', perm: null, question: null,
     }));
-    const res = await localAgent.send({ provider, cwd, sessionId: sid, prompt: text, permMode: tab.permMode, model: tab.model, mcp: tab.mcp, apiKey });
+    const res = await localAgent.send({ provider, cwd, sessionId: sid, prompt: text, permMode: tab.permMode, model: tab.model, mcp: tab.mcp, apiKey, attachments });
     if (!res.ok) patchTab(cwd, (t) => ({ running: false, status: t.status.startsWith('⚠') ? t.status : '⚠ 启动失败' }));
   }, [tabs, current, provider, patchTab, dropSmooth, fetchCursorKey]);
 
@@ -787,6 +810,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     perm: activeTab?.perm ?? null,
     question: activeTab?.question ?? null,
     setDraft,
+    addAttachments, removeAttachment, pickAttachments,
     openSession, newSession, deleteSession, send, interrupt, respondPermission, answerQuestion,
   }), [
     providers, provider, current, detecting,
@@ -798,6 +822,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     groups, createGroupFromTab, addTabToGroup, removeTabFromGroup, toggleGroup, setGroupColor, renameGroup, ungroupGroup, moveGroupBefore, moveTabBefore,
     activeTab,
     setDraft,
+    addAttachments, removeAttachment, pickAttachments,
     openSession, newSession, deleteSession, send, interrupt, respondPermission, answerQuestion,
   ]);
   return la;

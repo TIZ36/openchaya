@@ -16,6 +16,9 @@ import type { FontId } from '../components/SettingsPage';
 import { TYPE_SPEED_LABELS, type TypeSpeed } from './typewriter';
 import { getBackendUrl } from '../utils/backendUrl';
 import { isLocalAgentAvailable } from './services/localAgent';
+import {
+  IconUser, IconGear, IconModel, IconPlug, IconCloud, IconTerminal, IconAppearance,
+} from './icons';
 
 interface Props {
   settings: ClientSettings;
@@ -33,32 +36,32 @@ type Tab = 'account' | 'appearance' | 'prefs' | 'services' | 'models' | 'mcp' | 
  *  比之前的"基础设置 / Agent 设置"语义更准（RAG/MCP 闲聊也会用到，不只是 agent）。
  *  Hint 行去掉 —— label 已自明，多一行只是噪声，让 nav 高度更安静。
  */
-const TAB_GROUPS: { group: string; items: { id: Tab; label: string }[] }[] = [
+const TAB_GROUPS: { group: string; items: { id: Tab; label: string; icon: React.ReactNode }[] }[] = [
   {
     group: '个人',
     items: [
-      { id: 'account',    label: '账号' },
-      { id: 'appearance', label: '外观' },
-      { id: 'prefs',      label: '偏好' },
+      { id: 'account',    label: '账号', icon: <IconUser /> },
+      { id: 'appearance', label: '外观', icon: <IconAppearance /> },
+      { id: 'prefs',      label: '偏好', icon: <IconGear /> },
     ],
   },
   {
     group: '能力',
     items: [
-      { id: 'models',  label: '模型' },
-      { id: 'mcp',     label: 'MCP 工具' },
+      { id: 'models',  label: '模型',    icon: <IconModel /> },
+      { id: 'mcp',     label: 'MCP 工具', icon: <IconPlug /> },
     ],
   },
   {
     group: '外部',
     items: [
-      { id: 'services', label: '服务' },
+      { id: 'services', label: '服务', icon: <IconCloud /> },
     ],
   },
   ...(isLocalAgentAvailable() ? [{
     group: '桌面',
     items: [
-      { id: 'localagent' as Tab, label: 'Local Agents' },
+      { id: 'localagent' as Tab, label: 'Local Agents', icon: <IconTerminal /> },
     ],
   }] : []),
 ];
@@ -136,7 +139,8 @@ const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, on
                     className={`v2-settings-nav-item${tab === t.id ? ' active' : ''}`}
                     onClick={() => setTab(t.id)}
                   >
-                    {t.label}
+                    <span className="ic" aria-hidden>{t.icon}</span>
+                    <span className="lab">{t.label}</span>
                   </button>
                 ))}
               </div>
@@ -501,8 +505,8 @@ const LocalAgentPane: React.FC<{ settings: ClientSettings; updateSettings: (p: P
           ))}
         </div>
       </Section>
-      <Section title="权限模式" hint="对话框里按 Tab 键即时切换。Claude：Default / Plan / Accept Edits / Bypass；Cursor：Plan / Ask / Force。">
-        <Row label="说明" sub="Plan = 只读规划；Ask = 只读问答；Accept Edits = 自动改文件；Bypass / Force = 全自动执行。每次对话用当前选择的模式。">
+      <Section title="权限模式" hint="对话框里按 Tab 键即时切换。Claude：default / plan / accept edits / bypass；Cursor：plan / ask / force。">
+        <Row label="说明" sub="plan = 只读规划；ask = 只读问答；accept edits = 自动改文件；bypass / force = 全自动执行（含写/执行，慎用）。每次对话用当前选择的模式。">
           <div className="v2-set-val">在对话输入框右下角查看与切换</div>
         </Row>
       </Section>

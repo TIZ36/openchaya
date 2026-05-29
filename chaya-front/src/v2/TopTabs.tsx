@@ -5,7 +5,7 @@
  *
  * 激活与状态同步由 ClientShell 负责（见 useTopTabs 注释）。
  */
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { LocalAgentTabs } from './LocalAgentView';
 import type { LocalAgentState } from './useLocalAgent';
 import type { TopTab } from './useTopTabs';
@@ -17,11 +17,17 @@ interface Props {
   activeId: string | null;
   onActivate: (tab: TopTab) => void;
   onClose: (tab: TopTab) => void;
+  onTogglePin: (tab: TopTab) => void;
 }
 
-export const TopTabs: React.FC<Props> = React.memo(({ la, tabs, activeId, onActivate, onClose }) => {
+interface MenuState { x: number; y: number; tab: TopTab }
+
+export const TopTabs: React.FC<Props> = React.memo(({ la, tabs, activeId, onActivate, onClose, onTogglePin }) => {
   const nonLocal = tabs.filter((t) => t.kind !== 'local');
+  const pinned = nonLocal.filter((t) => t.pinned);
+  const unpinned = nonLocal.filter((t) => !t.pinned);
   const hasLocal = la.tabs.length > 0;
+  const [menu, setMenu] = useState<MenuState | null>(null);
   if (!hasLocal && nonLocal.length === 0) {
     return <span className="v2-la-tabs-empty">无打开会话</span>;
   }
@@ -50,52 +56,90 @@ export const TopTabs: React.FC<Props> = React.memo(({ la, tabs, activeId, onActi
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
   }, []);
+  const openMenu = (e: React.MouseEvent, t: TopTab) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, tab: t }); };
   return (
     <div className="v2-la-tabs v2-toptabs" role="tablist" ref={scrollerRef}>
+      {/* 固定的缩略 tab —— 钉在最左侧，仅图标，不可关闭。 */}
+      {pinned.map((t) => (
+        <ChatChip key={t.id} t={t} active={t.id === activeId} pinned
+          onActivate={() => onActivate(t)} onClose={() => onClose(t)} onMenu={(e) => openMenu(e, t)} />
+      ))}
+      {pinned.length > 0 && (hasLocal || unpinned.length > 0) && <span className="v2-toptabs-sep" aria-hidden />}
       {hasLocal && <LocalAgentTabs la={la} inline onTabActivate={onLocalActivate} activeCwd={activeLocalCwd} />}
       {/* 在 local 与 chat/系统 tabs 之间留一道极细分隔，避免两段视觉粘在一起。 */}
-      {hasLocal && nonLocal.length > 0 && <span className="v2-toptabs-sep" aria-hidden />}
-      {nonLocal.map((t) => (
+      {hasLocal && unpinned.length > 0 && <span className="v2-toptabs-sep" aria-hidden />}
+      {unpinned.map((t) => (
         <ChatChip
           key={t.id}
           t={t}
           active={t.id === activeId}
           onActivate={() => onActivate(t)}
           onClose={() => onClose(t)}
+          onMenu={(e) => openMenu(e, t)}
         />
       ))}
+      {menu && (
+        <TabMenu
+          menu={menu}
+          onClose={() => setMenu(null)}
+          onPin={() => { onTogglePin(menu.tab); setMenu(null); }}
+          onCloseTab={() => { onClose(menu.tab); setMenu(null); }}
+        />
+      )}
     </div>
   );
 });
 TopTabs.displayName = 'TopTabs';
 
-/** 单条非 local tab 的渲染。chat / gallery / kb 共用同一壳，只换图标。 */
-const ChatChip: React.FC<{ t: TopTab; active: boolean; onActivate: () => void; onClose: () => void }> = ({ t, active, onActivate, onClose }) => {
+/** 单条非 local tab。chat / gallery / kb 共用同一壳，只换图标。
+ *  pinned：缩略（仅图标、无标题、无关闭），钉在最左。右键唤出菜单。 */
+const ChatChip: React.FC<{ t: TopTab; active: boolean; pinned?: boolean; onActivate: () => void; onClose: () => void; onMenu: (e: React.MouseEvent) => void }> = ({ t, active, pinned, onActivate, onClose, onMenu }) => {
   return (
     <div
       role="tab"
       aria-selected={active}
       tabIndex={0}
-      className={`v2-la-tab${active ? ' active' : ''}${t.attn ? ' attn' : ''}`}
+      className={`v2-la-tab${active ? ' active' : ''}${t.attn ? ' attn' : ''}${pinned ? ' pinned' : ''}`}
       onClick={onActivate}
-      onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); onClose(); } }}   // 中键关闭
+      onContextMenu={onMenu}
+      onMouseDown={(e) => { if (e.button === 1 && !pinned) { e.preventDefault(); onClose(); } }}   // 中键关闭（固定项除外）
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onActivate(); }
-        if (e.key === 'Delete' || (e.key === 'w' && (e.metaKey || e.ctrlKey))) { e.preventDefault(); onClose(); }
+        if (!pinned && (e.key === 'Delete' || (e.key === 'w' && (e.metaKey || e.ctrlKey)))) { e.preventDefault(); onClose(); }
       }}
-      title={t.label}
+      title={pinned ? `${t.label}（已固定 · 右键取消）` : t.label}
     >
       <span className="ico" aria-hidden><IconFor t={t} /></span>
-      <span className="sess">{t.label}</span>
+      {!pinned && <span className="sess">{t.label}</span>}
       {t.unread && !active && <span className="unread" aria-label="未读" />}
       {t.attn && <span className="attn-mark" aria-label="需要批准">!</span>}
-      <button
-        className="x"
-        onClick={(e) => { e.stopPropagation(); onClose(); }}
-        title="关闭 (⌘W)"
-        aria-label="关闭"
-        tabIndex={-1}
-      >×</button>
+      {!pinned && (
+        <button
+          className="x"
+          onClick={(e) => { e.stopPropagation(); onClose(); }}
+          title="关闭 (⌘W)"
+          aria-label="关闭"
+          tabIndex={-1}
+        >×</button>
+      )}
+    </div>
+  );
+};
+
+/** Tab 右键菜单：固定/取消固定 · 关闭。 */
+const TabMenu: React.FC<{ menu: MenuState; onClose: () => void; onPin: () => void; onCloseTab: () => void }> = ({ menu, onClose, onPin, onCloseTab }) => {
+  useEffect(() => {
+    const onDoc = () => onClose();
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    setTimeout(() => window.addEventListener('mousedown', onDoc), 0);
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('mousedown', onDoc); window.removeEventListener('keydown', onKey); };
+  }, [onClose]);
+  const style: React.CSSProperties = { left: Math.min(menu.x, window.innerWidth - 180), top: menu.y };
+  return (
+    <div className="v2-rowmenu v2-toptab-menu" style={style} onMouseDown={(e) => e.stopPropagation()}>
+      <button onClick={onPin}>{menu.tab.pinned ? '取消固定' : '固定到最左'}</button>
+      <button onClick={onCloseTab}>关闭标签</button>
     </div>
   );
 };

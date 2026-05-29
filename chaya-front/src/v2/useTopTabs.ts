@@ -28,6 +28,8 @@ export interface TopTab {
   unread?: boolean;
   /** 该会话有待批准/选择请求 —— 用 accent 边强调，提示「需要你」。 */
   attn?: boolean;
+  /** 固定：缩略显示在最左侧、不可关闭、跨会话常驻。 */
+  pinned?: boolean;
 }
 
 interface PersistedShape {
@@ -59,8 +61,8 @@ function loadPersisted(): PersistedShape {
 
 function persist(tabs: TopTab[], activeId: string | null) {
   try {
-    const lean = tabs.map(({ id, kind, label, sessionId, sessionType, isPrimary, cwd, provider }) =>
-      ({ id, kind, label, sessionId, sessionType, isPrimary, cwd, provider }));
+    const lean = tabs.map(({ id, kind, label, sessionId, sessionType, isPrimary, cwd, provider, pinned }) =>
+      ({ id, kind, label, sessionId, sessionType, isPrimary, cwd, provider, pinned }));
     localStorage.setItem(LS_KEY, JSON.stringify({ tabs: lean, activeId }));
   } catch { /* ignore */ }
 }
@@ -78,6 +80,8 @@ export interface TopTabsApi {
   clearUnread: (id: string) => void;
   markUnread: (id: string) => void;
   setAttn: (id: string, attn: boolean) => void;
+  /** 切换固定（缩略钉在最左）。 */
+  togglePin: (id: string) => void;
 }
 
 export function useTopTabs(): TopTabsApi {
@@ -151,5 +155,9 @@ export function useTopTabs(): TopTabsApi {
       : prev);
   }, []);
 
-  return { tabs, activeId, add, remove, setActiveId, clearUnread, markUnread, setAttn };
+  const togglePin = useCallback((id: string) => {
+    setTabs((prev) => prev.map((t) => t.id === id ? { ...t, pinned: !t.pinned } : t));
+  }, []);
+
+  return { tabs, activeId, add, remove, setActiveId, clearUnread, markUnread, setAttn, togglePin };
 }

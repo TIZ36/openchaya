@@ -273,6 +273,69 @@ export const smartnoteDocuments = {
   /** Chunks, embeds, and lands as memories. Synchronous at MVP. */
   ingest: (id: string) =>
     req<{ ok: boolean; chunks: number }>(`/v1/documents/${encodeURIComponent(id)}/ingest`, { method: 'POST' }),
+  remove: (id: string) =>
+    req<{ deleted: boolean; id: string }>(`/v1/documents/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+};
+
+/* ============================================================
+   Chunk search — 6-path hybrid retrieval over ingested document
+   chunks (cloud-side fusion: fts / sub / ngram / vec / kw / tag_meta).
+   Distinct from `smartnoteRetrieve` (which searches MEMORIES); this is
+   the document-search backbone for the 搜索 page.
+   ============================================================ */
+
+export interface ChunkSearchHit {
+  id: string;
+  document_id: string;
+  document_name: string;
+  dimension: string;        // topic/tag, e.g. 'wiki:回传'
+  text: string;
+  keywords: string[];
+  line_start: number;
+  line_end: number;
+  source_ref: string;
+  score: number;
+  path_scores: Record<string, number>;  // 6-path fusion chips
+}
+
+export interface ChunkSourceLine { line: number; text: string; highlight: boolean }
+export interface ChunkSource {
+  document_id: string;
+  document_name: string;
+  dimension: string;
+  line_start: number;
+  line_end: number;
+  target_line: number;
+  lines: ChunkSourceLine[];
+}
+
+export const smartnoteChunks = {
+  /** POST /v1/chunks/search — body {query, topk, dimension?}. */
+  search: (query: string, opts?: { topk?: number; dimension?: string }) =>
+    req<{ results: ChunkSearchHit[]; query_embedded: boolean }>(
+      '/v1/chunks/search',
+      { method: 'POST', body: JSON.stringify({ query, topk: opts?.topk ?? 20, dimension: opts?.dimension }) },
+    ),
+  /** GET /v1/chunks/{id}/source?context=N — line window around the chunk. */
+  source: (chunkId: string, context = 6) =>
+    req<ChunkSource>(`/v1/chunks/${encodeURIComponent(chunkId)}/source?context=${context}`),
+};
+
+/* ============================================================
+   Search history — cross-device "recent searches".
+   ============================================================ */
+
+export interface SearchHistoryItem {
+  id: string;
+  query_text: string;
+  result_count: number;
+  tag_filter: string | null;
+  created_at: string;
+}
+
+export const smartnoteSearchHistory = {
+  list: (limit = 20) => req<SearchHistoryItem[]>(`/v1/search/history?limit=${limit}`),
+  clear: () => req<{ ok: boolean; deleted: number }>('/v1/search/history', { method: 'DELETE' }),
 };
 
 /* ============================================================

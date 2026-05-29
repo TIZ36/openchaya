@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('chateeElectron', {
   localAgent: {
     detect: () => ipcRenderer.invoke('localAgent:detect'),
     pickFolder: () => ipcRenderer.invoke('localAgent:pickFolder'),
+    pickFiles: () => ipcRenderer.invoke('localAgent:pickFiles'),
     listSessions: (provider, cwd) => ipcRenderer.invoke('localAgent:listSessions', { provider, cwd }),
     readSession: (provider, cwd, sessionId) => ipcRenderer.invoke('localAgent:readSession', { provider, cwd, sessionId }),
     deleteSession: (provider, cwd, sessionId) => ipcRenderer.invoke('localAgent:deleteSession', { provider, cwd, sessionId }),
@@ -29,6 +30,17 @@ contextBridge.exposeInMainWorld('chateeElectron', {
       ipcRenderer.on('localAgent:event', handler);
       return () => ipcRenderer.removeListener('localAgent:event', handler);
     },
+  },
+
+  // 本地笔记文件桥（平铺管理；从任意目录导入；同步到 sncloud 在渲染层做）
+  notes: {
+    pickFiles: () => ipcRenderer.invoke('notes:pickFiles'),
+    createFile: (defaultName) => ipcRenderer.invoke('notes:createFile', { defaultName }),
+    stat: (p) => ipcRenderer.invoke('notes:stat', { path: p }),
+    read: (p) => ipcRenderer.invoke('notes:read', { path: p }),
+    write: (p, content) => ipcRenderer.invoke('notes:write', { path: p, content }),
+    rename: (p, name) => ipcRenderer.invoke('notes:rename', { path: p, name }),
+    delete: (p) => ipcRenderer.invoke('notes:delete', { path: p }),
   },
 });
 

@@ -4,6 +4,7 @@
 const { app, BrowserWindow, shell, ipcMain, dialog, nativeImage } = require('electron');
 const path = require('path');
 const { registerLocalAgent } = require('./localAgent.cjs');
+const { registerNotes } = require('./notes.cjs');
 
 const isDev = !app.isPackaged;
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5177';
@@ -89,6 +90,7 @@ function createWindow() {
 
 // 本地 Agent 桥：纯本地功能，与后端无关。仅注册一次。
 registerLocalAgent(ipcMain, dialog);
+registerNotes(ipcMain, dialog);
 
 app.whenReady().then(() => {
   // Dev dock icon (packaged macOS uses build/icon.icns from the bundle).

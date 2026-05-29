@@ -1,12 +1,39 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  smartnoteProbe, smartnoteMemories, smartnoteRetrieve, smartnoteDocuments, smartnoteTags,
+  smartnoteProbe, smartnoteMemories, smartnoteDocuments, smartnoteTags,
+  smartnoteChunks, smartnoteSearchHistory, smartnoteRetrieve,
   getSmartnoteApiKey, setSmartnoteApiKey,
   getSmartnoteBaseUrl, setSmartnoteBaseUrl,
   type Memory, type MemoryKind, type MemoryCreate, type MemoryPatch,
-  type RetrievedMemory, type Document, type Tag,
+  type Document, type Tag, type RetrievedMemory,
+  type ChunkSearchHit, type ChunkSource, type SearchHistoryItem,
 } from '../services/smartnoteApi';
-import { IconPin, IconEdit, IconTrash, IconDoc, IconPlus } from './icons';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { kbAnswer } from '../services/kbApi';
+import {
+  isLocalNotesAvailable, listNotes, importNotes, newNoteFile,
+  readNote as readLocalNote, writeNote as writeLocalNote,
+  renameNote as renameLocalNote, deleteNote as deleteLocalNote,
+  noteTitle, syncedDocId, mapSync, syncedDocIds,
+  type LocalNoteFile,
+} from './services/localNotes';
+import { IconPin, IconEdit, IconTrash, IconDoc, IconPlus, IconSearch, IconModel, IconChevron, IconKB, IconCloud } from './icons';
+import { NoteEditor, type NoteEditorHandle } from './kb/NoteEditor';
+import { CodeBlock, PreBlock, mdRehypePlugins } from './codeBlock';
+
+/** Shared markdown surface for note preview + AI answer. */
+const MD_COMPONENTS = {
+  a: ({ node: _n, ...p }: any) => <a {...p} target="_blank" rel="noreferrer noopener" />,
+  code: CodeBlock,
+  pre: PreBlock,
+} as React.ComponentProps<typeof ReactMarkdown>['components'];
+const MD: React.FC<{ text: string }> = React.memo(({ text }) => (
+  <div className="v2-md">
+    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={mdRehypePlugins} components={MD_COMPONENTS}>{text}</ReactMarkdown>
+  </div>
+));
+MD.displayName = 'KbMD';
 
 /** Domain swatch palette — kept aligned with the create modal choices. */
 const DOMAIN_COLORS = ['#6e6e6e', '#c15f3c', '#c8923f', '#3a8a5c', '#3a6f9c', '#7a5cc2', '#b14a8a'];
@@ -17,10 +44,10 @@ export function domainColor(t?: Tag | null): string {
 
 /* ============================================================
    Knowledge (v2) — via Smartnote Cloud.
-   Tabs: 记忆 · 文档 · 搜
+   两栏工作台：左资源树（知识域 → 笔记/文档 + 记忆入口）/ 右画布
+   （总览 · 笔记编辑 · 文档只读 · 记忆）+ 顶部全局搜索浮层。
    ============================================================ */
 
-type Tab = 'memories' | 'documents' | 'search';
 type ConnState = 'probing' | 'ok' | 'no-key' | 'down';
 
 const KIND_LABELS: Record<MemoryKind, string> = {
@@ -38,15 +65,43 @@ const KIND_TONES: Record<MemoryKind, string> = {
   document_ref: 'soft',
 };
 
+/** Read the user's default LLM config id from persisted settings — the
+ *  search AI answer uses it; falls back to backend GetAny when absent. */
+function readDefaultLLMConfigId(): string | undefined {
+  try {
+    const raw = localStorage.getItem('settings');
+    if (!raw) return undefined;
+    const s = JSON.parse(raw);
+    return s?.defaultLLMConfigId || undefined;
+  } catch { return undefined; }
+}
+
+/** 常驻笔记领域 —— 不可删、不需手动新建；新建笔记自动归入。 */
+const NOTES_DOMAIN = '笔记';
+const NOTES_DOMAIN_COLOR = '#c8923f';
+
+/** What the right canvas is currently showing.
+ *  note = 本地 .md 文件（path 为 id）；doc = 云端上传文档（cloud id）。 */
+type Selection =
+  | { kind: 'all' }
+  | { kind: 'memories' }
+  | { kind: 'note'; path: string }
+  | { kind: 'doc'; id: string };
+
 const KnowledgeView: React.FC = () => {
-  const [tab, setTab] = useState<Tab>('memories');
   const [conn, setConn] = useState<ConnState>('probing');
   const [connErr, setConnErr] = useState<string | null>(null);
+  const llmConfigId = useMemo(() => readDefaultLLMConfigId(), []);
 
-  // Knowledge domains (= workspace tags). `domain` null means 全部 (no scope).
   const [domains, setDomains] = useState<Tag[]>([]);
-  const [domain, setDomain] = useState<string | null>(null);
+  const [docs, setDocs] = useState<Document[] | null>(null);
+  const [notes, setNotes] = useState<LocalNoteFile[]>([]);
+  const [sel, setSel] = useState<Selection>({ kind: 'all' });
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [domainModal, setDomainModal] = useState<Tag | 'new' | null>(null);
+  const [createUnder, setCreateUnder] = useState<string | null | undefined>(undefined); // doc-upload modal; value = preset domain
+  const [searchOpen, setSearchOpen] = useState(false);
+  const localOk = isLocalNotesAvailable();
 
   const probe = useCallback(async () => {
     setConn('probing'); setConnErr(null);
@@ -55,88 +110,363 @@ const KnowledgeView: React.FC = () => {
       const r = await smartnoteProbe();
       if (r.ok) setConn('ok');
       else { setConn('down'); setConnErr(r.error || '探测失败'); }
-    } catch (e: any) {
-      setConn('down'); setConnErr(e?.message || '探测失败');
-    }
+    } catch (e: any) { setConn('down'); setConnErr(e?.message || '探测失败'); }
   }, []);
-
   const loadDomains = useCallback(async () => {
-    try { setDomains(await smartnoteTags.list() || []); }
-    catch (e) { console.warn('[v2] tags.list', e); }
+    try {
+      let list = await smartnoteTags.list() || [];
+      // 确保常驻「笔记」域存在；缺失则补建一次（让 @笔记 在全局检索里也成立）。
+      if (!list.some((t) => t.name === NOTES_DOMAIN)) {
+        try { await smartnoteTags.upsert({ name: NOTES_DOMAIN, color: NOTES_DOMAIN_COLOR }); list = await smartnoteTags.list() || []; }
+        catch { /* 补建失败不阻断：树里仍以常驻方式渲染 */ }
+      }
+      setDomains(list);
+    } catch (e) { console.warn('[v2] tags.list', e); }
   }, []);
+  const loadDocs = useCallback(async () => {
+    try { const r = await smartnoteDocuments.list(); setDocs(r.documents || []); }
+    catch { setDocs([]); }
+  }, []);
+  const loadNotes = useCallback(async () => {
+    if (!localOk) { setNotes([]); return; }
+    try { setNotes(await listNotes()); } catch { setNotes([]); }
+  }, [localOk]);
 
   useEffect(() => { void probe(); }, [probe]);
-  useEffect(() => { if (conn === 'ok') void loadDomains(); }, [conn, loadDomains]);
+  useEffect(() => { if (conn === 'ok') { void loadDomains(); void loadDocs(); } }, [conn, loadDomains, loadDocs]);
+  useEffect(() => { void loadNotes(); }, [loadNotes]);
+  // 笔记域默认展开（新建笔记落进这里，要立刻看得到）。
+  useEffect(() => { setExpanded((p) => new Set(p).add(NOTES_DOMAIN)); }, []);
 
-  const activeDomain = domains.find((d) => d.name === domain) || null;
+  // ⌘K focuses search · ⌘N new note · Esc closes search overlay · 双击 Shift 也开搜索
+  useEffect(() => {
+    let lastShift = 0;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setSearchOpen(true); }
+      else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); void addNote(); }
+      else if (e.key === 'Escape' && searchOpen) setSearchOpen(false);
+      else if (e.key === 'Shift' && !e.repeat) {
+        const now = e.timeStamp || Date.now();
+        if (now - lastShift < 400) { setSearchOpen(true); lastShift = 0; } else lastShift = now;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchOpen]);
+
+  const toggleExpand = (key: string) =>
+    setExpanded((p) => { const n = new Set(p); n.has(key) ? n.delete(key) : n.add(key); return n; });
+
+  // 新建笔记 = 保存对话框选位置（任意目录）→ 建空 .md → 平铺登记 → 打开。
+  const addNote = useCallback(async () => {
+    if (!localOk) { window.alert('本地笔记仅桌面版可用。'); return; }
+    try {
+      const p = await newNoteFile('未命名笔记.md');
+      if (!p) return;
+      setExpanded((s) => new Set(s).add(NOTES_DOMAIN));
+      await loadNotes();
+      setSel({ kind: 'note', path: p });
+    } catch (e: any) { window.alert(e?.message || '创建失败'); }
+  }, [localOk, loadNotes]);
+
+  // 导入：从任意目录挑选已有的 .md/.txt 文件，平铺加入。
+  const importNote = useCallback(async () => {
+    if (!localOk) { window.alert('本地笔记仅桌面版可用。'); return; }
+    try {
+      const added = await importNotes();
+      if (!added.length) return;
+      setExpanded((s) => new Set(s).add(NOTES_DOMAIN));
+      await loadNotes();
+      setSel({ kind: 'note', path: added[0] });
+    } catch (e: any) { window.alert(e?.message || '导入失败'); }
+  }, [localOk, loadNotes]);
+
+  // 哪些云端文档其实是「笔记」：本地同步的镜像 + 云端 kind:note —— 供搜索分组用。
+  const noteDocIds = useMemo(() => {
+    const s = syncedDocIds();
+    for (const d of docs || []) if (d.kind === 'note') s.add(d.id);
+    return s;
+    // notes 变化（同步映射可能改动）也要重算
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docs, notes]);
+
+  // 搜索结果回车 → 在工作区打开并关闭面板。命中镜像文档时优先打开对应本地笔记。
+  const openFromSearch = useCallback((t: SearchOpenTarget) => {
+    if (t.kind === 'memory') { setSel({ kind: 'memories' }); setSearchOpen(false); return; }
+    const local = notes.find((n) => syncedDocId(n.path) === t.id);
+    setSel(local ? { kind: 'note', path: local.path } : { kind: 'doc', id: t.id });
+    setSearchOpen(false);
+  }, [notes]);
 
   return (
-    <div className="v2-view">
-      <div className="v2-view-head v2-kb-head">
-        <h2>知识库</h2>
-        <div className="v2-kb-conn">
-          <ConnDot state={conn} />
-          <span>{
-            conn === 'probing' ? '连接中…' :
-            conn === 'ok' ? '已连接' :
-            conn === 'no-key' ? '未配置 API Key' :
-            conn === 'down' ? '不可达' : ''
-          }</span>
-        </div>
+    <div className="v2-view v2-kb-view">
+      {/* ── 顶栏：全局搜索（占主） + 连接状态 ── */}
+      <div className="v2-kb-top">
+        <button className="v2-kb-searchbtn" onClick={() => setSearchOpen(true)} title="搜索全部内容 (⌘K · 双击 Shift)">
+          <IconSearch /><span>搜索笔记、文档、记忆…</span><kbd>⌘K</kbd>
+        </button>
+        <KbConn state={conn} />
       </div>
 
+      {conn === 'no-key' && <div className="v2-kb-body"><NoKey onSaved={probe} /></div>}
+      {conn === 'down' && <div className="v2-kb-body"><Down err={connErr} onRetry={probe} /></div>}
+      {conn === 'probing' && <div className="v2-kb-body"><KbEmpty title="连接中…" /></div>}
+
       {conn === 'ok' && (
-        <div className="v2-kb-domains">
-          <button className={`v2-kb-dom${domain === null ? ' on' : ''}`} onClick={() => setDomain(null)}>全部</button>
-          {domains.map((d) => (
-            <button
-              key={d.name}
-              className={`v2-kb-dom${domain === d.name ? ' on' : ''}`}
-              onClick={() => setDomain(d.name)}
-              onDoubleClick={() => setDomainModal(d)}
-              title="双击编辑 / 删除"
-            >
-              <span className="dot" style={{ background: domainColor(d) }} />{d.name}
-            </button>
-          ))}
-          <button className="v2-kb-dom add" onClick={() => setDomainModal('new')} title="新建知识域"><IconPlus /> 域</button>
+        <div className="v2-kb-workspace">
+          <KbTree
+            domains={domains}
+            docs={docs}
+            notes={notes}
+            localOk={localOk}
+            sel={sel}
+            expanded={expanded}
+            onSelect={setSel}
+            onToggle={toggleExpand}
+            onNewDomain={() => setDomainModal('new')}
+            onEditDomain={(t) => setDomainModal(t)}
+            onUpload={(dom) => setCreateUnder(dom ?? null)}
+            onAddNote={addNote}
+            onImportNote={importNote}
+          />
+          <KbCanvas
+            sel={sel}
+            docs={docs}
+            notes={notes}
+            domains={domains}
+            llmConfigId={llmConfigId}
+            onDocsChanged={loadDocs}
+            onNotesChanged={loadNotes}
+            onSelect={setSel}
+            onAddNote={addNote}
+          />
         </div>
       )}
 
-      <div className="v2-kb-tabs-row">
-        <div className="v2-kb-tabs">
-          <button className={tab === 'memories' ? 'on' : ''} onClick={() => setTab('memories')}>记忆</button>
-          <button className={tab === 'documents' ? 'on' : ''} onClick={() => setTab('documents')}>文档</button>
-          <button className={tab === 'search' ? 'on' : ''} onClick={() => setTab('search')}>搜</button>
-        </div>
-        {activeDomain && (
-          <span className="v2-kb-dom-hint">
-            当前域：<b style={{ color: domainColor(activeDomain) }}>{activeDomain.name}</b>
-            <span> — 新增内容会归到该域；闲聊里 <code>@{activeDomain.name}</code> 即可调用</span>
-          </span>
-        )}
-      </div>
+      {searchOpen && (
+        <SearchOverlay domain={null} llmConfigId={llmConfigId} noteDocIds={noteDocIds} onOpen={openFromSearch} onClose={() => setSearchOpen(false)} />
+      )}
 
-      <div className="v2-kb-body">
-        {conn === 'no-key' && <NoKey onSaved={probe} />}
-        {conn === 'down' && <Down err={connErr} onRetry={probe} />}
-        {conn === 'probing' && <KbEmpty title="连接中…" />}
-        {conn === 'ok' && tab === 'memories' && <MemoriesTab domain={domain} />}
-        {conn === 'ok' && tab === 'documents' && <DocumentsTab domain={domain} domains={domains} />}
-        {conn === 'ok' && tab === 'search' && <SearchTab domain={domain} />}
-      </div>
+      {createUnder !== undefined && (
+        <DocumentCreateModal
+          domain={createUnder}
+          onClose={() => setCreateUnder(undefined)}
+          onCreated={() => { setCreateUnder(undefined); void loadDocs(); }}
+        />
+      )}
 
       {domainModal && (
         <DomainEditModal
           tag={domainModal === 'new' ? null : domainModal}
           onClose={() => setDomainModal(null)}
-          onSaved={async (savedName, removed) => {
-            setDomainModal(null);
-            await loadDomains();
-            if (removed && domain === savedName) setDomain(null);
-            else if (savedName) setDomain(savedName);
-          }}
+          onSaved={async (_savedName, _removed) => { setDomainModal(null); await loadDomains(); await loadDocs(); }}
         />
+      )}
+    </div>
+  );
+};
+
+/* ============ Left resource tree ============ */
+
+const KbTree: React.FC<{
+  domains: Tag[];
+  docs: Document[] | null;
+  notes: LocalNoteFile[];
+  localOk: boolean;
+  sel: Selection;
+  expanded: Set<string>;
+  onSelect: (s: Selection) => void;
+  onToggle: (key: string) => void;
+  onNewDomain: () => void;
+  onEditDomain: (t: Tag) => void;
+  onUpload: (domain?: string) => void;
+  onAddNote: () => void;
+  onImportNote: () => void;
+}> = ({ domains, docs, notes, localOk, sel, expanded, onSelect, onToggle, onNewDomain, onEditDomain, onUpload, onAddNote, onImportNote }) => {
+  // 云端文档按域分桶。包含上传文档 + 历史云端笔记（如「东方玄学」），但排除
+  // 已是本地笔记镜像的云 note（避免与「笔记」组重复）。
+  const mirrorIds = useMemo(() => syncedDocIds(), [notes]);
+  const byDomain = useMemo(() => {
+    const m = new Map<string, Document[]>();
+    const push = (k: string, d: Document) => (m.get(k) ?? m.set(k, []).get(k)!).push(d);
+    for (const d of docs || []) {
+      if (mirrorIds.has(d.id)) continue;   // 本地镜像 → 不在云树重复
+      const ds = docDomains(d).filter((x) => x !== NOTES_DOMAIN);  // 「笔记」域不在云树里出现
+      if (ds.length === 0) { push('__none__', d); continue; }
+      for (const name of ds) push(name, d);
+    }
+    return m;
+  }, [docs, mirrorIds]);
+
+  const others = domains.filter((t) => t.name !== NOTES_DOMAIN);
+  // 各子域内文档按名字典序排列（zh-aware）。
+  const restGroups: Array<{ key: string; tag: Tag | null; items: Document[] }> = [
+    ...others.map((t) => ({ key: t.name, tag: t, items: (byDomain.get(t.name) || []).slice().sort(byDocName) })),
+  ];
+  const untagged = (byDomain.get('__none__') || []).slice().sort(byDocName);
+  if (untagged.length) restGroups.push({ key: '__none__', tag: null, items: untagged });
+
+  const docCount = (docs || []).filter((d) => !mirrorIds.has(d.id)).length;
+  const noteCount = notes.length;
+
+  const renderGroup = (g: { key: string; tag: Tag | null; items: Document[] }) => {
+    const open = expanded.has(g.key);
+    return (
+      <div key={g.key} className="v2-kb-group">
+        <div className="v2-kb-group-row" onClick={() => onToggle(g.key)}>
+          <span className={`caret${open ? ' open' : ''}`}><IconChevron /></span>
+          <span className="dot" style={{ background: g.tag ? domainColor(g.tag) : 'var(--c-ink-4)' }} />
+          <span className="nm">{g.tag ? g.tag.name : '未归类'}</span>
+          <span className="cnt">{g.items.length || ''}</span>
+          {/* 未归类不可编辑；用户自建域有铅笔。 */}
+          {g.tag && (
+            <button className="row-act" title="编辑域" onClick={(e) => { e.stopPropagation(); onEditDomain(g.tag!); }}><IconEdit /></button>
+          )}
+        </div>
+        {open && g.items.map((d) => (
+          <button
+            key={d.id}
+            className={`v2-kb-node leaf${sel.kind === 'doc' && sel.id === d.id ? ' active' : ''}`}
+            onClick={() => onSelect({ kind: 'doc', id: d.id })}
+            title={d.name}
+          >
+            <span className="ic"><IconDoc /></span>
+            <span className="nm">{d.name || '未命名'}</span>
+          </button>
+        ))}
+        {open && g.items.length === 0 && <div className="v2-kb-node-empty">空</div>}
+      </div>
+    );
+  };
+
+  return (
+    <aside className="v2-kb-tree">
+      <div className="v2-kb-tree-scroll">
+        {/* 笔记组置顶（在「全部」之上）—— 本地 .md 文件。导入/新建都是 icon 按钮；
+            没有笔记时不可展开（无 caret、点头不展开）。 */}
+        {(() => {
+          const empty = notes.length === 0;
+          const open = !empty && expanded.has(NOTES_DOMAIN);
+          return (
+        <div className="v2-kb-group v2-kb-group-notes">
+          <div className="v2-kb-group-row" onClick={() => { if (!empty) onToggle(NOTES_DOMAIN); }}>
+            <span className={`caret${open ? ' open' : ''}${empty ? ' hidden' : ''}`}>{!empty && <IconChevron />}</span>
+            <span className="ic-lead" style={{ color: NOTES_DOMAIN_COLOR }}><IconEdit /></span>
+            <span className="nm">笔记</span>
+            <span className="cnt">{noteCount || ''}</span>
+            {localOk && <button className="row-act" title="导入已有笔记文件" onClick={(e) => { e.stopPropagation(); onImportNote(); }}><IconDoc /></button>}
+            {localOk && <button className="row-act" title="新建笔记" onClick={(e) => { e.stopPropagation(); onAddNote(); }}><IconPlus /></button>}
+          </div>
+          {open && notes.slice().sort(byNoteName).map((f) => (
+            <button
+              key={f.path}
+              className={`v2-kb-node leaf${sel.kind === 'note' && sel.path === f.path ? ' active' : ''}`}
+              onClick={() => onSelect({ kind: 'note', path: f.path })}
+              title={f.path}
+            >
+              <span className="ic"><IconEdit /></span>
+              <span className="nm">{noteTitle(f)}</span>
+            </button>
+          ))}
+        </div>
+          );
+        })()}
+
+        {/* 特殊入口 */}
+        <button className={`v2-kb-node top${sel.kind === 'all' ? ' active' : ''}`} onClick={() => onSelect({ kind: 'all' })}>
+          <span className="ic"><IconKB /></span><span className="nm">全部</span><span className="cnt">{docCount || ''}</span>
+        </button>
+        <button className={`v2-kb-node top${sel.kind === 'memories' ? ' active' : ''}`} onClick={() => onSelect({ kind: 'memories' })}>
+          <span className="ic"><IconPin /></span><span className="nm">记忆</span>
+        </button>
+
+        <div className="v2-kb-tree-sec">
+          <span>知识域</span>
+          <button className="v2-kb-tree-add" title="新建知识域" onClick={onNewDomain}><IconPlus /></button>
+        </div>
+
+        {restGroups.length === 0 && <div className="v2-kb-tree-empty">还没有其它知识域</div>}
+        {restGroups.map(renderGroup)}
+      </div>
+
+      <div className="v2-kb-tree-foot">
+        <button className="v2-kb-tree-footbtn" onClick={() => onUpload(undefined)}><IconPlus /> 上传 wiki</button>
+      </div>
+    </aside>
+  );
+};
+
+/** 文档名字典序（zh-aware）。 */
+function byDocName(a: Document, b: Document): number {
+  return (a.name || '').localeCompare(b.name || '', 'zh-Hans-CN');
+}
+function byNoteName(a: LocalNoteFile, b: LocalNoteFile): number {
+  return a.name.localeCompare(b.name, 'zh-Hans-CN');
+}
+
+/* ============ Right canvas (router) ============ */
+
+const KbCanvas: React.FC<{
+  sel: Selection;
+  docs: Document[] | null;
+  notes: LocalNoteFile[];
+  domains: Tag[];
+  llmConfigId?: string;
+  onDocsChanged: () => void | Promise<void>;
+  onNotesChanged: () => void | Promise<void>;
+  onSelect: (s: Selection) => void;
+  onAddNote: () => void;
+}> = ({ sel, docs, notes, domains, onDocsChanged, onNotesChanged, onSelect, onAddNote }) => {
+  if (sel.kind === 'memories') return <div className="v2-kb-canvas pad"><MemoriesTab domain={null} /></div>;
+  if (sel.kind === 'all') return <KbAllList docs={docs} notes={notes} onSelect={onSelect} onAddNote={onAddNote} />;
+  if (sel.kind === 'note') {
+    const f = notes.find((n) => n.path === sel.path);
+    if (!f) return <div className="v2-kb-canvas"><KbEmpty title="未找到" hint="文件可能已被移动或删除。" /></div>;
+    return <LocalNoteCanvas key={f.path} file={f} domains={domains} onChanged={onNotesChanged} onDeleted={() => onSelect({ kind: 'all' })} />;
+  }
+  // cloud doc
+  const doc = (docs || []).find((d) => d.id === sel.id);
+  if (!doc) return <div className="v2-kb-canvas"><KbEmpty title="未找到" hint="可能已被删除。" /></div>;
+  return <DocCanvas key={doc.id} doc={doc} domains={domains} onChanged={onDocsChanged} onDeleted={() => onSelect({ kind: 'all' })} />;
+};
+
+/* ============ All-content flat list (默认落地页) —— 本地笔记 + 云端文档 ============ */
+
+const KbAllList: React.FC<{ docs: Document[] | null; notes: LocalNoteFile[]; onSelect: (s: Selection) => void; onAddNote: () => void }> = ({ docs, notes, onSelect, onAddNote }) => {
+  type Row = { key: string; name: string; ts: number; sel: Selection };
+  const rows: Row[] = [
+    ...notes.map((f) => ({ key: 'n:' + f.path, name: noteTitle(f), ts: f.mtimeMs, sel: { kind: 'note', path: f.path } as Selection })),
+    ...(docs || []).filter((d) => !isNote(d)).map((d) => ({
+      key: 'd:' + d.id, name: d.name || '未命名',
+      ts: Date.parse(d.updated_at || d.created_at) || 0,
+      sel: { kind: 'doc', id: d.id } as Selection,
+    })),
+  ].sort((a, b) => b.ts - a.ts);
+
+  if (docs && rows.length === 0) {
+    return (
+      <div className="v2-kb-canvas">
+        <div className="v2-kb-welcome">
+          <h3>这里还空着</h3>
+          <p>写下第一篇笔记，或上传一份文档开始构建你的知识库。</p>
+          <button className="v2-set-btn primary" onClick={() => onAddNote()}><IconEdit /> 写第一篇笔记</button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="v2-kb-canvas pad">
+      {!docs ? <KbEmpty title="加载中…" /> : (
+        <div className="v2-kb-ov-list">
+          {rows.map((r) => (
+            <button key={r.key} className="v2-kb-ov-item" onClick={() => onSelect(r.sel)}>
+              <span className="ic">{r.sel.kind === 'note' ? <IconEdit /> : <IconDoc />}</span>
+              <span className="nm">{r.name}</span>
+              <span className="mt">{r.ts ? new Date(r.ts).toLocaleDateString('zh-CN') : ''}</span>
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -438,84 +768,62 @@ function docDomains(d: Document): string[] {
   return [];
 }
 
-const DocumentsTab: React.FC<{ domain: string | null; domains: Tag[] }> = ({ domain, domains }) => {
-  const [list, setList] = useState<Document[] | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [uploadOpen, setUploadOpen] = useState(false);
-  const [editingDoc, setEditingDoc] = useState<Document | null>(null);
+/* ============ Doc canvas — read-only document view ============ */
 
-  const load = useCallback(async () => {
-    try { const r = await smartnoteDocuments.list(); setList(r.documents || []); }
-    catch (e) { console.warn('[v2] documents.list', e); setList([]); }
-  }, []);
-  useEffect(() => { void load(); }, [load]);
+const DocCanvas: React.FC<{
+  doc: Document;
+  domains: Tag[];
+  onChanged: () => void | Promise<void>;
+  onDeleted: () => void;
+}> = ({ doc, domains, onChanged, onDeleted }) => {
+  const [content, setContent] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [editDomains, setEditDomains] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
 
-  // Domain filter is client-side: the list endpoint has no tag filter, but each
-  // doc carries its domains in metadata.
-  const shown = list && (domain ? list.filter((d) => docDomains(d).includes(domain)) : list);
+  useEffect(() => {
+    let alive = true;
+    setContent(null); setConfirmDel(false);
+    smartnoteDocuments.get(doc.id).then((d) => { if (alive) setContent(d.content || ''); }).catch(() => { if (alive) setContent(''); });
+    return () => { alive = false; };
+  }, [doc.id]);
 
-  const onIngest = async (d: Document) => {
-    setBusy(d.id);
-    try {
-      const r = await smartnoteDocuments.ingest(d.id);
-      window.alert(`已切成 ${r.chunks} 块进库`);
-      void load();
-    } catch (e: any) { window.alert(e?.message || 'ingest 失败'); }
-    finally { setBusy(null); }
+  const onIngest = async () => {
+    setBusy(true);
+    try { const r = await smartnoteDocuments.ingest(doc.id); window.alert(`已切成 ${r.chunks} 块进库，可在搜索里检索。`); await onChanged(); }
+    catch (e: any) { window.alert(e?.message || '入库失败'); }
+    finally { setBusy(false); }
+  };
+  // 两步删除（Electron 禁用 window.confirm）。
+  const onDelete = async () => {
+    if (!confirmDel) { setConfirmDel(true); window.setTimeout(() => setConfirmDel(false), 2600); return; }
+    try { await smartnoteDocuments.remove(doc.id); await onChanged(); onDeleted(); }
+    catch (e: any) { window.alert(e?.message || '删除失败'); }
   };
 
   return (
-    <>
-      <div className="v2-kb-toolbar">
-        <div className="v2-kb-filters" style={{ flex: 1 }} />
-        <button className="v2-set-btn primary" onClick={() => setUploadOpen(true)}>＋ 新文档</button>
+    <section className="v2-kb-canvas v2-doc-canvas">
+      <div className="v2-note-toolbar">
+        <span className="v2-note-title" title={doc.name}>{doc.name}</span>
+        <span className="v2-pill mute">{formatBytes(doc.byte_size)}</span>
+        {doc.ingested_at ? <span className="v2-pill ok">已切块</span> : <span className="v2-pill warn">待切块</span>}
+        {docDomains(doc).map((dm) => <span key={dm} className="v2-pill soft">@{dm}</span>)}
+        <span className="grow" />
+        <button className="v2-kb-pill" onClick={() => setEditDomains(true)}>归属域</button>
+        <button className="v2-kb-pill" disabled={busy} onClick={() => void onIngest()}>{busy ? '处理中…' : '入库'}</button>
+        <button className={`v2-note-icon danger${confirmDel ? ' confirm' : ''}`} onClick={() => void onDelete()} title={confirmDel ? '再次点击确认删除' : '删除'}>
+          {confirmDel ? '确认?' : <IconTrash />}
+        </button>
       </div>
-      {!shown && <KbEmpty title="加载中…" />}
-      {shown && shown.length === 0 && (
-        <KbEmpty title={domain ? `「${domain}」域里还没有文档` : '还没有文档'} hint="贴段文字进来 → 切块 → 入记忆库。切块时会带上域标签。" />
+      <div className="v2-note-surface">
+        {content === null ? <div className="v2-note-empty">打开中…</div> : (
+          <div className="v2-note-preview"><MD text={content || '（空文档）'} /></div>
+        )}
+      </div>
+      {editDomains && (
+        <DocumentDomainsModal doc={doc} domains={domains} onClose={() => setEditDomains(false)} onSaved={() => { setEditDomains(false); void onChanged(); }} />
       )}
-      {shown && shown.length > 0 && (
-        <div className="v2-kb-list even">
-          {shown.map((d) => (
-            <div key={d.id} className="v2-kb-card">
-              <div className="hd">
-                <span className="v2-pill">{d.kind || 'text'}</span>
-                <span className="v2-pill mute">{formatBytes(d.byte_size)}</span>
-                {d.ingested_at
-                  ? <span className="v2-pill ok">已切块</span>
-                  : <span className="v2-pill warn">待切块</span>}
-                {docDomains(d).map((dm) => <span key={dm} className="v2-pill soft">@{dm}</span>)}
-                <span className="grow" />
-                <button className="iconbtn" title="配置知识域" onClick={() => setEditingDoc(d)}><IconEdit /></button>
-                {!d.ingested_at && (
-                  <button className="v2-set-btn" disabled={busy === d.id} onClick={() => void onIngest(d)}>
-                    {busy === d.id ? '处理中…' : '切块入库'}
-                  </button>
-                )}
-              </div>
-              <div className="body doc-name"><span className="doc-ic"><IconDoc /></span>{d.name}</div>
-              <div className="ft">
-                <span>新建 {new Date(d.created_at).toLocaleString('zh-CN', { hour12: false })}</span>
-                {d.ingested_at && <span>ingest {new Date(d.ingested_at).toLocaleString('zh-CN', { hour12: false })}</span>}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {uploadOpen && (
-        <DocumentCreateModal domain={domain} onClose={() => setUploadOpen(false)} onCreated={() => { setUploadOpen(false); void load(); }} />
-      )}
-
-      {editingDoc && (
-        <DocumentDomainsModal
-          doc={editingDoc}
-          domains={domains}
-          onClose={() => setEditingDoc(null)}
-          onSaved={() => { setEditingDoc(null); void load(); }}
-        />
-      )}
-    </>
+    </section>
   );
 };
 
@@ -636,7 +944,7 @@ const DocumentCreateModal: React.FC<{ domain: string | null; onClose: () => void
     <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="v2-modal wide" onMouseDown={(e) => e.stopPropagation()}>
         <div className="v2-modal-hd">
-          <h3>新文档</h3>
+          <h3>上传 wiki</h3>
           <button className="x" onClick={onClose}>✕</button>
         </div>
         <div className="v2-modal-body">
@@ -652,11 +960,6 @@ const DocumentCreateModal: React.FC<{ domain: string | null; onClose: () => void
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) void onPickFile(f); e.target.value = ''; }} />
             </div>
             <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={14} placeholder="贴文本或从文件读…" />
-            <div className="v2-modal-note">
-              {domain
-                ? <>将归入知识域 <b>@{domain}</b>。保存后点「切块入库」，切出的块会带上该域标签，<code>@{domain}</code> 即可检索到。</>
-                : <>未选域（全部）。保存后点「切块入库」让 Smartnote 切块并嵌入；如需 <code>@域</code> 调用，请先在上方选一个域再上传。</>}
-            </div>
           </div>
         </div>
         <div className="v2-modal-foot">
@@ -668,104 +971,423 @@ const DocumentCreateModal: React.FC<{ domain: string | null; onClose: () => void
   );
 };
 
-/* ============ Search ============ */
+/* ============ Notes — full open / create / edit / delete ============
+   Notes are cloud documents with kind:'note'. Left list + right CM6 editor
+   with live markdown preview toggle. Autosave on edit; re-ingest to index
+   for search. Domain-scoped: new notes stamp metadata.domains=[domain]. */
 
-const SearchTab: React.FC<{ domain: string | null }> = ({ domain }) => {
-  const [q, setQ] = useState('');
-  const [kinds, setKinds] = useState<MemoryKind[]>([]);
-  const [topk, setTopk] = useState(8);
-  const [scope, setScope] = useState('');
-  const [results, setResults] = useState<RetrievedMemory[] | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [info, setInfo] = useState<{ vectorOk?: boolean } | null>(null);
+function isNote(d: Document): boolean {
+  const md = (d.metadata && typeof d.metadata === 'object' ? d.metadata : {}) as Record<string, unknown>;
+  return (d.kind === 'note') || (md.smartnote_type === 'note');
+}
 
-  const search = async () => {
-    if (!q.trim()) return;
-    setBusy(true);
-    try {
-      const r = await smartnoteRetrieve({
-        query: q.trim(),
-        kinds: kinds.length ? kinds : undefined,
-        topk,
-        scope: scope.trim() || undefined,
-        tags: domain ? [domain] : undefined, // scope search to the active domain
-      });
-      setResults(r.results || []);
-      setInfo({ vectorOk: r.query_embedded });
-    } catch (e: any) {
-      window.alert(e?.message || '检索失败');
-    } finally { setBusy(false); }
+/* ============ Local note canvas — 本地 .md 文件编辑 + 同步到 sncloud ============
+   读写本地文件；保存写盘（本地为主）。「同步」把内容镜像成云端 document（kind:note）
+   并切块入库，使其可被搜索/@检索。本地路径 ↔ 云 docId 映射存 localStorage，避免重复。 */
+
+const LocalNoteCanvas: React.FC<{
+  file: LocalNoteFile;
+  domains: Tag[];
+  onChanged: () => void | Promise<void>;
+  onDeleted: () => void;
+}> = ({ file, onChanged, onDeleted }) => {
+  const [content, setContent] = useState<string>('');
+  const [title, setTitle] = useState<string>(noteTitle(file));
+  const [loading, setLoading] = useState(true);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [synced, setSynced] = useState<boolean>(!!syncedDocId(file.path));
+  const [preview, setPreview] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const editorRef = useRef<NoteEditorHandle | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true); setPreview(false); setDirty(false); setTitle(noteTitle(file)); setRenaming(false); setConfirmDel(false);
+    setSynced(!!syncedDocId(file.path));
+    readLocalNote(file.path).then((c) => {
+      if (!alive) return;
+      setContent(c); editorRef.current?.setContent(c); setLoading(false);
+      setTimeout(() => editorRef.current?.focus(), 30);
+    }).catch((e) => { if (alive) { window.alert(e?.message || '打开失败'); setLoading(false); } });
+    return () => { alive = false; };
+  }, [file.path]);
+
+  // 保存 = 写本地文件。
+  const doSave = useCallback(async (body: string) => {
+    setSaving(true);
+    try { await writeLocalNote(file.path, body); setDirty(false); }
+    catch (e: any) { window.alert(e?.message || '保存失败'); }
+    finally { setSaving(false); }
+  }, [file.path]);
+
+  // 内联改名 = 重命名文件。
+  const commitRename = async (name: string) => {
+    setRenaming(false);
+    const v = name.trim();
+    if (!v || v === title) return;
+    try { await renameLocalNote(file.path, v); setTitle(v); await onChanged(); }
+    catch (e: any) { window.alert(e?.message || '改名失败'); }
+  };
+  // 两步删除（删本地文件，进回收站）。
+  const onDelete = async () => {
+    if (!confirmDel) { setConfirmDel(true); window.setTimeout(() => setConfirmDel(false), 2600); return; }
+    try { await deleteLocalNote(file.path); await onChanged(); onDeleted(); }
+    catch (e: any) { window.alert(e?.message || '删除失败'); }
   };
 
-  const toggleKind = (k: MemoryKind) => setKinds((p) => p.includes(k) ? p.filter((x) => x !== k) : [...p, k]);
+  // 同步到 sncloud：先存盘 → create/patch 云 document(kind:note) → 切块入库 → 记映射。
+  const onSync = async () => {
+    setSyncing(true);
+    try {
+      const body = editorRef.current ? editorRef.current.getContent() : content;
+      await writeLocalNote(file.path, body); setDirty(false);
+      const existing = syncedDocId(file.path);
+      let docId = existing;
+      if (existing) {
+        await smartnoteDocuments.patch(existing, { name: title, content: body });
+      } else {
+        const d = await smartnoteDocuments.create({
+          name: title, content: body, kind: 'note',
+          metadata: { domains: [NOTES_DOMAIN], source_path: file.path },
+        });
+        docId = d.id; mapSync(file.path, d.id);
+      }
+      if (docId) { try { await smartnoteDocuments.ingest(docId); } catch { /* ingest 失败不阻断 */ } }
+      setSynced(true);
+      window.alert('已同步到 Smartnote 云并入库，可在搜索里检索。');
+    } catch (e: any) { window.alert(e?.message || '同步失败'); }
+    finally { setSyncing(false); }
+  };
 
   return (
-    <>
-      <div className="v2-kb-search-bar">
+    <section className="v2-kb-canvas v2-note-edit">
+      <div className="v2-note-toolbar">
+        {renaming ? (
+          <input
+            className="v2-note-title-input"
+            defaultValue={title}
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); void commitRename((e.target as HTMLInputElement).value); }
+              if (e.key === 'Escape') setRenaming(false);
+            }}
+            onBlur={(e) => void commitRename(e.target.value)}
+          />
+        ) : (
+          <button className="v2-note-title" onClick={() => setRenaming(true)} title="点击重命名">{title || '未命名'}</button>
+        )}
+        <span className="v2-note-status">{saving ? '保存中…' : dirty ? '● 未保存' : '已保存（本地）'}</span>
+        <span className={`v2-pill ${synced ? 'ok' : 'mute'}`}>{synced ? '已同步' : '未同步'}</span>
+        <span className="grow" />
+        <button
+          className={`v2-kb-pill${preview ? ' on' : ''}`}
+          onClick={() => {
+            if (!preview && editorRef.current) setContent(editorRef.current.getContent());
+            setPreview((v) => !v);
+          }}
+        >{preview ? '编辑' : '预览'}</button>
+        <button className="v2-kb-pill" disabled={syncing} onClick={() => void onSync()} title="同步到 Smartnote 云并入库（可搜索/@检索）">
+          {syncing ? '同步中…' : '同步'}
+        </button>
+        <button className={`v2-note-icon danger${confirmDel ? ' confirm' : ''}`} onClick={() => void onDelete()} title={confirmDel ? '再次点击确认删除' : '删除'}>
+          {confirmDel ? '确认?' : <IconTrash />}
+        </button>
+      </div>
+      <div className="v2-note-surface">
+        {loading ? <div className="v2-note-empty">打开中…</div> : preview ? (
+          <div className="v2-note-preview"><MD text={content} /></div>
+        ) : (
+          <NoteEditor ref={editorRef} initial={content} onSave={(body) => void doSave(body)} onDirty={setDirty} />
+        )}
+      </div>
+    </section>
+  );
+};
+
+/* ============ Search — 6-path chunk search + AI answer ============ */
+
+interface AnswerState { loading: boolean; text: string; error?: string }
+
+/** 一条统一搜索结果：文档/笔记块命中（chunk）或记忆命中（mem）。 */
+type SearchHit =
+  | { type: 'note' | 'doc'; id: string; chunk: ChunkSearchHit }
+  | { type: 'memory'; id: string; mem: RetrievedMemory };
+
+/** What Enter opens in the workspace behind the palette. */
+export type SearchOpenTarget = { kind: 'doc'; id: string } | { kind: 'memory' };
+
+const GROUP_LABEL: Record<SearchHit['type'], string> = { note: '笔记', doc: '文档', memory: '记忆' };
+
+/** 命令面板式知识库搜索。
+ *  · 输入即搜（250ms 防抖 + 请求序号防竞态）笔记/文档/记忆三源并行
+ *  · 单列结果分组 + ↑↓ 键盘选择，右侧实时预览选中项来源
+ *  · ↵ 打开并跳转、⌘↵ 让 LLM 生成带引用的答案、esc 关闭（由外层处理） */
+const SearchTab: React.FC<{
+  domain: string | null;
+  llmConfigId?: string;
+  noteDocIds: Set<string>;
+  onOpen: (t: SearchOpenTarget) => void;
+}> = ({ domain, llmConfigId, noteDocIds, onOpen }) => {
+  const [q, setQ] = useState('');
+  const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [info, setInfo] = useState<{ vectorOk?: boolean } | null>(null);
+  const [history, setHistory] = useState<SearchHistoryItem[]>([]);
+  const [sel, setSel] = useState(0);
+  const [preview, setPreview] = useState<ChunkSource | null>(null);
+  const [answer, setAnswer] = useState<AnswerState | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
+
+  const reqRef = useRef(0);
+  const previewReqRef = useRef(0);
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  const loadHistory = useCallback(async () => {
+    try { setHistory((await smartnoteSearchHistory.list(8)) || []); } catch { /* */ }
+  }, []);
+  useEffect(() => { void loadHistory(); }, [loadHistory]);
+
+  // 输入即搜：防抖 250ms，请求序号丢弃过期响应。三源并行后按 笔记→文档→记忆 排列。
+  useEffect(() => {
+    const text = q.trim();
+    if (!text) {
+      reqRef.current++; setHits(null); setBusy(false);
+      setAnswer(null); setSearchError(null); setInfo(null); setPreview(null);
+      return;
+    }
+    setBusy(true); setSearchError(null);
+    const id = ++reqRef.current;
+    const timer = window.setTimeout(async () => {
+      try {
+        const [c, m] = await Promise.all([
+          smartnoteChunks.search(text, { topk: 30, dimension: domain ? `wiki:${domain}` : undefined }),
+          smartnoteRetrieve({ query: text, topk: 8, tags: domain ? [domain] : undefined })
+            .catch(() => ({ results: [] as RetrievedMemory[], query_embedded: false })),
+        ]);
+        if (id !== reqRef.current) return;
+        const notes: SearchHit[] = []; const docs: SearchHit[] = [];
+        for (const h of (c.results || [])) {
+          const hit: SearchHit = { type: noteDocIds.has(h.document_id) ? 'note' : 'doc', id: h.id, chunk: h };
+          (hit.type === 'note' ? notes : docs).push(hit);
+        }
+        const mems: SearchHit[] = (m.results || []).map((mm) => ({ type: 'memory', id: mm.id, mem: mm }));
+        setHits([...notes, ...docs, ...mems]);
+        setInfo({ vectorOk: c.query_embedded });
+        setSel(0); setAnswer(null);
+        void loadHistory();
+      } catch (e: any) {
+        if (id !== reqRef.current) return;
+        setSearchError(e?.message || '检索失败，请稍后再试。'); setHits([]);
+      } finally {
+        if (id === reqRef.current) setBusy(false);
+      }
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [q, domain, noteDocIds, loadHistory]);
+
+  const selected = hits && hits.length ? hits[Math.min(sel, hits.length - 1)] : null;
+
+  // 选中项 → 右侧预览：chunk 拉取来源行窗口；记忆直接展示内容（序号防竞态）。
+  useEffect(() => {
+    if (!selected || selected.type === 'memory') { setPreview(null); return; }
+    const id = ++previewReqRef.current;
+    setPreview(null);
+    smartnoteChunks.source(selected.chunk.id, 6)
+      .then((src) => { if (id === previewReqRef.current) setPreview(src); })
+      .catch(() => { /* */ });
+  }, [selected?.id, selected?.type]);
+
+  // 键盘选中项滚入可视区。
+  useEffect(() => { itemRefs.current[sel]?.scrollIntoView({ block: 'nearest' }); }, [sel]);
+
+  const openAt = useCallback((i: number) => {
+    const h = hits?.[i];
+    if (!h) return;
+    if (h.type === 'memory') onOpen({ kind: 'memory' });
+    else onOpen({ kind: 'doc', id: h.chunk.document_id });
+  }, [hits, onOpen]);
+
+  const runAI = useCallback(async () => {
+    const text = q.trim();
+    const chunks = (hits || []).filter((h): h is Extract<SearchHit, { type: 'note' | 'doc' }> => h.type !== 'memory');
+    if (!text || !chunks.length) return;
+    setAnswer({ loading: true, text: '' });
+    const top = chunks.slice(0, 8).map((h, i) => ({ n: i + 1, document_name: h.chunk.document_name, text: h.chunk.text }));
+    try {
+      const ans = await kbAnswer(text, top, llmConfigId);
+      setAnswer({ loading: false, text: ans });
+    } catch (e: any) {
+      setAnswer({ loading: false, text: '', error: e?.message || 'AI 回答失败' });
+    }
+  }, [q, hits, llmConfigId]);
+
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); if (hits?.length) setSel((i) => Math.min(hits.length - 1, i + 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (hits?.length) setSel((i) => Math.max(0, i - 1)); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (e.metaKey || e.ctrlKey) void runAI();
+      else if (selected) openAt(Math.min(sel, (hits?.length || 1) - 1));
+    }
+  };
+
+  // 渲染分组：按 hits 顺序切段（笔记/文档/记忆），保留全局索引用于键盘高亮。
+  const groups = useMemo(() => {
+    if (!hits) return [];
+    const out: Array<{ label: string; items: Array<{ hit: SearchHit; idx: number }> }> = [];
+    let cur: { label: string; items: Array<{ hit: SearchHit; idx: number }> } | null = null;
+    hits.forEach((hit, idx) => {
+      const label = GROUP_LABEL[hit.type];
+      if (!cur || cur.label !== label) { cur = { label, items: [] }; out.push(cur); }
+      cur.items.push({ hit, idx });
+    });
+    return out;
+  }, [hits]);
+
+  return (
+    <div className="v2-cmdk">
+      <div className="v2-cmdk-bar">
+        <IconSearch />
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') void search(); }}
-          placeholder="问点什么…  (Enter 检索)"
+          onKeyDown={onKey}
+          placeholder="搜索笔记、文档、记忆…"
+          aria-label="搜索知识库内容"
           autoFocus
         />
-        <button className="v2-set-btn primary" onClick={() => void search()} disabled={busy || !q.trim()}>
-          {busy ? '检索中…' : '检索'}
-        </button>
-      </div>
-      <div className="v2-kb-toolbar">
-        <div className="v2-kb-filters">
-          {(Object.keys(KIND_LABELS) as MemoryKind[]).map((k) => (
-            <button
-              key={k}
-              className={`v2-kb-pill${kinds.includes(k) ? ' on' : ''}`}
-              onClick={() => toggleKind(k)}
-            >
-              {KIND_LABELS[k]}
-            </button>
-          ))}
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: 'var(--c-ink-3)' }}>topK</span>
-          <select className="v2-set-select" value={topk} onChange={(e) => setTopk(Number(e.target.value))}>
-            {[3, 5, 8, 12, 20].map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
-          <input className="v2-set-select" style={{ minWidth: 140 }} value={scope} onChange={(e) => setScope(e.target.value)} placeholder="scope (可选)" />
-        </div>
+        {busy && <span className="v2-cmdk-spin" aria-label="检索中" />}
       </div>
 
-      {info && info.vectorOk === false && (
-        <div className="v2-kb-warn">向量检索不可用，已 fallback 到关键词。</div>
-      )}
+      {searchError && <div className="v2-kb-warn v2-cmdk-error">{searchError}</div>}
 
-      {!results && <KbEmpty title="还没有检索" hint="上面输入要找的内容，Enter 提交。" />}
-      {results && results.length === 0 && <KbEmpty title="没找到" hint="换个关键词或加大 topK。" />}
-      {results && results.length > 0 && (
-        <div className="v2-kb-list">
-          {results.map((r) => (
-            <div key={r.id} className="v2-kb-card">
-              <div className="hd">
-                <span className={`v2-pill ${KIND_TONES[r.kind as MemoryKind] || 'mute'}`}>{KIND_LABELS[r.kind as MemoryKind] || r.kind}</span>
-                {r.pinned && <span className="v2-pill ok">★ 置顶</span>}
-                {r.tags?.slice(0, 3).map((t) => <span key={t} className="v2-pill mute">#{t}</span>)}
-                {r.tags && r.tags.length > 3 && <span className="v2-pill mute" title={r.tags.slice(3).map((t) => `#${t}`).join(' ')}>+{r.tags.length - 3}</span>}
+      <div className="v2-cmdk-body">
+        <div className="v2-cmdk-list">
+          {!hits && !busy && (
+            history.length > 0 ? (
+              <div className="v2-cmdk-recent">
+                <div className="v2-cmdk-secthd">最近搜索</div>
+                {history.map((h) => (
+                  <button key={h.id} className="v2-cmdk-recent-item" onClick={() => setQ(h.query_text)}>
+                    <IconSearch />
+                    <span className="q">{h.query_text}</span>
+                    <span className="n">{h.result_count}</span>
+                  </button>
+                ))}
               </div>
-              <ExpandableBody text={r.content} lines={4} />
-              <div className="ft">
-                <span className="v2-kb-score">
-                  {r.score.toFixed(2)}
-                  {r.vector_score > 0 && ` · 向量 ${r.vector_score.toFixed(2)}`}
-                  {r.lexical_score > 0 && ` · 词 ${r.lexical_score.toFixed(2)}`}
-                </span>
-                <span className="grow" />
-                <span>by {r.author_agent || 'unknown'}</span>
-                <span>{new Date(r.created_at).toLocaleString('zh-CN', { hour12: false })}</span>
-              </div>
+            ) : (
+              <KbEmpty title="搜索知识库" hint="输入即搜笔记、文档与记忆。文档需先「入库」才可被检索。" />
+            )
+          )}
+
+          {hits && hits.length === 0 && !busy && <KbEmpty title="没有匹配" hint="换个词，或确认文档已入库。" />}
+
+          {groups.map((g) => (
+            <div key={g.label} className="v2-cmdk-group">
+              <div className="v2-cmdk-secthd">{g.label} <span className="cnt">{g.items.length}</span></div>
+              {g.items.map(({ hit, idx }) => (
+                <button
+                  key={hit.id}
+                  ref={(el) => { itemRefs.current[idx] = el; }}
+                  className={`v2-cmdk-item${idx === sel ? ' sel' : ''}`}
+                  onMouseMove={() => { if (idx !== sel) setSel(idx); }}
+                  onClick={() => { setSel(idx); openAt(idx); }}
+                >
+                  <span className={`tk tk-${hit.type}`} aria-hidden>
+                    {hit.type === 'memory' ? <IconModel /> : hit.type === 'note' ? <IconDoc /> : <IconKB />}
+                  </span>
+                  <span className="main">
+                    <span className="snippet">
+                      {hit.type === 'memory'
+                        ? (hit.mem.content.length > 160 ? hit.mem.content.slice(0, 160) + '…' : hit.mem.content)
+                        : (hit.chunk.text.length > 160 ? hit.chunk.text.slice(0, 160) + '…' : hit.chunk.text)}
+                    </span>
+                    <span className="sub">
+                      {hit.type === 'memory'
+                        ? <span className="src">{hit.mem.kind || '记忆'}</span>
+                        : <span className="src">{hit.chunk.document_name}</span>}
+                      <span className="sc">{(hit.type === 'memory' ? hit.mem.score : hit.chunk.score).toFixed(2)}</span>
+                    </span>
+                  </span>
+                </button>
+              ))}
             </div>
           ))}
         </div>
-      )}
-    </>
+
+        <aside className="v2-cmdk-preview">
+          {answer ? (
+            <div className="v2-cmdk-answer">
+              <div className="v2-cmdk-secthd answer-hd"><IconModel /> AI 回答
+                <button className="v2-cmdk-answer-x" onClick={() => setAnswer(null)} title="关闭">✕</button>
+              </div>
+              {answer.loading && <div className="v2-cmdk-answer-loading">生成中…</div>}
+              {answer.error && <div className="v2-kb-warn">{answer.error}</div>}
+              {!answer.loading && answer.text && <div className="v2-cmdk-answer-body"><MD text={answer.text} /></div>}
+            </div>
+          ) : selected?.type === 'memory' ? (
+            <div className="v2-cmdk-prev-mem">
+              <div className="v2-cmdk-prev-hd"><span className="src">{selected.mem.kind || '记忆'}</span></div>
+              <div className="v2-cmdk-prev-mem-body">{selected.mem.content}</div>
+              {selected.mem.tags?.length > 0 && (
+                <div className="v2-cmdk-prev-tags">{selected.mem.tags.map((t) => <span key={t}>{t}</span>)}</div>
+              )}
+            </div>
+          ) : selected && preview ? (
+            <>
+              <div className="v2-cmdk-prev-hd"><span className="src">{preview.document_name}</span><span className="ln">L{preview.line_start}–{preview.line_end}</span></div>
+              <pre className="v2-cmdk-prev-body">
+                {preview.lines.map((l) => (
+                  <div key={l.line} className={`ln${l.highlight ? ' hl' : ''}`}>
+                    <span className="no">{l.line}</span>{l.text}
+                  </div>
+                ))}
+              </pre>
+            </>
+          ) : (
+            <div className="v2-cmdk-prev-empty">
+              {info && info.vectorOk === false
+                ? '向量检索不可用，已回退到关键词。'
+                : hits === null ? '输入关键词开始搜索' : '选择一项查看来源'}
+            </div>
+          )}
+        </aside>
+      </div>
+
+      <div className="v2-cmdk-foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+        <span><kbd>↵</kbd> 打开</span>
+        <span><kbd>⌘</kbd><kbd>↵</kbd> AI 回答</span>
+        <span><kbd>esc</kbd> 关闭</span>
+      </div>
+    </div>
+  );
+};
+
+/** Search overlay — slides over the workspace; Esc / mask click closes.
+ *  Reuses SearchTab as the inner surface (own bar + results + preview + AI). */
+const SearchOverlay: React.FC<{
+  domain: string | null;
+  llmConfigId?: string;
+  noteDocIds: Set<string>;
+  onOpen: (t: SearchOpenTarget) => void;
+  onClose: () => void;
+}> = ({ domain, llmConfigId, noteDocIds, onOpen, onClose }) => {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="v2-kb-search-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="v2-kb-search-panel v2-cmdk-panel" role="dialog" aria-modal="true" aria-labelledby="kb-search-title" onMouseDown={(e) => e.stopPropagation()}>
+        <h2 id="kb-search-title" className="v2-sr-only">知识库搜索</h2>
+        <SearchTab domain={domain} llmConfigId={llmConfigId} noteDocIds={noteDocIds} onOpen={onOpen} />
+      </div>
+    </div>
   );
 };
 
@@ -807,13 +1429,22 @@ const ExpandableBody: React.FC<{ text: string; lines?: number }> = ({ text, line
   );
 };
 
-const ConnDot: React.FC<{ state: ConnState }> = ({ state }) => {
-  const color =
-    state === 'ok' ? 'var(--c-success)' :
-    state === 'probing' ? 'var(--c-warn)' :
-    state === 'no-key' ? 'var(--c-ink-4)' :
-    'var(--c-danger)';
-  return <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, display: 'inline-block', flex: '0 0 auto' }} />;
+/** Smartnote Cloud 连接状态 —— cloud 图标 + 名称 + 状态文字 + 色点，一眼可读。
+ *  tone 类驱动配色（ok 绿 / probing 琥珀 / down 红 / no-key 中性）。 */
+const KbConn: React.FC<{ state: ConnState }> = ({ state }) => {
+  const tone = state === 'ok' ? 'ok' : state === 'probing' ? 'probing' : state === 'no-key' ? 'nokey' : 'down';
+  const label =
+    state === 'ok' ? '已连接' :
+    state === 'probing' ? '连接中…' :
+    state === 'no-key' ? '未配置' : '不可达';
+  return (
+    <span className={`v2-kb-conn tone-${tone}`} title={`Smartnote 云 · ${label}`}>
+      <IconCloud />
+      <span className="svc">Smartnote 云</span>
+      <span className="dot" />
+      <span className="st">{label}</span>
+    </span>
+  );
 };
 
 const KbEmpty: React.FC<{ title: string; hint?: string }> = ({ title, hint }) => (

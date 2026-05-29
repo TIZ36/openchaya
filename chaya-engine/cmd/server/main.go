@@ -255,6 +255,7 @@ func main() {
 			api.RegisterMCPOAuthRoutes(r, rdb, cfg, db, mcpReg)
 			api.RegisterSkillRoutes(r, db)
 			api.RegisterKBRoutes(r, db, ragRetriever)
+			api.RegisterKBAnswerRoutes(r, db, providerRegistry)
 			api.RegisterGalleryRoutes(r, db)
 			api.RegisterTopologyRoutes(r, db, providerRegistry)
 			api.RegisterMediaRoutes(r, db)

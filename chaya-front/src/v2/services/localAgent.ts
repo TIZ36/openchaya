@@ -12,12 +12,12 @@ export type ProviderId = 'claude' | 'cursor' | 'codex' | 'gemini';
  *  cursor 用 plan/ask/force（cursor-agent 没有逐工具暂停，只有档位）。 */
 export type PermMode = 'default' | 'plan' | 'acceptEdits' | 'bypassPermissions' | 'ask' | 'force';
 export const PERM_META: Record<PermMode, { label: string; tone: string; hint: string }> = {
-  default: { label: 'Default', tone: 'default', hint: '默认：需要时询问权限' },
-  plan: { label: 'Plan', tone: 'plan', hint: '计划：只读规划，不改文件不执行' },
-  acceptEdits: { label: 'Accept Edits', tone: 'edit', hint: '接受编辑：自动接受文件改动' },
-  bypassPermissions: { label: 'Bypass', tone: 'bypass', hint: '跳过权限：全自动执行（原 YOLO）' },
-  ask: { label: 'Ask', tone: 'plan', hint: '询问：只读问答，不改文件' },
-  force: { label: 'Force', tone: 'bypass', hint: '强制：自动放行全部工具（含写/执行）' },
+  default: { label: 'default', tone: 'default', hint: '默认：需要时询问权限' },
+  plan: { label: 'plan', tone: 'plan', hint: '计划：只读规划，不改文件不执行' },
+  acceptEdits: { label: 'accept edits', tone: 'edit', hint: 'accept edits：自动接受文件改动' },
+  bypassPermissions: { label: 'bypass', tone: 'bypass', hint: '跳过权限：全自动执行（原 YOLO）' },
+  ask: { label: 'ask', tone: 'plan', hint: '询问：只读问答，不改文件' },
+  force: { label: 'force', tone: 'bypass', hint: '强制：自动放行全部工具（含写/执行）' },
 };
 /** 每个 provider 可循环切换的权限档（Tab 键）。 */
 const PERM_MODES_BY_PROVIDER: Partial<Record<ProviderId, PermMode[]>> = {
@@ -104,6 +104,18 @@ export interface McpAvailable { name: string; scope: 'global' | 'project'; type:
 /** MCP 连接状态（来自 SDK mcpServerStatus / system.init.mcp_servers）。 */
 export interface McpStatus { name: string; status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled' }
 
+/** 一个参考附件：拖入/选取的文件（带 path），或粘贴板图片（带 dataUrl）。
+ *  图片走视觉（image block），其它文件按 @路径 让 agent 读取分析。 */
+export interface Attachment {
+  id: string;
+  kind: 'image' | 'file';
+  name: string;
+  mime?: string | null;
+  path?: string;       // 来自磁盘的文件（拖入 / 附件按钮）
+  dataUrl?: string;    // 图片 base64（粘贴板，或选取的图片回填）—— 兼作缩略图
+  size?: number;
+}
+
 interface SendPayload {
   provider: ProviderId;
   cwd: string;
@@ -113,12 +125,14 @@ interface SendPayload {
   model?: string;
   mcp?: string[];
   apiKey?: string | null;   // cursor headless 必需（从后端凭据拉到、由 useLocalAgent 注入）
+  attachments?: Attachment[];
 }
 type WarmPayload = Omit<SendPayload, 'prompt'>;
 
 interface LocalAgentBridge {
   detect(): Promise<DetectedProvider[]>;
   pickFolder(): Promise<string | null>;
+  pickFiles(): Promise<Array<{ kind: 'image' | 'file'; name: string; path: string; mime: string | null; size: number; dataUrl?: string }>>;
   listSessions(provider: ProviderId, cwd: string): Promise<SessionSummary[]>;
   readSession(provider: ProviderId, cwd: string, sessionId: string): Promise<{ messages: TranscriptMessage[] }>;
   deleteSession(provider: ProviderId, cwd: string, sessionId: string): Promise<{ ok: boolean; trashed?: boolean; error?: string }>;
@@ -150,6 +164,7 @@ export const localAgent = {
   available: isLocalAgentAvailable,
   detect: () => bridge()?.detect() ?? Promise.resolve([] as DetectedProvider[]),
   pickFolder: () => bridge()?.pickFolder() ?? Promise.resolve(null),
+  pickFiles: () => bridge()?.pickFiles() ?? Promise.resolve([]),
   listSessions: (provider: ProviderId, cwd: string) =>
     bridge()?.listSessions(provider, cwd) ?? Promise.resolve([] as SessionSummary[]),
   readSession: (provider: ProviderId, cwd: string, sessionId: string) =>

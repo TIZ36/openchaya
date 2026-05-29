@@ -205,3 +205,53 @@ export const IconQuote = () => (
     <path d="M17 7h-3v6h4v-2c0-1.5-.4-2.6-1-3.3" />
   </svg>
 );
+
+// Person silhouette — 账号 / profile rows
+export const IconUser = () => (
+  <svg viewBox="0 0 24 24" {...stroke}>
+    <circle cx="12" cy="8.5" r="3.5" />
+    <path d="M4.5 20c0-3.6 3.3-6 7.5-6s7.5 2.4 7.5 6" />
+  </svg>
+);
+
+// Stacked layers — 模型 (model/AI) selector
+export const IconModel = () => (
+  <svg viewBox="0 0 24 24" {...stroke}>
+    <path d="M12 3.5L3.5 8 12 12.5 20.5 8 12 3.5z" />
+    <path d="M3.5 12L12 16.5 20.5 12" />
+    <path d="M3.5 16L12 20.5 20.5 16" strokeWidth={1.4} opacity={0.65} />
+  </svg>
+);
+
+// Plug / connector — MCP 工具 (external integrations)
+export const IconPlug = () => (
+  <svg viewBox="0 0 24 24" {...stroke}>
+    <path d="M9 3v4M15 3v4" />
+    <path d="M6.5 7h11v4a5.5 5.5 0 0 1-11 0z" />
+    <path d="M12 16.5V21" />
+  </svg>
+);
+
+// Sliders / sun — 外观 (appearance / theme)
+export const IconAppearance = () => (
+  <svg viewBox="0 0 24 24" {...stroke}>
+    <circle cx="12" cy="12" r="4" />
+    <path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8" />
+  </svg>
+);
+
+// Cloud — 服务 / 外部 services
+export const IconCloud = () => (
+  <svg viewBox="0 0 24 24" {...stroke}>
+    <path d="M7 18h11a4 4 0 0 0 .8-7.9 6 6 0 0 0-11.6-1A4 4 0 0 0 7 18z" />
+  </svg>
+);
+
+// Terminal — Local Agents (CLI)
+export const IconTerminal = () => (
+  <svg viewBox="0 0 24 24" {...stroke}>
+    <rect x="3" y="4.5" width="18" height="15" rx="3" />
+    <path d="M7.5 9.5l3 2.5-3 2.5" />
+    <path d="M13 14.5h4" strokeWidth={1.5} />
+  </svg>
+);

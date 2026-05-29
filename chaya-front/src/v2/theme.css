@@ -258,14 +258,9 @@
 .chaya-v2[data-theme="cursor"] .v2-la-proj-row {
   letter-spacing: -0.005em;
 }
-.chaya-v2[data-theme="cursor"] .v2-nav .v2-row.active::before,
-.chaya-v2[data-theme="cursor"] .v2-agents .v2-a.active::before,
-.chaya-v2[data-theme="cursor"] .v2-recents .v2-r.active::before {
-  content: ''; position: absolute; left: 0; top: 8px; bottom: 8px;
-  width: 2px; border-radius: 2px;
-  background: var(--c-accent);
-  box-shadow: 0 0 6px color-mix(in oklab, var(--c-accent) 35%, transparent);
-}
+/* Cursor 主题下：active row 一律走默认的 --c-hover bg tint，不再画 teal accent
+   竖条 + halo。之前那道青色光晕在 sidebar 里读成"染色"而非"高亮"，与浅白底色
+   不协调。Codex / ChatGPT 都是纯 tint 标识 active，最稳。 */
 .chaya-v2[data-theme="cursor"] ::selection {
   background: color-mix(in oklab, var(--c-accent) 25%, var(--c-bg));
   color: var(--c-ink);
@@ -736,15 +731,18 @@ html[data-electron-platform="darwin"] .chaya-v2 .v2-shell-toggle { left: 80px; }
   display: flex; flex-direction: column;
   min-height: 0; min-width: 0;
   background: var(--c-bg);
-  border: 1px solid color-mix(in oklab, var(--c-ink) 6%, transparent);
-  border-radius: var(--c-radius-xl);
-  /* 上/右/下 4-6px 让 sidebar tone 透出当呼吸；左 262px = sidebar 256 + 6px rail，
-     让左侧也有同 6px 间隙，四边一致。折叠态 margin-left → 6px。 */
+  /* 极细对比色 hairline：用 --c-ink 28% 的真墨色 1px 边框，与 --c-bg 形成清晰对比。
+     比之前 8% 的"晕"提一档但仍是极细 1px，不抢戏；半径 lg 保持"刀切纸"硬朗。 */
+  border: 1px solid color-mix(in oklab, var(--c-ink) 28%, transparent);
+  border-radius: var(--c-radius-lg);
   margin: 4px 6px 6px 262px;
   overflow: hidden;
+  /* 阴影：inset 顶高光 + 短焦贴底 + 中焦微浮，所有过渡都在 ≤16px 内收住，
+     避免长焦糊化边缘。 */
   box-shadow:
-    0 1px 0 color-mix(in oklab, var(--c-ink) 4%, transparent),
-    0 8px 24px -10px color-mix(in oklab, var(--c-ink) 14%, transparent);
+    inset 0 1px 0 color-mix(in oklab, var(--c-bg) 75%, white),
+    0 1px 3px -1px color-mix(in oklab, var(--c-ink) 8%, transparent),
+    0 6px 16px -8px color-mix(in oklab, var(--c-ink) 12%, transparent);
   position: relative;
   height: calc(100% - 10px);
   transition: margin-left var(--m-panel) var(--ease-emphasis);
@@ -1469,21 +1467,68 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
   padding-top: 12px;
   animation: v2-popUp 200ms var(--c-ease) both;
 }
-.chaya-v2 .v2-panel-hd { font-size: 11px; color: var(--c-ink-3); margin-bottom: 8px; letter-spacing: 0.04em; }
-.chaya-v2 .v2-panel .v2-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
-.chaya-v2 .v2-panel .v2-opt { padding: 8px 12px; border-radius: var(--c-radius-md); cursor: pointer; font-size: 13px; color: var(--c-ink); background: var(--c-surface); transition: background 140ms var(--c-ease); display: flex; align-items: baseline; gap: 6px; }
-.chaya-v2 .v2-panel .v2-opt:hover { background: var(--c-hover); }
-.chaya-v2 .v2-panel .v2-opt.active { background: var(--c-ink); color: var(--c-bg); font-weight: 500; }
-.chaya-v2 .v2-panel .v2-opt small { color: var(--c-ink-4); font-size: 11px; letter-spacing: 0.06em; margin-left: auto; }
-.chaya-v2 .v2-panel .v2-opt.active small { color: color-mix(in oklab, var(--c-bg) 62%, transparent); }
-.chaya-v2 .v2-panel .v2-opt { position: relative; }
-.chaya-v2 .v2-panel .v2-opt .v2-opt-del { position: absolute; top: 2px; right: 4px; width: 18px; height: 18px; display: grid; place-items: center; color: var(--c-ink-4); border-radius: var(--c-radius-xs); opacity: 0; transition: opacity 140ms var(--c-ease), background 140ms var(--c-ease); cursor: pointer; font-size: 11px; }
-.chaya-v2 .v2-panel .v2-opt:hover .v2-opt-del { opacity: 1; }
-.chaya-v2 .v2-panel .v2-opt .v2-opt-del:hover { background: var(--c-hover); color: var(--c-ink); }
-.chaya-v2 .v2-panel .v2-opt.active .v2-opt-del { color: color-mix(in oklab, var(--c-bg) 70%, transparent); }
-.chaya-v2 .v2-panel .v2-opt.active .v2-opt-del:hover { background: color-mix(in oklab, var(--c-bg) 16%, transparent); color: var(--c-bg); }
-.chaya-v2 .v2-panel .v2-opt .v2-opt-custom { font-size: 10px; padding: 0 4px; border-radius: var(--c-radius-xs); background: var(--c-hover-soft); color: var(--c-ink-3); margin-left: 4px; letter-spacing: 0.08em; }
-.chaya-v2 .v2-panel .v2-opt.active .v2-opt-custom { background: color-mix(in oklab, var(--c-bg) 18%, transparent); color: var(--c-bg); }
+.chaya-v2 .v2-panel-hd {
+  font-size: 10.5px; color: var(--c-ink-3); margin-bottom: 10px;
+  letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600;
+}
+/* 预设栅格：minmax 120 而非 140，更密；gap 6→5；行高更紧 */
+.chaya-v2 .v2-panel .v2-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 5px; }
+.chaya-v2 .v2-panel .v2-opt {
+  position: relative;
+  padding: 6px 10px 6px 11px;
+  border-radius: var(--c-radius-md);
+  cursor: pointer;
+  font-size: 12.5px; line-height: 1.3;
+  color: var(--c-ink-2);
+  background: var(--c-surface);
+  border: 1px solid transparent;
+  transition: background 140ms var(--c-ease), color 140ms var(--c-ease), border-color 140ms var(--c-ease);
+  display: flex; align-items: center; gap: 6px;
+}
+.chaya-v2 .v2-panel .v2-opt:hover {
+  background: var(--c-hover);
+  color: var(--c-ink);
+}
+/* 选中 = 浅墨 hairline 边框 + accent-bg 微染（letterpress 调，告别 ink 大反白） */
+.chaya-v2 .v2-panel .v2-opt.active {
+  background: var(--c-accent-bg);
+  color: var(--c-ink);
+  font-weight: 500;
+  border-color: color-mix(in oklab, var(--c-accent) 38%, var(--c-rule));
+}
+.chaya-v2 .v2-panel .v2-opt small {
+  color: var(--c-ink-4); font-size: 10px;
+  letter-spacing: 0.06em;
+  margin-left: auto;
+  text-transform: uppercase;
+}
+.chaya-v2 .v2-panel .v2-opt.active small { color: var(--c-ink-3); }
+.chaya-v2 .v2-panel .v2-opt .v2-opt-del {
+  position: absolute; top: 50%; right: 5px; transform: translateY(-50%);
+  width: 16px; height: 16px;
+  display: grid; place-items: center;
+  color: var(--c-ink-4); border-radius: 50%;
+  opacity: 0; pointer-events: none;
+  background: color-mix(in oklab, var(--c-bg) 70%, transparent);
+  transition: opacity 140ms var(--c-ease), background 140ms var(--c-ease), color 140ms var(--c-ease);
+  cursor: pointer; font-size: 10px;
+}
+.chaya-v2 .v2-panel .v2-opt:hover .v2-opt-del { opacity: 1; pointer-events: auto; }
+.chaya-v2 .v2-panel .v2-opt .v2-opt-del:hover {
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
+}
+.chaya-v2 .v2-panel .v2-opt .v2-opt-custom {
+  font-size: 9.5px; font-weight: 600;
+  padding: 1px 5px; border-radius: var(--c-radius-xs);
+  background: color-mix(in oklab, var(--c-accent) 14%, transparent);
+  color: var(--c-accent-strong);
+  margin-left: 4px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+}
+.chaya-v2 .v2-panel .v2-opt.active .v2-opt-custom {
+  background: color-mix(in oklab, var(--c-accent) 22%, transparent);
+}
 /* the knowledge memory modal reuses the option-grid chips but lives outside
    .v2-panel, so the grid styling above never reached it (chips fell back to raw
    stacked divs). Restate the essentials scoped to the modal. */
@@ -1493,15 +1538,72 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-modal .v2-opt.active { background: var(--c-ink); color: var(--c-bg); font-weight: 500; }
 .chaya-v2 .v2-modal .v2-opt small { color: var(--c-ink-4); font-size: 11px; letter-spacing: 0.06em; margin-left: auto; }
 .chaya-v2 .v2-modal .v2-opt.active small { color: color-mix(in oklab, var(--c-bg) 62%, transparent); }
-.chaya-v2 .v2-panel .v2-row-input { display: flex; gap: 6px; margin-top: 10px; }
+/* 自定义风格编辑器：输入框走 hairline border 风（替代之前的 ink 2px focus ring），
+   按钮整体收小一档（11.5px / padding 5×11），文字风范用 medium weight，去掉粗壮感。 */
+.chaya-v2 .v2-panel .v2-row-input {
+  display: flex; gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in oklab, var(--c-ink) 5%, transparent);
+}
 .chaya-v2 .v2-panel .v2-row-input input,
-.chaya-v2 .v2-panel .v2-row-input textarea { flex: 1; padding: 8px 12px; border-radius: var(--c-radius-md); background: var(--c-surface); font-size: 13px; color: var(--c-ink); resize: none; min-height: 36px; }
+.chaya-v2 .v2-panel .v2-row-input textarea {
+  flex: 1;
+  padding: 7px 11px;
+  border-radius: var(--c-radius-md);
+  background: var(--c-bg);
+  border: 1px solid var(--c-rule);
+  font-size: 12.5px; line-height: 1.5;
+  color: var(--c-ink); resize: none; min-height: 34px;
+  transition: border-color 140ms var(--c-ease), box-shadow 140ms var(--c-ease), background 140ms var(--c-ease);
+}
+.chaya-v2 .v2-panel .v2-row-input input::placeholder,
+.chaya-v2 .v2-panel .v2-row-input textarea::placeholder {
+  color: var(--c-ink-4); font-style: italic;
+}
+.chaya-v2 .v2-panel .v2-row-input input:hover,
+.chaya-v2 .v2-panel .v2-row-input textarea:hover {
+  border-color: color-mix(in oklab, var(--c-ink) 15%, var(--c-rule));
+}
 .chaya-v2 .v2-panel .v2-row-input input:focus,
-.chaya-v2 .v2-panel .v2-row-input textarea:focus { background: var(--c-bg); box-shadow: 0 0 0 2px var(--c-ink); }
-.chaya-v2 .v2-panel .v2-row-input button { padding: 8px 14px; border-radius: var(--c-radius-md); background: var(--c-ink); color: var(--c-bg); cursor: pointer; font-size: 13px; }
+.chaya-v2 .v2-panel .v2-row-input textarea:focus {
+  outline: none;
+  border-color: color-mix(in oklab, var(--c-accent) 55%, var(--c-ink));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--c-accent) 12%, transparent);
+}
+/* 按钮：小一档 + medium 字重 + 极淡 1px hairline 内描边 */
+.chaya-v2 .v2-panel .v2-row-input button {
+  padding: 5px 12px;
+  border-radius: var(--c-radius-md);
+  background: var(--c-ink);
+  color: var(--c-bg);
+  cursor: pointer;
+  font-size: 11.5px; font-weight: 500;
+  letter-spacing: 0.02em;
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--c-bg) 20%, transparent);
+  transition: background 140ms var(--c-ease), color 140ms var(--c-ease), transform 100ms var(--c-ease);
+}
 .chaya-v2 .v2-panel .v2-row-input button:hover { background: var(--c-ink-deep); }
-.chaya-v2 .v2-panel .v2-row-input button.ghost { background: var(--c-surface); color: var(--c-ink); }
-.chaya-v2 .v2-panel .v2-row-input button.ghost:hover { background: var(--c-hover); }
+.chaya-v2 .v2-panel .v2-row-input button:active { transform: scale(0.97); }
+.chaya-v2 .v2-panel .v2-row-input button:disabled {
+  opacity: 0.4; cursor: not-allowed;
+  background: var(--c-surface); color: var(--c-ink-3);
+  box-shadow: none;
+}
+.chaya-v2 .v2-panel .v2-row-input button.ghost {
+  background: transparent;
+  color: var(--c-ink-2);
+  box-shadow: inset 0 0 0 1px var(--c-rule);
+}
+.chaya-v2 .v2-panel .v2-row-input button.ghost:hover {
+  background: var(--c-hover-soft);
+  color: var(--c-ink);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--c-ink) 18%, var(--c-rule));
+}
+.chaya-v2 .v2-panel .v2-row-input button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--c-accent) 50%, transparent);
+}
 @keyframes v2-popUp { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 
 /* ===== unified modal (model picker / agent settings / future) ===== */
@@ -1565,14 +1667,25 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-settings-nav-head .grp { font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; color: var(--c-ink-4); text-transform: uppercase; }
 .chaya-v2 .v2-settings-nav-item {
   position: relative; text-align: left;
+  display: grid; grid-template-columns: 16px 1fr; align-items: center; gap: 10px;
   /* 左 padding 留出 accent 指示（4px 边 + 2px bar + 8px 呼吸 = 14px）。 */
   padding: 6px 12px 6px 14px;
   border-radius: var(--c-radius-md); cursor: pointer;
   font-size: 13px; line-height: 1.35; color: var(--c-ink-3);
   transition: background 140ms var(--c-ease), color 140ms var(--c-ease);
 }
+.chaya-v2 .v2-settings-nav-item .ic {
+  width: 16px; height: 16px;
+  display: grid; place-items: center;
+  color: var(--c-ink-3);
+  transition: color 140ms var(--c-ease);
+}
+.chaya-v2 .v2-settings-nav-item .ic svg { width: 16px; height: 16px; }
+.chaya-v2 .v2-settings-nav-item .lab { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chaya-v2 .v2-settings-nav-item:hover { background: var(--c-hover-soft); color: var(--c-ink); }
+.chaya-v2 .v2-settings-nav-item:hover .ic { color: var(--c-ink-2); }
 .chaya-v2 .v2-settings-nav-item.active { background: var(--c-hover); color: var(--c-ink); font-weight: 500; }
+.chaya-v2 .v2-settings-nav-item.active .ic { color: var(--c-ink); }
 /* 当前项左侧 hairline 墨痕，与左侧主导航激活态语言一致 */
 .chaya-v2 .v2-settings-nav-item.active::before {
   content: ''; position: absolute; left: 4px; top: 7px; bottom: 7px;
@@ -1847,7 +1960,10 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
   transition: background 140ms var(--c-ease), border-color 140ms var(--c-ease);
 }
 .chaya-v2 .v2-pick:hover { background: var(--c-hover-soft); }
-.chaya-v2 .v2-pick.on { background: var(--c-accent-bg); border-color: color-mix(in oklab, var(--c-accent) 40%, var(--c-rule)); }
+/* 当前模型 active：仅 hover bg + 加粗字 + 尾部 ✓（CSS 下方 .v2-pick-check 提供），
+   不再叠 accent-bg + border. 一次只读一道"信号"。 */
+.chaya-v2 .v2-pick.on { background: var(--c-hover); border-color: transparent; }
+.chaya-v2 .v2-pick.on .v2-pick-nm { font-weight: 600; color: var(--c-ink); }
 .chaya-v2 .v2-pick .v2-pick-nm { font-size: 13.5px; font-weight: 500; color: var(--c-ink); }
 .chaya-v2 .v2-pick .v2-pick-ds { font-size: 11.5px; color: var(--c-ink-4); }
 /* ModelPicker（ContextPopover）右侧条目：name+model 列 + 右端 ✓。
@@ -1894,23 +2010,28 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
   transition: background 140ms var(--c-ease), color 140ms var(--c-ease);
 }
 .chaya-v2 .v2-pickmodal-provider:hover { background: var(--c-hover-soft); color: var(--c-ink); }
+/* active provider：仅一道 light bg tint + 加粗字。去掉之前的 inset 2px 黑条 + 反白 count
+   pill —— 那是"三层高亮叠在一起"的根源（bg + bar + pill 反白），看起来一坨。 */
 .chaya-v2 .v2-pickmodal-provider.on {
-  background: var(--c-bg); color: var(--c-ink);
-  box-shadow: inset 2px 0 0 0 var(--c-ink);
+  background: var(--c-hover);
+  color: var(--c-ink);
+  font-weight: 500;
 }
 .chaya-v2 .v2-pickmodal-provider .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chaya-v2 .v2-pickmodal-provider .cnt {
-  flex: 0 0 auto; font-size: 10.5px; font-weight: 600;
-  color: var(--c-ink-4); background: var(--c-surface);
-  border-radius: var(--c-radius-pill); padding: 1px 8px; min-width: 22px; text-align: center;
+  flex: 0 0 auto; font-size: 10.5px; font-weight: 500;
+  color: var(--c-ink-4); background: transparent;
+  border-radius: var(--c-radius-pill); padding: 1px 6px; min-width: 20px; text-align: center;
+  letter-spacing: 0.02em;
 }
-.chaya-v2 .v2-pickmodal-provider.on .cnt { color: var(--c-bg); background: var(--c-ink); }
-/* 厂商行尾的小圆点：标示「当前选中的模型住在这个厂商里」，
-   让用户一眼看到自己之前选过的家在哪。 */
-.chaya-v2 .v2-pickmodal-provider.has-current::after {
-  content: ''; flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%;
-  background: var(--c-accent); margin-left: -2px;
-  box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--c-accent) 30%, transparent);
+.chaya-v2 .v2-pickmodal-provider.on .cnt { color: var(--c-ink-2); }
+/* 厂商行尾的小圆点：标示「当前选中的模型住在这个厂商里」。
+   只有 active provider 才不画 dot（自己就是 on，无需再"自指"），其他 has-current
+   的厂商需要这个 dot 提示"你的选择在这里"。 */
+.chaya-v2 .v2-pickmodal-provider.has-current:not(.on)::after {
+  content: ''; flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%;
+  background: color-mix(in oklab, var(--c-accent) 75%, var(--c-ink-3));
+  margin-left: 2px;
 }
 .chaya-v2 .v2-pickmodal-provider:focus-visible { outline: none; box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--c-accent) 60%, var(--c-ink)); }
 
@@ -2147,7 +2268,331 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-send.stop { background: color-mix(in oklab, var(--c-accent) 40%, var(--c-ink)); }
 .chaya-v2 .v2-send.stop:hover { background: var(--c-accent); }
 
-/* ===== knowledge view (v2) ===== */
+/* ============================================================
+   知识库 · 两栏工作台（左资源树 / 右画布 + 顶部全局搜索）
+   ============================================================ */
+/* 视图本身不滚动：内部 tree / canvas 各自滚。.v2-view 基类在更下方定义且同特异性，
+   故用 .v2-view.v2-kb-view 提一档特异性确保覆盖其 overflow/padding。 */
+.chaya-v2 .v2-view.v2-kb-view { display: flex; flex-direction: column; overflow: hidden; padding: 8px 20px 14px; }
+
+/* 顶栏：搜索占主，右侧连接状态 */
+.chaya-v2 .v2-kb-top { display: flex; align-items: center; gap: 12px; padding: 4px 2px 12px; flex: 0 0 auto; }
+.chaya-v2 .v2-kb-searchbtn {
+  flex: 1 1 auto; display: flex; align-items: center; gap: 9px;
+  padding: 9px 14px; border-radius: var(--c-radius-lg);
+  background: var(--c-surface); color: var(--c-ink-4); cursor: pointer;
+  border: 1px solid var(--c-rule);
+  transition: background 140ms var(--c-ease), border-color 140ms var(--c-ease), color 140ms var(--c-ease), box-shadow 140ms var(--c-ease);
+}
+.chaya-v2 .v2-kb-searchbtn:hover {
+  background: var(--c-bg); color: var(--c-ink-3);
+  border-color: color-mix(in oklab, var(--c-ink) 14%, var(--c-rule));
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+}
+.chaya-v2 .v2-kb-searchbtn svg { width: 16px; height: 16px; flex: 0 0 auto; color: var(--c-ink-3); }
+.chaya-v2 .v2-kb-searchbtn span { flex: 1 1 auto; text-align: left; font-size: 13.5px; }
+.chaya-v2 .v2-kb-searchbtn kbd { font-size: 10.5px; font-family: var(--c-mono); color: var(--c-ink-4); background: var(--c-bg); border: 1px solid var(--c-rule); border-radius: var(--c-radius-xs); padding: 1px 6px; }
+/* 连接状态 chip：cloud 图标 + 名称 + 状态文字 + 色点 */
+.chaya-v2 .v2-kb-top .v2-kb-conn {
+  flex: 0 0 auto; margin-left: auto;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 5px 11px; border-radius: var(--c-radius-pill);
+  font-size: 12px; background: var(--c-surface); color: var(--c-ink-3);
+  border: 1px solid transparent;
+}
+.chaya-v2 .v2-kb-conn svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.chaya-v2 .v2-kb-conn .svc { color: var(--c-ink-2); font-weight: 500; }
+.chaya-v2 .v2-kb-conn .dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--c-ink-4); }
+.chaya-v2 .v2-kb-conn .st { font-variant-numeric: tabular-nums; }
+/* tone 配色 —— ok 用「所选主题」的 accent（Cursor=teal / Anthropic=橙…），
+   贴合主题而非固定绿色；probing/down 仍用语义琥珀/红。 */
+.chaya-v2 .v2-kb-conn.tone-ok { background: var(--c-accent-bg); color: var(--c-accent-strong); border-color: color-mix(in oklab, var(--c-accent) 24%, transparent); }
+.chaya-v2 .v2-kb-conn.tone-ok .svc, .chaya-v2 .v2-kb-conn.tone-ok .st { color: var(--c-accent-strong); }
+.chaya-v2 .v2-kb-conn.tone-ok .dot { background: var(--c-accent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--c-accent) 18%, transparent); }
+.chaya-v2 .v2-kb-conn.tone-ok svg { color: var(--c-accent-strong); }
+.chaya-v2 .v2-kb-conn.tone-probing { background: var(--c-warn-bg); color: var(--c-warn); border-color: color-mix(in oklab, var(--c-warn) 24%, transparent); }
+.chaya-v2 .v2-kb-conn.tone-probing .svc, .chaya-v2 .v2-kb-conn.tone-probing .st { color: var(--c-warn); }
+.chaya-v2 .v2-kb-conn.tone-probing .dot { background: var(--c-warn); animation: v2-la-breathe 1.2s var(--c-ease) infinite; }
+.chaya-v2 .v2-kb-conn.tone-probing svg { color: var(--c-warn); }
+.chaya-v2 .v2-kb-conn.tone-down { background: var(--c-danger-bg); color: var(--c-danger); border-color: color-mix(in oklab, var(--c-danger) 24%, transparent); }
+.chaya-v2 .v2-kb-conn.tone-down .svc, .chaya-v2 .v2-kb-conn.tone-down .st { color: var(--c-danger); }
+.chaya-v2 .v2-kb-conn.tone-down .dot { background: var(--c-danger); }
+.chaya-v2 .v2-kb-conn.tone-down svg { color: var(--c-danger); }
+.chaya-v2 .v2-kb-conn.tone-nokey .dot { background: var(--c-ink-4); }
+.chaya-v2 .v2-kb-conn-legacy { flex: 0 0 auto; margin-left: auto; }
+.chaya-v2 .v2-kb-top .v2-set-btn { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; }
+.chaya-v2 .v2-kb-top .v2-set-btn svg { width: 13px; height: 13px; }
+
+/* 工作台栅格 */
+/* app-ux：左树更窄 + 与右画布间距更小，把宽度让给内容。 */
+.chaya-v2 .v2-kb-workspace { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 212px 1fr; gap: 8px; }
+
+/* 左：资源树 —— 无边框/无卡片（贴合主侧栏的 app-ux：靠 tone 与留白，不靠描边），
+   透明背景直接坐在视图底色上；右画布保留卡片边框来区分两栏。 */
+.chaya-v2 .v2-kb-tree {
+  display: flex; flex-direction: column; min-height: 0;
+  background: transparent; overflow: hidden;
+}
+.chaya-v2 .v2-kb-tree-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 4px 12px; display: flex; flex-direction: column; gap: 1px; }
+.chaya-v2 .v2-kb-node {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 10px; border-radius: var(--c-radius-md);
+  text-align: left; cursor: pointer; color: var(--c-ink-2);
+  transition: background 140ms var(--c-ease), color 140ms var(--c-ease);
+}
+.chaya-v2 .v2-kb-node:hover { background: var(--c-hover-soft); color: var(--c-ink); }
+.chaya-v2 .v2-kb-node.active { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-kb-node .ic { width: 16px; height: 16px; display: grid; place-items: center; color: var(--c-ink-4); flex: 0 0 auto; }
+.chaya-v2 .v2-kb-node:hover .ic, .chaya-v2 .v2-kb-node.active .ic { color: var(--c-ink-3); }
+.chaya-v2 .v2-kb-node .ic svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-kb-node .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.chaya-v2 .v2-kb-node .cnt { font-size: 10.5px; color: var(--c-ink-4); font-variant-numeric: tabular-nums; }
+.chaya-v2 .v2-kb-node.top { font-size: 13px; }
+.chaya-v2 .v2-kb-node.leaf { padding-left: 30px; color: var(--c-ink-2); }
+.chaya-v2 .v2-kb-node.leaf .ic { width: 14px; height: 14px; }
+.chaya-v2 .v2-kb-node.leaf .ic svg { width: 13px; height: 13px; }
+
+/* 段头 + 分组 */
+.chaya-v2 .v2-kb-tree-sec { display: flex; align-items: center; justify-content: space-between; padding: 16px 10px 6px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--c-ink-4); }
+.chaya-v2 .v2-kb-tree-add { width: 18px; height: 18px; display: grid; place-items: center; border-radius: var(--c-radius-xs); color: var(--c-ink-4); cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-kb-tree-add:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-kb-tree-add svg { width: 13px; height: 13px; }
+.chaya-v2 .v2-kb-tree-empty, .chaya-v2 .v2-kb-node-empty { font-size: 11.5px; color: var(--c-ink-4); padding: 4px 10px 4px 30px; font-style: italic; }
+.chaya-v2 .v2-kb-group-row {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 7px 10px; border-radius: var(--c-radius-md);
+  cursor: pointer; color: var(--c-ink-2);
+  transition: background 140ms var(--c-ease);
+}
+.chaya-v2 .v2-kb-group-row:hover { background: var(--c-hover-soft); }
+.chaya-v2 .v2-kb-group-row .caret { width: 14px; height: 14px; display: grid; place-items: center; color: var(--c-ink-4); flex: 0 0 auto; }
+.chaya-v2 .v2-kb-group-row .caret svg { width: 12px; height: 12px; transform: rotate(-90deg); transition: transform 160ms var(--c-ease); }
+.chaya-v2 .v2-kb-group-row .caret.open svg { transform: rotate(0deg); }
+.chaya-v2 .v2-kb-group-row .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--c-bg) 70%, transparent); }
+.chaya-v2 .v2-kb-group-row .ic-lead { width: 15px; height: 15px; display: grid; place-items: center; flex: 0 0 auto; color: var(--c-ink-3); }
+.chaya-v2 .v2-kb-group-row .ic-lead svg { width: 14px; height: 14px; }
+/* 笔记组置顶：与下方特殊入口之间留一道呼吸 */
+.chaya-v2 .v2-kb-group-notes { margin-bottom: 6px; }
+.chaya-v2 .v2-kb-node-empty.linkish { cursor: pointer; color: var(--c-accent-strong); }
+.chaya-v2 .v2-kb-node-empty.linkish:hover { text-decoration: underline; }
+.chaya-v2 .v2-kb-notes-cta { display: flex; flex-direction: column; gap: 2px; padding: 2px 0 4px; }
+.chaya-v2 .v2-kb-notes-cta .v2-kb-node-empty { text-align: left; padding-left: 30px; }
+.chaya-v2 .v2-kb-group-row .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; color: var(--c-ink); }
+.chaya-v2 .v2-kb-group-row .cnt { font-size: 10.5px; color: var(--c-ink-4); font-variant-numeric: tabular-nums; }
+.chaya-v2 .v2-kb-group-row .row-act { width: 20px; height: 20px; display: grid; place-items: center; border-radius: var(--c-radius-xs); color: var(--c-ink-4); opacity: 0; transition: opacity 140ms var(--c-ease), background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-kb-group-row:hover .row-act { opacity: 1; }
+.chaya-v2 .v2-kb-group-row .row-act:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-kb-group-row .row-act svg { width: 12px; height: 12px; }
+
+.chaya-v2 .v2-kb-tree-foot { flex: 0 0 auto; padding: 8px; border-top: 1px solid var(--c-rule); }
+.chaya-v2 .v2-kb-tree-footbtn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 7px; border-radius: var(--c-radius-md); font-size: 12.5px; color: var(--c-ink-3); background: transparent; border: 1px dashed var(--c-rule); cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease), border-color 140ms var(--c-ease); }
+.chaya-v2 .v2-kb-tree-footbtn:hover { background: var(--c-hover-soft); color: var(--c-ink); border-color: color-mix(in oklab, var(--c-ink) 18%, var(--c-rule)); }
+.chaya-v2 .v2-kb-tree-footbtn svg { width: 13px; height: 13px; }
+.chaya-v2 .v2-kb-tree-meta { flex: 0 0 auto; padding: 6px 12px 10px; font-size: 10.5px; color: var(--c-ink-4); text-align: center; }
+
+/* 右：画布 */
+.chaya-v2 .v2-kb-canvas {
+  min-width: 0; min-height: 0; display: flex; flex-direction: column;
+  border: 1px solid var(--c-rule); border-radius: var(--c-radius-lg);
+  background: var(--c-bg); overflow: hidden;
+}
+.chaya-v2 .v2-kb-canvas.pad { overflow-y: auto; padding: 22px 28px 40px; }
+/* note/doc canvas 复用 .v2-note-edit / .v2-note-* 内构件，但去掉外层重复边框 */
+.chaya-v2 .v2-kb-canvas.v2-note-edit, .chaya-v2 .v2-kb-canvas.v2-doc-canvas { border: 1px solid var(--c-rule); background: var(--c-bg); }
+
+/* 总览 / 全部 列表 */
+.chaya-v2 .v2-kb-overview { gap: 0; }
+.chaya-v2 .v2-kb-stats { display: flex; gap: 28px; padding: 8px 4px 22px; }
+.chaya-v2 .v2-kb-stats .stat { display: flex; flex-direction: column; gap: 2px; }
+.chaya-v2 .v2-kb-stats .stat .n { font-size: 28px; font-weight: 600; color: var(--c-ink); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.chaya-v2 .v2-kb-stats .stat .l { font-size: 12px; color: var(--c-ink-4); }
+.chaya-v2 .v2-kb-ov-sec { font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--c-ink-4); padding: 6px 4px 8px; }
+.chaya-v2 .v2-kb-ov-list { display: flex; flex-direction: column; gap: 2px; }
+.chaya-v2 .v2-kb-ov-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border-radius: var(--c-radius-md); text-align: left; cursor: pointer; color: var(--c-ink-2); transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-kb-ov-item:hover { background: var(--c-hover-soft); color: var(--c-ink); }
+.chaya-v2 .v2-kb-ov-item .ic { width: 16px; height: 16px; display: grid; place-items: center; color: var(--c-ink-4); flex: 0 0 auto; }
+.chaya-v2 .v2-kb-ov-item .ic svg { width: 14px; height: 14px; }
+.chaya-v2 .v2-kb-ov-item .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.chaya-v2 .v2-kb-ov-item .mt { font-size: 10.5px; color: var(--c-ink-4); font-variant-numeric: tabular-nums; }
+.chaya-v2 .v2-kb-welcome { margin: auto; text-align: center; padding: 60px 20px; }
+.chaya-v2 .v2-kb-welcome h3 { font-size: 18px; font-weight: 600; color: var(--c-ink); margin: 0 0 8px; }
+.chaya-v2 .v2-kb-welcome p { font-size: 13.5px; color: var(--c-ink-3); line-height: 1.6; margin: 0 0 18px; }
+.chaya-v2 .v2-kb-welcome .v2-set-btn { display: inline-flex; align-items: center; gap: 6px; }
+.chaya-v2 .v2-kb-welcome .v2-set-btn svg { width: 14px; height: 14px; }
+
+/* 画布内 MemoriesTab：去掉它自己的 max-width 居中（现在容器已是画布） */
+.chaya-v2 .v2-kb-canvas.pad .v2-kb-toolbar { margin-bottom: 14px; }
+
+/* 搜索浮层 */
+.chaya-v2 .v2-sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+/* Spotlight 风：深 scrim + 强模糊聚焦，面板从顶部 10vh 落定。 */
+.chaya-v2 .v2-kb-search-mask {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(10, 10, 12, 0.34);
+  -webkit-backdrop-filter: blur(10px) saturate(115%); backdrop-filter: blur(10px) saturate(115%);
+  display: grid; place-items: start center; padding: 10vh 24px 24px;
+  animation: v2-fadeIn var(--m-base) var(--ease-out) both;
+}
+.chaya-v2 .v2-kb-search-panel {
+  position: relative; width: min(100%, 720px); max-height: calc(100vh - 16vh);
+  display: flex; flex-direction: column;
+  background: var(--c-bg);
+  border: 1px solid color-mix(in oklab, var(--c-ink) 10%, var(--c-rule));
+  border-radius: var(--c-radius-xl);
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, var(--c-bg) 70%, white),
+    0 1px 2px color-mix(in oklab, var(--c-ink) 6%, transparent),
+    0 24px 60px -20px color-mix(in oklab, var(--c-ink) 40%, transparent);
+  padding: 0; overflow: hidden;
+  animation: v2-modalIn var(--m-view) var(--ease-emphasis) both;
+}
+.chaya-v2 .v2-kb-search-panel .v2-search {
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+  margin: 0; padding: 0; border-radius: 0; gap: 0;
+  color: var(--c-ink); font-size: inherit; background: transparent;
+}
+/* 搜索栏作为面板头：常驻顶部、内边距撑开。分隔线交给下方工具行（避免双 hairline）。 */
+.chaya-v2 .v2-kb-search-panel .v2-search-bar {
+  flex: 0 0 auto; margin: 0; border: 0; border-radius: 0;
+  padding: 12px 16px 8px; background: var(--c-bg);
+}
+.chaya-v2 .v2-kb-search-panel .v2-search-bar:focus-within { box-shadow: none; }
+.chaya-v2 .v2-kb-search-panel .v2-search-bar > svg { width: 18px; height: 18px; }
+.chaya-v2 .v2-kb-search-panel .v2-search-bar input { font-size: 15.5px; }
+/* 结果区滚动 */
+.chaya-v2 .v2-kb-search-panel .v2-search-empty,
+.chaya-v2 .v2-kb-search-panel .v2-search-results { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px 16px 18px; }
+
+/* ===== command-palette search (v2) ===== */
+.chaya-v2 .v2-cmdk-panel { padding: 0; }
+.chaya-v2 .v2-cmdk { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+
+/* 顶部输入条 = 面板头 */
+.chaya-v2 .v2-cmdk-bar {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
+  padding: 13px 16px; border-bottom: 1px solid var(--c-rule);
+}
+.chaya-v2 .v2-cmdk-bar > svg { width: 18px; height: 18px; color: var(--c-ink-4); flex: 0 0 auto; }
+.chaya-v2 .v2-cmdk-bar input {
+  flex: 1 1 auto; min-width: 0; min-height: 24px;
+  font-size: 16px; color: var(--c-ink); background: transparent; border: 0;
+}
+.chaya-v2 .v2-cmdk-bar input::placeholder { color: var(--c-ink-4); }
+.chaya-v2 .v2-cmdk-spin {
+  flex: 0 0 auto; width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid color-mix(in oklab, var(--c-accent) 28%, transparent);
+  border-top-color: var(--c-accent-strong); animation: v2-spin 0.7s linear infinite;
+}
+@keyframes v2-spin { to { transform: rotate(360deg); } }
+
+.chaya-v2 .v2-cmdk-error { margin: 12px 16px 0; }
+
+/* 主体：单列结果 + 右侧预览 */
+.chaya-v2 .v2-cmdk-body {
+  flex: 1 1 auto; min-height: 0; height: min(56vh, 540px);
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+}
+.chaya-v2 .v2-cmdk-list { min-width: 0; overflow-y: auto; padding: 8px 8px 10px; }
+.chaya-v2 .v2-cmdk-preview {
+  min-width: 0; overflow: hidden; display: flex; flex-direction: column;
+  border-left: 1px solid var(--c-rule); background: var(--c-sidebar);
+}
+
+/* 分组标题（笔记/文档/记忆/最近搜索） */
+.chaya-v2 .v2-cmdk-secthd {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--c-ink-4); padding: 10px 8px 4px;
+}
+.chaya-v2 .v2-cmdk-secthd .cnt { font-weight: 500; letter-spacing: 0; opacity: 0.8; font-variant-numeric: tabular-nums; }
+.chaya-v2 .v2-cmdk-group { display: flex; flex-direction: column; gap: 1px; }
+
+/* 最近搜索 */
+.chaya-v2 .v2-cmdk-recent { display: flex; flex-direction: column; gap: 1px; }
+.chaya-v2 .v2-cmdk-recent-item {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  padding: 8px 9px; border-radius: var(--c-radius-md); background: transparent;
+  border: 1px solid transparent; color: var(--c-ink-2);
+  transition: background var(--m-fast) var(--ease-out);
+}
+.chaya-v2 .v2-cmdk-recent-item:hover { background: var(--c-hover-soft); color: var(--c-ink); }
+.chaya-v2 .v2-cmdk-recent-item svg { width: 14px; height: 14px; flex: 0 0 auto; color: var(--c-ink-4); }
+.chaya-v2 .v2-cmdk-recent-item .q { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.chaya-v2 .v2-cmdk-recent-item .n { flex: 0 0 auto; font-size: 10.5px; color: var(--c-ink-4); font-variant-numeric: tabular-nums; }
+
+/* 结果条目 */
+.chaya-v2 .v2-cmdk-item {
+  display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 9px; align-items: start;
+  width: 100%; text-align: left; padding: 8px 9px; border-radius: var(--c-radius-md);
+  background: transparent; border: 1px solid transparent; color: var(--c-ink-2);
+  transition: background var(--m-fast) var(--ease-out);
+}
+.chaya-v2 .v2-cmdk-item.sel { background: var(--c-accent-bg); border-color: color-mix(in oklab, var(--c-accent) 22%, transparent); }
+.chaya-v2 .v2-cmdk-item .tk { display: flex; align-items: center; justify-content: center; padding-top: 1px; color: var(--c-ink-4); }
+.chaya-v2 .v2-cmdk-item .tk svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-cmdk-item.sel .tk { color: var(--c-accent-strong); }
+.chaya-v2 .v2-cmdk-item .tk-memory { color: color-mix(in oklab, var(--c-accent) 60%, var(--c-ink-4)); }
+.chaya-v2 .v2-cmdk-item .main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.chaya-v2 .v2-cmdk-item .snippet {
+  font-size: 13px; line-height: 1.5; color: var(--c-ink);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.chaya-v2 .v2-cmdk-item.sel .snippet { color: var(--c-ink); }
+.chaya-v2 .v2-cmdk-item .sub { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--c-ink-4); }
+.chaya-v2 .v2-cmdk-item .sub .src { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-cmdk-item .sub .sc { margin-left: auto; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+
+/* 预览面板 */
+.chaya-v2 .v2-cmdk-prev-hd {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 12px; border-bottom: 1px solid var(--c-rule); font-size: 12px; color: var(--c-ink-2);
+}
+.chaya-v2 .v2-cmdk-prev-hd .src { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-cmdk-prev-hd .ln { flex: 0 0 auto; font-size: 10.5px; color: var(--c-ink-4); font-variant-numeric: tabular-nums; }
+.chaya-v2 .v2-cmdk-prev-body { flex: 1 1 auto; min-height: 0; overflow: auto; margin: 0; padding: 8px 0; font-family: var(--c-mono); font-size: 12px; line-height: 1.6; }
+.chaya-v2 .v2-cmdk-prev-body .ln { display: flex; gap: 10px; padding: 0 12px; white-space: pre-wrap; word-break: break-word; color: var(--c-ink-3); }
+.chaya-v2 .v2-cmdk-prev-body .ln.hl { background: color-mix(in oklab, var(--c-accent) 12%, transparent); color: var(--c-ink); }
+.chaya-v2 .v2-cmdk-prev-body .ln .no { flex: 0 0 auto; width: 30px; text-align: right; color: var(--c-ink-4); user-select: none; }
+.chaya-v2 .v2-cmdk-prev-empty { flex: 1 1 auto; display: grid; place-items: center; padding: 24px; font-size: 12px; color: var(--c-ink-4); text-align: center; }
+
+/* 记忆预览 */
+.chaya-v2 .v2-cmdk-prev-mem { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.chaya-v2 .v2-cmdk-prev-mem-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 12px; font-size: 13px; line-height: 1.62; color: var(--c-ink); white-space: pre-wrap; word-break: break-word; }
+.chaya-v2 .v2-cmdk-prev-tags { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 5px; padding: 0 12px 12px; }
+.chaya-v2 .v2-cmdk-prev-tags span { font-size: 10.5px; color: var(--c-ink-3); background: var(--c-surface); padding: 2px 7px; border-radius: var(--c-radius-xs); }
+
+/* AI 回答（占据预览栏） */
+.chaya-v2 .v2-cmdk-answer { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.chaya-v2 .v2-cmdk-secthd.answer-hd { color: var(--c-accent-strong); border-bottom: 1px solid var(--c-rule); padding: 10px 12px; }
+.chaya-v2 .v2-cmdk-secthd.answer-hd svg { width: 14px; height: 14px; }
+.chaya-v2 .v2-cmdk-answer-x { margin-left: auto; color: var(--c-ink-4); font-size: 12px; line-height: 1; padding: 2px 4px; border-radius: var(--c-radius-xs); }
+.chaya-v2 .v2-cmdk-answer-x:hover { background: var(--c-hover-soft); color: var(--c-ink-2); }
+.chaya-v2 .v2-cmdk-answer-loading { padding: 14px 12px; font-size: 12.5px; color: var(--c-ink-4); font-style: italic; }
+.chaya-v2 .v2-cmdk-answer-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 10px 12px 14px; font-size: 13px; line-height: 1.62; }
+
+/* 底部快捷键提示条 */
+.chaya-v2 .v2-cmdk-foot {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 16px;
+  padding: 8px 14px; border-top: 1px solid var(--c-rule);
+  font-size: 11px; color: var(--c-ink-4);
+}
+.chaya-v2 .v2-cmdk-foot span { display: inline-flex; align-items: center; gap: 4px; }
+.chaya-v2 .v2-cmdk-foot kbd {
+  font-family: var(--c-mono); font-size: 10px; line-height: 1; color: var(--c-ink-3);
+  background: var(--c-surface); border: 1px solid var(--c-rule); border-radius: var(--c-radius-xs);
+  padding: 2px 4px; min-width: 16px; text-align: center;
+}
+
+@media (max-width: 820px) {
+  .chaya-v2 .v2-cmdk-body { grid-template-columns: 1fr; }
+  .chaya-v2 .v2-cmdk-preview { display: none; }
+}
+
+/* ===== knowledge view (v2) — legacy bits still reused by modals/memories ===== */
 .chaya-v2 .v2-kb-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
 
 /* knowledge domains (知识域) bar */
@@ -2280,6 +2725,231 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-kb-empty .h { font-size: 13px; line-height: 1.6; }
 .chaya-v2 .v2-kb-warn { padding: 10px 14px; border-radius: var(--c-radius-lg); background: var(--c-danger-bg); color: var(--c-danger); font-size: 12px; margin-bottom: 12px; }
 
+/* ============================================================
+   笔记 / 文档画布 — 题头 + CodeMirror / 只读预览
+   （画布外壳由 .v2-kb-canvas 提供；以下是题头与编辑面）
+   ============================================================ */
+.chaya-v2 .v2-note-empty { padding: 30px 16px; text-align: center; font-size: 12.5px; color: var(--c-ink-4); line-height: 1.6; }
+
+/* 编辑器面 */
+.chaya-v2 .v2-note-edit {
+  display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  border: 1px solid var(--c-rule); border-radius: var(--c-radius-lg);
+  background: var(--c-bg); overflow: hidden;
+}
+.chaya-v2 .v2-note-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 18px; border-bottom: 1px solid var(--c-rule);
+  flex: 0 0 auto;
+}
+.chaya-v2 .v2-note-toolbar .grow { flex: 1 1 auto; }
+/* 标题：大一档、半粗，像真正的文章题头 */
+.chaya-v2 .v2-note-title {
+  font-size: 17px; font-weight: 600; color: var(--c-ink);
+  letter-spacing: -0.01em;
+  cursor: text; padding: 3px 8px; margin-left: -8px; border-radius: var(--c-radius-sm);
+  max-width: 520px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: background 140ms var(--c-ease);
+}
+.chaya-v2 .v2-note-title:hover { background: var(--c-hover-soft); }
+.chaya-v2 .v2-note-status { font-size: 11px; color: var(--c-ink-4); letter-spacing: 0.02em; }
+.chaya-v2 .v2-note-icon {
+  width: 28px; height: 28px; display: grid; place-items: center;
+  border-radius: var(--c-radius-sm); color: var(--c-ink-4); cursor: pointer;
+  transition: background 140ms var(--c-ease), color 140ms var(--c-ease);
+}
+.chaya-v2 .v2-note-icon:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-note-icon.danger:hover { background: var(--c-danger-bg); color: var(--c-danger); }
+.chaya-v2 .v2-note-icon svg { width: 15px; height: 15px; }
+/* 内联改名输入框（替代 window.prompt） */
+.chaya-v2 .v2-note-title-input {
+  font-size: 17px; font-weight: 600; color: var(--c-ink); letter-spacing: -0.01em;
+  padding: 3px 8px; margin-left: -8px; max-width: 520px;
+  background: var(--c-bg); border: 1px solid var(--c-accent); border-radius: var(--c-radius-sm);
+  outline: none;
+}
+.chaya-v2 .v2-note-icon.danger.confirm {
+  width: auto; padding: 0 10px; font-size: 11.5px; font-weight: 600;
+  background: var(--c-danger); color: #fff;
+}
+.chaya-v2 .v2-note-surface { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; }
+/* 编辑器：满高满宽；显示行号 gutter，正文小字（13.5px）—— 文件感。 */
+.chaya-v2 .v2-note-cm { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.chaya-v2 .v2-note-cm .cm-editor { height: 100%; }
+.chaya-v2 .v2-note-cm .cm-scroller { padding: 16px 22px 60px; }
+.chaya-v2 .v2-note-cm .cm-content { font-size: 13.5px; line-height: 1.75; }
+.chaya-v2 .v2-note-cm .cm-gutters { font-size: 11.5px; }
+/* CodeMirror 顶部查找面板（自定义 .v2-cm-find，替换默认底部条）。 */
+.chaya-v2 .v2-note-cm .cm-panels.cm-panels-top { border-bottom: 1px solid var(--c-rule); background: transparent; }
+.chaya-v2 .v2-cm-find {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; background: var(--c-sidebar);
+}
+.chaya-v2 .v2-cm-find-input {
+  flex: 1 1 auto; min-width: 0;
+  padding: 5px 10px; border-radius: var(--c-radius-md);
+  background: var(--c-bg); border: 1px solid var(--c-rule);
+  font-size: 12.5px; color: var(--c-ink);
+  outline: none; transition: border-color 140ms var(--c-ease), box-shadow 140ms var(--c-ease);
+}
+.chaya-v2 .v2-cm-find-input:focus { border-color: color-mix(in oklab, var(--c-accent) 55%, var(--c-rule)); box-shadow: 0 0 0 3px var(--c-accent-bg); }
+.chaya-v2 .v2-cm-find-input::placeholder { color: var(--c-ink-4); }
+.chaya-v2 .v2-cm-find-count { font-size: 11px; color: var(--c-ink-4); font-variant-numeric: tabular-nums; min-width: 36px; text-align: right; }
+.chaya-v2 .v2-cm-find-btn {
+  width: 24px; height: 24px; flex: 0 0 auto;
+  display: grid; place-items: center; border-radius: var(--c-radius-sm);
+  background: transparent; color: var(--c-ink-3); cursor: pointer; font-size: 13px; line-height: 1;
+  transition: background 140ms var(--c-ease), color 140ms var(--c-ease);
+}
+.chaya-v2 .v2-cm-find-btn:hover { background: var(--c-hover); color: var(--c-ink); }
+/* 预览：居中阅读列，字号与编辑同档 */
+.chaya-v2 .v2-note-preview { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.chaya-v2 .v2-note-preview .v2-md { max-width: 760px; margin: 0 auto; padding: 20px 28px 60px; font-size: 14px; line-height: 1.8; }
+
+/* ============================================================
+   搜索 — 6 路混合检索 + AI 回答
+   ============================================================ */
+.chaya-v2 .v2-search { display: flex; flex-direction: column; min-height: 0; }
+.chaya-v2 .v2-search-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 42px 10px 14px; margin-bottom: 7px;
+  border: 1px solid color-mix(in oklab, var(--c-ink) 18%, var(--c-rule));
+  border-radius: var(--c-radius-md);
+  background: var(--c-bg);
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, var(--c-bg) 78%, var(--c-rule)),
+    inset 0 -1px 0 color-mix(in oklab, var(--c-ink) 5%, transparent);
+  transition: border-color 140ms var(--c-ease), box-shadow 140ms var(--c-ease), background 140ms var(--c-ease);
+}
+.chaya-v2 .v2-search-bar:focus-within {
+  border-color: color-mix(in oklab, var(--c-accent) 34%, var(--c-rule));
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, var(--c-bg) 78%, var(--c-rule)),
+    inset 0 -1px 0 color-mix(in oklab, var(--c-ink) 5%, transparent),
+    0 0 0 3px color-mix(in oklab, var(--c-accent) 7%, transparent);
+}
+.chaya-v2 .v2-search-bar > svg { width: 16px; height: 16px; color: var(--c-ink-4); flex: 0 0 auto; }
+.chaya-v2 .v2-search-bar input { flex: 1 1 auto; min-width: 0; min-height: 30px; font-size: 15px; color: var(--c-ink); background: transparent; }
+.chaya-v2 .v2-search-bar input::placeholder { color: var(--c-ink-4); }
+.chaya-v2 .v2-search-bar kbd {
+  flex: 0 0 auto; padding: 2px 6px;
+  border: 1px solid var(--c-rule); border-radius: var(--c-radius-xs);
+  color: var(--c-ink-4); background: var(--c-sidebar);
+  font: 10.5px/1.3 var(--c-mono);
+}
+.chaya-v2 .v2-search-bar .v2-set-btn.primary { min-height: 30px; padding: 5px 11px; }
+/* 工具行作为搜索栏下的第二条 header：与 bar 对齐的 16px 内边距 + 底部 hairline。 */
+.chaya-v2 .v2-search-tools {
+  display: flex; align-items: center; gap: 6px; margin: 0; flex: 0 0 auto;
+  padding: 7px 14px; color: var(--c-ink-4);
+  border-bottom: 1px solid var(--c-rule);
+}
+.chaya-v2 .v2-search-ai {
+  display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto;
+  min-height: 26px; padding: 3px 10px; border-radius: var(--c-radius-pill);
+  font-size: 11.5px; color: var(--c-ink-3); cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent; transition: background 140ms var(--c-ease), color 140ms var(--c-ease), border-color 140ms var(--c-ease);
+}
+.chaya-v2 .v2-search-ai:hover { background: var(--c-hover-soft); color: var(--c-ink-2); }
+.chaya-v2 .v2-search-ai svg { width: 13px; height: 13px; }
+.chaya-v2 .v2-search-ai.on { background: var(--c-accent-bg); color: var(--c-accent-strong); border-color: color-mix(in oklab, var(--c-accent) 28%, transparent); }
+.chaya-v2 .v2-search-tools .v2-set-select { min-height: 26px; margin-left: auto; background: var(--c-surface); font-size: 11.5px; }
+.chaya-v2 .v2-search-error { margin: 14px 16px 0; }
+
+/* 空态 + 最近搜索 */
+.chaya-v2 .v2-search-recent { max-width: none; margin: 0; }
+.chaya-v2 .v2-search-recent-hd { font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--c-ink-4); padding: 2px 6px 8px; }
+.chaya-v2 .v2-search-recent-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  min-height: 38px; padding: 7px 8px; border-radius: var(--c-radius-sm);
+  text-align: left; cursor: pointer; color: var(--c-ink-2);
+  transition: background 140ms var(--c-ease), color 140ms var(--c-ease);
+}
+.chaya-v2 .v2-search-recent-item:hover { background: var(--c-hover-soft); color: var(--c-ink); }
+.chaya-v2 .v2-search-recent-item svg { width: 13px; height: 13px; color: var(--c-ink-4); flex: 0 0 auto; }
+.chaya-v2 .v2-search-recent-item .q { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.chaya-v2 .v2-search-recent-item .n { font-size: 10.5px; color: var(--c-ink-4); font-variant-numeric: tabular-nums; }
+
+/* 结果区：主列 + 右侧预览 */
+.chaya-v2 .v2-search-results { display: grid; grid-template-columns: 1fr; gap: 12px; align-items: start; }
+.chaya-v2 .v2-search-results:has(.v2-search-preview) { grid-template-columns: minmax(0, 1fr) minmax(270px, 320px); }
+.chaya-v2 .v2-search-main { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+
+/* AI 回答卡 */
+.chaya-v2 .v2-search-answer {
+  border: 1px solid color-mix(in oklab, var(--c-accent) 18%, var(--c-rule));
+  border-radius: var(--c-radius-md);
+  background: color-mix(in oklab, var(--c-accent) 4%, var(--c-bg));
+  padding: 12px 14px;
+}
+.chaya-v2 .v2-search-answer-hd { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; color: var(--c-accent-strong); margin-bottom: 8px; }
+.chaya-v2 .v2-search-answer-hd svg { width: 14px; height: 14px; }
+.chaya-v2 .v2-search-answer-loading { font-size: 12.5px; color: var(--c-ink-4); font-style: italic; }
+
+/* 结果分组 */
+.chaya-v2 .v2-search-group { display: flex; flex-direction: column; gap: 1px; }
+.chaya-v2 .v2-search-group-hd { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 500; color: var(--c-ink-4); padding: 7px 4px 3px; }
+.chaya-v2 .v2-search-group-hd svg { width: 13px; height: 13px; color: var(--c-ink-4); }
+.chaya-v2 .v2-search-hit {
+  display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: start;
+  width: 100%; text-align: left; cursor: pointer;
+  min-height: 40px; padding: 9px 8px; border-radius: var(--c-radius-sm);
+  border: 1px solid transparent; border-top-color: color-mix(in oklab, var(--c-rule) 65%, transparent);
+  transition: background 140ms var(--c-ease), border-color 140ms var(--c-ease), transform 140ms var(--c-ease);
+}
+.chaya-v2 .v2-search-hit:hover { background: var(--c-hover-soft); }
+.chaya-v2 .v2-search-hit:active { transform: translateY(1px); }
+.chaya-v2 .v2-search-hit.active { background: color-mix(in oklab, var(--c-accent) 7%, transparent); border-color: color-mix(in oklab, var(--c-accent) 22%, var(--c-rule)); }
+.chaya-v2 .v2-search-hit .cite { font-size: 11px; font-weight: 600; color: var(--c-accent-strong); font-variant-numeric: tabular-nums; padding-top: 1px; }
+.chaya-v2 .v2-search-hit .snippet { font-size: 13px; line-height: 1.55; color: var(--c-ink-2); grid-column: 2; }
+.chaya-v2 .v2-search-hit .meta { grid-column: 2; display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.chaya-v2 .v2-search-hit .meta .sc { font-size: 11px; font-weight: 600; color: var(--c-ink-3); font-variant-numeric: tabular-nums; }
+.chaya-v2 .v2-search-hit .meta .path { font-size: 9.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--c-ink-4); background: var(--c-surface); padding: 1px 5px; border-radius: var(--c-radius-xs); }
+.chaya-v2 .v2-search-hit .meta .ln { font-size: 10px; color: var(--c-ink-4); font-variant-numeric: tabular-nums; margin-left: auto; }
+
+/* 右侧 source 预览 */
+.chaya-v2 .v2-search-preview {
+  position: sticky; top: 0;
+  border: 1px solid var(--c-rule); border-radius: var(--c-radius-md);
+  background: var(--c-sidebar); overflow: hidden;
+  max-height: min(72vh, 760px); display: flex; flex-direction: column;
+}
+.chaya-v2 .v2-search-preview-hd {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 9px 12px; border-bottom: 1px solid var(--c-rule);
+  font-size: 12px; font-weight: 500; color: var(--c-ink-2);
+}
+.chaya-v2 .v2-search-preview-hd span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-search-preview-body { flex: 1 1 auto; min-height: 0; overflow: auto; margin: 0; padding: 8px 0; font-family: var(--c-mono); font-size: 12px; line-height: 1.6; }
+.chaya-v2 .v2-search-preview-body .ln { display: flex; gap: 10px; padding: 0 12px; white-space: pre-wrap; word-break: break-word; color: var(--c-ink-3); }
+.chaya-v2 .v2-search-preview-body .ln.hl { background: color-mix(in oklab, var(--c-accent) 12%, transparent); color: var(--c-ink); }
+.chaya-v2 .v2-search-preview-body .ln .no { flex: 0 0 auto; width: 30px; text-align: right; color: var(--c-ink-4); user-select: none; }
+
+@media (max-width: 820px) {
+  .chaya-v2 .v2-kb-search-mask { padding: 6vh 12px 12px; place-items: stretch center; }
+  .chaya-v2 .v2-kb-search-panel { max-height: calc(100vh - 12vh); border-radius: var(--c-radius-lg); }
+  .chaya-v2 .v2-search-bar { flex-wrap: wrap; }
+  .chaya-v2 .v2-search-bar input { flex-basis: calc(100% - 24px); }
+  .chaya-v2 .v2-search-ai,
+  .chaya-v2 .v2-search-tools .v2-set-select,
+  .chaya-v2 .v2-search-bar .v2-set-btn.primary { min-height: 40px; }
+  .chaya-v2 .v2-search-results:has(.v2-search-preview) { grid-template-columns: 1fr; }
+  .chaya-v2 .v2-search-preview { position: static; max-height: 42vh; }
+}
+
+@media (max-width: 520px) {
+  .chaya-v2 .v2-search-ai { width: 100%; justify-content: center; }
+  .chaya-v2 .v2-search-tools .v2-set-select,
+  .chaya-v2 .v2-search-bar .v2-set-btn.primary { flex: 1 1 0; }
+  .chaya-v2 .v2-search-bar kbd { display: none; }
+  .chaya-v2 .v2-search-hit { grid-template-columns: 1fr; gap: 6px; }
+  .chaya-v2 .v2-search-hit .snippet,
+  .chaya-v2 .v2-search-hit .meta { grid-column: 1; }
+  .chaya-v2 .v2-search-hit .cite { padding-top: 0; }
+  .chaya-v2 .v2-search-hit .meta .ln { margin-left: 0; }
+}
+
 /* ===== gallery view ===== */
 .chaya-v2 .v2-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px 28px 60px; }
 .chaya-v2 .v2-view-head { max-width: 1080px; margin: 14px auto 18px; display: flex; align-items: baseline; gap: 10px; }
@@ -2382,9 +3052,35 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-la-hint.sub { padding: 5px 12px 5px 32px; }
 .chaya-v2 .v2-la-hint.center { text-align: center; margin: auto; }
 
-.chaya-v2 .v2-la-proj-row { display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-radius: var(--c-radius-row); cursor: pointer; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-la-proj-row {
+  position: relative;
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 8px; border-radius: var(--c-radius-row);
+  cursor: pointer;
+  transition: background 140ms var(--c-ease), color 140ms var(--c-ease);
+}
 .chaya-v2 .v2-la-proj-row:hover { background: var(--c-hover-soft); }
+/* 项目行"选中" = 根目录本身被点中（且没有子会话同时选中）。
+   仅给底色 tint 表示这一档。 */
 .chaya-v2 .v2-la-proj-row.active { background: var(--c-hover); }
+.chaya-v2 .v2-la-proj-row.active .v2-la-proj-nm { color: var(--c-ink); font-weight: 500; }
+
+/* 当某个子 session 选中时，project 行 NOT 再上 bg tint —— 否则父子两层都灰，
+   层级被抹平。改用"父用粗体名 + 左侧 hairline 指示分支被选中"的克制语言。
+   :has() 在 Safari/Chromium 已稳定，覆盖所有桌面环境。 */
+.chaya-v2 .v2-la-proj:has(.v2-la-sess.active) .v2-la-proj-row.active {
+  background: transparent;
+}
+.chaya-v2 .v2-la-proj:has(.v2-la-sess.active) .v2-la-proj-row.active:hover {
+  background: var(--c-hover-soft);
+}
+.chaya-v2 .v2-la-proj:has(.v2-la-sess.active) .v2-la-proj-row.active .v2-la-proj-nm {
+  color: var(--c-ink);
+  font-weight: 500;
+}
+.chaya-v2 .v2-la-proj:has(.v2-la-sess.active) .v2-la-proj-row.active .v2-la-proj-ic {
+  color: var(--c-ink-2);
+}
 .chaya-v2 .v2-la-caret { width: 14px; height: 14px; display: grid; place-items: center; color: var(--c-ink-4); flex: 0 0 auto; }
 .chaya-v2 .v2-la-caret svg { width: 12px; height: 12px; transform: rotate(-90deg); transition: transform 180ms var(--c-ease); }
 .chaya-v2 .v2-la-caret.open svg { transform: rotate(0deg); }
@@ -2398,9 +3094,27 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-la-proj-acts svg { width: 12px; height: 12px; }
 
 .chaya-v2 .v2-la-sessions { display: flex; flex-direction: column; gap: 1px; margin: 1px 0 4px; }
-.chaya-v2 .v2-la-sess { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 30px; border-radius: var(--c-radius-row); cursor: pointer; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-la-sess {
+  position: relative;
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px 6px 30px;
+  border-radius: var(--c-radius-row);
+  cursor: pointer;
+  transition: background 140ms var(--c-ease), color 140ms var(--c-ease);
+}
 .chaya-v2 .v2-la-sess:hover { background: var(--c-hover-soft); }
-.chaya-v2 .v2-la-sess.active { background: var(--c-hover); }
+/* 当前选中的会话：底色 + 文字加深 + 左侧 2px hairline 压痕（letterpress 语义）。
+   父 project 行的 bg 已经被 :has() 抑制，所以这层底色不会与父 row 撞色。 */
+.chaya-v2 .v2-la-sess.active {
+  background: var(--c-hover);
+  color: var(--c-ink);
+}
+.chaya-v2 .v2-la-sess.active::before {
+  content: ''; position: absolute;
+  left: 18px; top: 8px; bottom: 8px;
+  width: 2px; border-radius: 1px;
+  background: color-mix(in oklab, var(--c-ink) 70%, transparent);
+}
 /* 在后台标签里打开（非当前）：左侧细标，提示"已打开" */
 .chaya-v2 .v2-la-sess.open { box-shadow: inset 2px 0 0 var(--c-rule); }
 .chaya-v2 .v2-la-sess .t { font-size: 12.5px; color: var(--c-ink-2); flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2566,6 +3280,19 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
   width: 1px; height: 18px; margin: 0 8px;
   background: var(--c-rule);
 }
+/* 固定的缩略 tab：仅图标、方形、钉在最左；激活时底部 accent 细条。 */
+.chaya-v2 .v2-la-tab.pinned {
+  flex: 0 0 auto; max-width: none; width: 34px; padding: 0;
+  justify-content: center; gap: 0; position: relative;
+}
+.chaya-v2 .v2-la-tab.pinned .ico { width: 16px; height: 16px; }
+.chaya-v2 .v2-la-tab.pinned .ico > svg { width: 16px; height: 16px; }
+.chaya-v2 .v2-la-tab.pinned.active::after {
+  content: ''; position: absolute; left: 7px; right: 7px; bottom: 4px; height: 2px;
+  border-radius: 1px; background: color-mix(in oklab, var(--c-accent) 70%, var(--c-ink));
+}
+.chaya-v2 .v2-la-tab.pinned .unread { position: absolute; top: 6px; right: 6px; margin: 0; }
+.chaya-v2 .v2-toptab-menu { min-width: 150px; }
 /* 类型图标：SVG 14×14；颜色随 tab 状态轻轻提亮（calm，不喧宾夺主）。 */
 .chaya-v2 .v2-la-tab .ico {
   flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
@@ -2924,6 +3651,53 @@ body.v2-la-resizing { user-select: none; }
 /* 拖到欢迎页：整块高亮。 */
 .chaya-v2 .v2-la-single.over { outline: 2px dashed var(--c-accent); outline-offset: -6px; border-radius: var(--c-radius-md); }
 
+/* ---- 参考附件：拖文件进窗格的整窗高亮提示 ---- */
+.chaya-v2 .v2-la-pane.fileover { outline: 2px dashed color-mix(in oklab, var(--c-accent) 70%, var(--c-rule)); outline-offset: -8px; }
+.chaya-v2 .v2-la-filedrop {
+  position: absolute; inset: 6px; z-index: 7; pointer-events: none;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in oklab, var(--c-accent) 9%, transparent);
+  border-radius: var(--c-radius-md); animation: v2-fadeUp 120ms var(--c-ease) both;
+}
+.chaya-v2 .v2-la-filedrop span {
+  display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px;
+  font-size: 12.5px; font-weight: 600; color: var(--c-ink-2);
+  background: var(--c-bg); border: 1px solid var(--c-rule); border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+.chaya-v2 .v2-la-filedrop span svg { width: 15px; height: 15px; }
+
+/* ---- 待发送附件条（输入框上方）：图片缩略图 + 文件 chip，× 移除 ---- */
+.chaya-v2 .v2-la-atts { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 2px 6px; }
+.chaya-v2 .v2-la-att {
+  position: relative; display: inline-flex; align-items: center; gap: 6px;
+  max-width: 180px; padding: 3px 7px 3px 4px;
+  background: color-mix(in oklab, var(--c-ink) 4%, var(--c-bg));
+  border: 1px solid var(--c-rule); border-radius: var(--c-radius-sm, 8px);
+  font-size: 11.5px; color: var(--c-ink-2);
+}
+.chaya-v2 .v2-la-att img { width: 30px; height: 30px; object-fit: cover; border-radius: 5px; flex-shrink: 0; display: block; }
+.chaya-v2 .v2-la-att .fic { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; color: var(--c-ink-3); flex-shrink: 0; }
+.chaya-v2 .v2-la-att .fic svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-la-att .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-la-att .x {
+  flex-shrink: 0; width: 16px; height: 16px; border-radius: 50%; border: none;
+  background: color-mix(in oklab, var(--c-ink) 8%, transparent); color: var(--c-ink-3);
+  font-size: 10px; line-height: 1; cursor: pointer; transition: background 120ms var(--c-ease), color 120ms var(--c-ease);
+}
+.chaya-v2 .v2-la-att .x:hover { background: var(--c-danger, #c0392b); color: #fff; }
+
+/* 附件按钮（输入框工具行）：与权限档/模型按钮同款 ghost 风；有附件时点亮 + 角标计数。 */
+.chaya-v2 .v2-la-attach {
+  display: inline-flex; align-items: center; gap: 3px; padding: 3px 6px;
+  background: transparent; border: 1px solid transparent; border-radius: var(--c-radius-sm, 8px);
+  color: var(--c-ink-3); cursor: pointer; transition: color 120ms var(--c-ease), background 120ms var(--c-ease);
+}
+.chaya-v2 .v2-la-attach svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-la-attach:hover { color: var(--c-ink-1); background: color-mix(in oklab, var(--c-ink) 6%, transparent); }
+.chaya-v2 .v2-la-attach.on { color: var(--c-accent); }
+.chaya-v2 .v2-la-attach .n { font-size: 10.5px; font-weight: 700; }
+
 /* 已平铺标记：会话名走 italic（handmade 的「附注 / 已搬走」语气），不再单纯调透明。 */
 .chaya-v2 .v2-la-tab.ingrid .sess { font-style: italic; color: var(--c-ink-4); }
 .chaya-v2 .v2-la-tab.ingrid.active .sess { color: var(--c-ink-3); }
@@ -3177,12 +3951,15 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .v2-la-cfg { background: var(--c-surface); color: var(--c-ink-3); max-width: 260px; }
 .chaya-v2 .v2-la-cfg:hover { background: var(--c-hover); color: var(--c-ink-2); }
 .chaya-v2 .v2-la-cfg .tri {
-  font-size: 10.5px; line-height: 1; color: var(--c-ink-4);
+  width: 13px; height: 13px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--c-ink-3);
   flex: 0 0 auto;
   transition: color 140ms var(--c-ease), transform 200ms var(--c-ease);
 }
-.chaya-v2 .v2-la-cfg:hover .tri { color: var(--c-ink-3); transform: translateX(0.5px); }
-.chaya-v2 .v2-la-cfg.on .tri { transform: rotate(90deg); color: var(--c-accent-strong); }
+.chaya-v2 .v2-la-cfg .tri svg { width: 13px; height: 13px; }
+.chaya-v2 .v2-la-cfg:hover .tri { color: var(--c-ink-2); }
+.chaya-v2 .v2-la-cfg.on .tri { color: var(--c-accent-strong); transform: scale(1.05); }
 .chaya-v2 .v2-la-cfg .m {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   max-width: 170px; min-width: 0;
@@ -3242,23 +4019,42 @@ body.v2-la-resizing { user-select: none; }
 }
 .chaya-v2 .v2-la-cfgmodal .v2-modal-hd h3 { font-size: 13.5px; font-weight: 600; letter-spacing: 0.01em; }
 .chaya-v2 .v2-la-cfgmodal .v2-modal-hd .x { width: 26px; height: 26px; }
-/* 分段控件（替代下划线 tab）：内嵌轨道 + 活动段浮起 */
+/* 分段控件：内嵌轨道 + 活动段浮起 ——
+   轨道用 ink 5% mix 提供"凹陷"感（之前 glass-hairline 在非玻璃态下偏淡，看不清），
+   活动段：白底 + 双层阴影（顶 1px 高光 + 贴底阴影）让它"压"在轨道上有重量。 */
 .chaya-v2 .v2-la-cfgtabs {
-  display: flex; gap: 2px; margin: 12px 14px 2px; padding: 3px;
-  background: rgba(var(--glass-hairline), 0.05); border-radius: var(--c-radius-md);
+  display: flex; gap: 2px; margin: 14px 14px 4px; padding: 3px;
+  background: color-mix(in oklab, var(--c-ink) 5%, transparent);
+  border-radius: var(--c-radius-md);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--c-ink) 4%, transparent);
 }
 .chaya-v2 .v2-la-cfgtabs button {
-  flex: 1; padding: 6px 0; font-size: 12px; font-weight: 500; color: var(--c-ink-3);
+  flex: 1; padding: 7px 0;
+  font-size: 12.5px; font-weight: 500; letter-spacing: 0.005em;
+  color: var(--c-ink-3);
   cursor: pointer; border-radius: var(--c-radius-sm);
   transition: color 140ms var(--c-ease), background 160ms var(--c-ease), box-shadow 160ms var(--c-ease);
 }
 .chaya-v2 .v2-la-cfgtabs button:hover { color: var(--c-ink-2); }
+.chaya-v2 .v2-la-cfgtabs button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--c-accent) 60%, var(--c-ink));
+}
 .chaya-v2 .v2-la-cfgtabs button.on {
   color: var(--c-ink); background: var(--c-bg);
   box-shadow:
-    0 1px 2px rgba(0,0,0,0.06),
-    0 1px 1px rgba(0,0,0,0.03),
-    inset 0 0 0 1px rgba(var(--glass-hairline), 0.06);
+    inset 0 1px 0 color-mix(in oklab, var(--c-bg) 80%, white),
+    0 1px 0 color-mix(in oklab, var(--c-ink) 8%, transparent),
+    0 2px 6px -2px color-mix(in oklab, var(--c-ink) 14%, transparent);
+}
+/* Cursor / Anthropic 主题：active 段加 1px accent hairline 暗示"在 X 主题里" */
+.chaya-v2[data-theme="cursor"] .v2-la-cfgtabs button.on,
+.chaya-v2[data-theme="anthropic"] .v2-la-cfgtabs button.on {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--c-accent) 22%, transparent),
+    inset 0 1px 0 color-mix(in oklab, var(--c-bg) 80%, white),
+    0 1px 0 color-mix(in oklab, var(--c-ink) 8%, transparent),
+    0 2px 6px -2px color-mix(in oklab, var(--c-ink) 14%, transparent);
 }
 .chaya-v2 .v2-la-cfgbody { max-height: 320px; overflow-y: auto; padding: 6px 8px 8px; animation: v2-la-cfgfade 200ms var(--c-ease) both; }
 /* 切 tab 时内容轻淡入（key 变化触发重挂载）。 */

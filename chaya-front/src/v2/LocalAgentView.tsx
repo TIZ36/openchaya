@@ -10,10 +10,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { basename, PERM_META, permModesFor, defaultPermMode, type TranscriptMessage, type SlashCommand, type SessionSummary, type PermissionRequest, type QuestionRequest, type TabGroup as TabGroupT, type McpAvailable, type ModelInfo } from './services/localAgent';
+import { basename, PERM_META, permModesFor, defaultPermMode, type TranscriptMessage, type SlashCommand, type SessionSummary, type PermissionRequest, type QuestionRequest, type TabGroup as TabGroupT, type McpAvailable, type ModelInfo, type Attachment } from './services/localAgent';
 import type { LocalAgentState, LayoutNode, DropSide, Tab } from './useLocalAgent';
 import { TAB_COLORS } from './useLocalAgent';
-import { IconSend, IconAgentCode, IconPlus, IconChevron, IconTrash, IconSkill } from './icons';
+import { IconSend, IconAgentCode, IconPlus, IconChevron, IconTrash, IconSkill, IconModel } from './icons';
 import { CodeBlock, PreBlock, mdRehypePlugins } from './codeBlock';
 
 // 公共组件：链接新窗口打开、宽表格局部横滚。
@@ -100,6 +100,42 @@ const IconFolder = () => (
     <path d="M1.5 3.5h4l1.5 2h7.5v7a1 1 0 0 1-1 1h-12a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z" />
   </svg>
 );
+
+const IconPaperclip = () => (
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M13.5 7.5l-5.6 5.6a3 3 0 0 1-4.2-4.2l6-6a2 2 0 0 1 2.8 2.8l-6 6a1 1 0 0 1-1.4-1.4l5.3-5.3" />
+  </svg>
+);
+
+const IconFileGeneric = () => (
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 1.5h5l3 3v9a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5Z" /><path d="M9 1.5v3h3" />
+  </svg>
+);
+
+/** 把拖入/粘贴的 File 列表转成附件（图片读成 dataUrl 走视觉；其它按 path 让 agent 读取）。
+ *  ≤8MB 的图片才内联 dataUrl，否则退化成按路径引用（与主进程 pickFiles 规则一致）。 */
+const IMG_MIME_RE = /^image\//;
+function readAsDataUrl(blob: Blob): Promise<string> {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(blob); });
+}
+async function filesToAttachments(files: File[]): Promise<Omit<Attachment, 'id'>[]> {
+  const out: Omit<Attachment, 'id'>[] = [];
+  for (const f of files) {
+    const p = (f as unknown as { path?: string }).path || undefined;   // Electron 给 File 挂了 .path
+    const canInlineImg = IMG_MIME_RE.test(f.type) && f.size > 0 && f.size <= 8 * 1024 * 1024;
+    let dataUrl: string | undefined;
+    if (canInlineImg) { try { dataUrl = await readAsDataUrl(f); } catch { /* */ } }
+    const ext = (f.type.split('/')[1] || 'png').replace('+xml', '');
+    out.push({
+      kind: dataUrl ? 'image' : 'file',
+      name: f.name || (dataUrl ? `粘贴图片.${ext}` : '文件'),
+      path: p, mime: f.type || null, size: f.size, dataUrl,
+    });
+  }
+  // 没有 path 也没有 dataUrl 的（如粘贴的纯文本片段、无法读取的项）丢弃——无从引用。
+  return out.filter((a) => a.path || a.dataUrl);
+}
 
 const Spinner: React.FC<{ label?: string }> = ({ label }) => (
   <div className="v2-la-loading">
@@ -522,9 +558,11 @@ const QuestionPrompt: React.FC<{
  * 主区域：单窗 = 一个 Pane；多窗 = 网格平铺多个独立 Pane（各自输入、各自流式）。
  * ================================================================== */
 const NO_MSGS: TranscriptMessage[] = [];
+const NO_ATTS: Attachment[] = [];
 
 /** 一个独立会话窗格：自带时间线 + 输入框 + 斜杠/权限/选择，全部按 cwd 寻址。 */
-const LocalAgentPane: React.FC<{ la: LocalAgentState; cwd: string; inGrid?: boolean }> = ({ la, cwd, inGrid }) => {
+type PaneProps = { la: LocalAgentState; cwd: string; inGrid?: boolean };
+const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const tab = la.tabs.find((t) => t.cwd === cwd);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
@@ -532,10 +570,12 @@ const LocalAgentPane: React.FC<{ la: LocalAgentState; cwd: string; inGrid?: bool
   const [slashDismissed, setSlashDismissed] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [dropSide, setDropSide] = useState<DropSide | null>(null);
+  const [fileOver, setFileOver] = useState(false);   // 拖文件进窗格的高亮态
   const [cfgOpen, setCfgOpen] = useState(false);
   const [cfgTab, setCfgTab] = useState<'model' | 'mcp'>('model');
   const [mcpList, setMcpList] = useState<McpAvailable[] | null>(null);
 
+  const attachments = tab?.attachments ?? NO_ATTS;
   const draft = tab?.draft ?? '';
   const messages = tab?.messages ?? NO_MSGS;
   const liveMsgs = tab?.liveMsgs ?? NO_MSGS;
@@ -658,6 +698,16 @@ const LocalAgentPane: React.FC<{ la: LocalAgentState; cwd: string; inGrid?: bool
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void la.send(cwd); }
   };
   const onDraftChange = (v: string) => { la.setDraft(cwd, v); if (slashDismissed) setSlashDismissed(false); };
+  // 粘贴板里的图片（截图等）→ 作为参考图片附件，显示缩略图、随下条消息走视觉。
+  const onPaste = (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const imgs: File[] = [];
+    for (const it of Array.from(items)) {
+      if (it.kind === 'file' && IMG_MIME_RE.test(it.type)) { const f = it.getAsFile(); if (f) imgs.push(f); }
+    }
+    if (imgs.length) { e.preventDefault(); void filesToAttachments(imgs).then((a) => la.addAttachments(cwd, a)); }
+  };
 
   const current = la.current;
   // Memoize the few per-render lookups so they don't run on every stream
@@ -680,18 +730,20 @@ const LocalAgentPane: React.FC<{ la: LocalAgentState; cwd: string; inGrid?: bool
     [tab?.permMode, la.provider],
   );
   const pm = PERM_META[effPerm];
-  if (!tab) return null;
 
   // 打开「模型 / MCP」对话框：拉一次 MCP 列表 + 探测状态（MCP 仅 claude——读 ~/.claude.json）。
   const hasMcp = la.provider === 'claude';
   const openCfg = () => { setCfgOpen(true); if (hasMcp) { if (!mcpList) void la.listMcp(cwd).then(setMcpList); la.refreshMcp(cwd); } else setCfgTab('model'); };
   // 对话框开启时：Esc 关闭（不冒泡去触发 Tab 切权限等全局键）。
+  // 必须在 `if (!tab) return null` 之前调用 —— 之前放在 return 之后会让关闭最后
+  // 一个 tab 时 hook 数量减少，触发 "Rendered fewer hooks than expected"。
   useEffect(() => {
     if (!cfgOpen) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setCfgOpen(false); } };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [cfgOpen]);
+  if (!tab) return null;
 
   // 拖到本窗格哪条边（最近边），就从那一侧分裂；拖的是另一个窗格则=移动重排。
   const computeSide = (e: React.DragEvent): DropSide => {
@@ -701,11 +753,19 @@ const LocalAgentPane: React.FC<{ la: LocalAgentState; cwd: string; inGrid?: bool
     return (Object.keys(dx) as DropSide[]).reduce((best, k) => (dx[k] < dx[best] ? k : best), 'right' as DropSide);
   };
   const onDragOver = (e: React.DragEvent) => {
-    if (!e.dataTransfer.types.includes('text/cwd')) return;
+    const ty = e.dataTransfer.types;
+    // 拖文件进来 → 作为参考附件（高亮整窗，不走分裂逻辑）。
+    if (ty.includes('Files')) { e.preventDefault(); if (!fileOver) setFileOver(true); return; }
+    if (!ty.includes('text/cwd')) return;
     e.preventDefault();
     const s = computeSide(e); if (s !== dropSide) setDropSide(s);
   };
   const onDrop = (e: React.DragEvent) => {
+    if (e.dataTransfer.files && e.dataTransfer.files.length) {
+      e.preventDefault(); e.stopPropagation(); setFileOver(false); setDropSide(null);
+      void filesToAttachments(Array.from(e.dataTransfer.files)).then((a) => la.addAttachments(cwd, a));
+      return;
+    }
     const c = e.dataTransfer.getData('text/cwd'); const s = dropSide || computeSide(e); setDropSide(null);
     if (c && c !== cwd) { e.preventDefault(); e.stopPropagation(); la.placePane(cwd, c, s); }
   };
@@ -713,14 +773,15 @@ const LocalAgentPane: React.FC<{ la: LocalAgentState; cwd: string; inGrid?: bool
   return (
     <div
       ref={rootRef}
-      className={`v2-la-pane${cwd === la.activeCwd ? ' focused' : ''}${inGrid ? ' ingrid' : ''}`}
+      className={`v2-la-pane${cwd === la.activeCwd ? ' focused' : ''}${inGrid ? ' ingrid' : ''}${fileOver ? ' fileover' : ''}`}
       style={{ ['--pane' as string]: paneColor } as React.CSSProperties}
       onMouseDown={inGrid ? () => la.setActiveTab(cwd) : undefined}
       onDragOver={onDragOver}
-      onDragLeave={() => setDropSide(null)}
+      onDragLeave={() => { setDropSide(null); setFileOver(false); }}
       onDrop={onDrop}
     >
       {dropSide && <div className={`v2-la-drop ${dropSide}`} aria-hidden />}
+      {fileOver && <div className="v2-la-filedrop" aria-hidden><span><IconPaperclip />松开以添加参考文件 / 图片</span></div>}
       {inGrid && (
         <div
           className="v2-la-pane-hd"
@@ -816,17 +877,32 @@ const LocalAgentPane: React.FC<{ la: LocalAgentState; cwd: string; inGrid?: bool
                 ))}
               </div>
             )}
+            {/* 参考附件条：图片显缩略图、其它文件显图标 + 名；× 移除。随下条消息发出。 */}
+            {attachments.length > 0 && (
+              <div className="v2-la-atts">
+                {attachments.map((a) => (
+                  <div key={a.id} className={`v2-la-att ${a.kind}`} title={a.path || a.name}>
+                    {a.kind === 'image' && a.dataUrl
+                      ? <img src={a.dataUrl} alt={a.name} />
+                      : <span className="fic"><IconFileGeneric /></span>}
+                    <span className="nm">{a.name}</span>
+                    <button className="x" title="移除" onClick={() => la.removeAttachment(cwd, a.id)}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
             <textarea
               ref={taRef}
               rows={1}
               placeholder={
                 !current?.live ? `${current?.label || la.provider} 暂不支持对话`
-                  : sessionId ? '' : inGrid ? '输入消息…  / 命令' : '描述你的任务…（/ 唤出命令 · Tab 切权限模式）'
+                  : sessionId ? '' : inGrid ? '输入消息…  / 命令' : '描述你的任务…（/ 唤出命令 · Tab 切权限模式 · 拖入/粘贴文件参考）'
               }
               value={draft}
               disabled={!current?.live}
               onChange={(e) => onDraftChange(e.target.value)}
               onKeyDown={onKeyDown}
+              onPaste={onPaste}
             />
             <div className="v2-row">
               <div className="v2-l">
@@ -838,9 +914,16 @@ const LocalAgentPane: React.FC<{ la: LocalAgentState; cwd: string; inGrid?: bool
                   onClick={() => la.cyclePermMode(cwd)}
                   title={`权限模式：${pm.hint}（Tab 切换）`}
                 >{pm.label}</button>
+                {current?.live && (
+                  <button
+                    className={`v2-la-attach${attachments.length ? ' on' : ''}`}
+                    onClick={() => la.pickAttachments(cwd)}
+                    title="添加参考文件 / 图片（也可拖入窗格，或粘贴截图）"
+                  ><IconPaperclip />{attachments.length > 0 && <span className="n">{attachments.length}</span>}</button>
+                )}
                 {!inGrid && current?.live && (
                   <button className="v2-la-cfg" onClick={openCfg} title="模型 / MCP">
-                    <span className="tri">▷</span>
+                    <span className="tri" aria-hidden><IconModel /></span>
                     <span className="m">{(la.modelOptions.find((m) => m.value === tab.model)?.displayName) || (tab.model || '默认模型')}</span>
                     {(tab.mcp?.length ?? 0) > 0 && <span className="mcpn">MCP {tab.mcp!.length}</span>}
                   </button>
@@ -850,7 +933,7 @@ const LocalAgentPane: React.FC<{ la: LocalAgentState; cwd: string; inGrid?: bool
               {running ? (
                 <button className="v2-send stop" title="中断" onClick={() => la.interrupt(cwd)}>■</button>
               ) : (
-                <button className="v2-send" title="发送 (Enter)" onClick={() => la.send(cwd)} disabled={!draft.trim() || !current?.live}>
+                <button className="v2-send" title="发送 (Enter)" onClick={() => la.send(cwd)} disabled={(!draft.trim() && attachments.length === 0) || !current?.live}>
                   <IconSend />
                 </button>
               )}
@@ -925,6 +1008,29 @@ const LocalAgentPane: React.FC<{ la: LocalAgentState; cwd: string; inGrid?: bool
     </div>
   );
 };
+
+/** 窗格 memo 比较器：根因修复——`la` 每帧换新引用（任一标签 patchTab 都重建 tabs 数组），
+ *  没有这个比较器时分屏里每个窗格都会随「任意一窗」的流式/打字/草稿全量重渲，
+ *  N 个窗格 → O(N²) 渲染，「多了之后每个都卡」。这里只在本窗真正读取的字段变化时才放行重渲：
+ *   · 自己那一片 tab（引用变 = 自己的消息/流式/草稿/权限变）——非本窗流式时它引用不变；
+ *   · 少数共享字段（provider/current/projects/groups/modelOptions/commands/activeCwd），均非每帧变化。
+ *  → A 窗出字/打字时 B/C/D 直接 skip。新增从 la 读取的字段时务必同步更新此处。 */
+const paneEqual = (a: PaneProps, b: PaneProps): boolean => {
+  if (a.cwd !== b.cwd || a.inGrid !== b.inGrid) return false;
+  const la = a.la, lb = b.la;
+  if (la.tabs.find((t) => t.cwd === a.cwd) !== lb.tabs.find((t) => t.cwd === b.cwd)) return false;
+  return (
+    la.activeCwd === lb.activeCwd &&
+    la.provider === lb.provider &&
+    la.current === lb.current &&
+    la.projects === lb.projects &&
+    la.groups === lb.groups &&
+    la.modelOptions === lb.modelOptions &&
+    la.commands === lb.commands
+  );
+};
+const LocalAgentPane = React.memo(LocalAgentPaneImpl, paneEqual);
+LocalAgentPane.displayName = 'LocalAgentPane';
 
 /** 分屏树递归渲染：叶子 = 一个窗格；split = 两子树 + 一条可拖拽分隔线。 */
 const PaneLayout: React.FC<{ la: LocalAgentState; node: LayoutNode }> = ({ la, node }) => {

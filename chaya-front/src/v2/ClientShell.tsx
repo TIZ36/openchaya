@@ -43,8 +43,8 @@ import LoginPage from './LoginPage';
 import {
   IconAgentCode, IconAgentDoc, IconAgentPainter, IconAgentPrimary,
   IconAttach, IconChat, IconGallery, IconGear, IconKB,
-  IconPlus, IconSearch, IconSend, IconSidebar,
-  IconSkill, IconChevron, IconAspect,
+  IconPlus, IconSend, IconSidebar,
+  IconChevron, IconAspect, IconModel,
   IconEdit, IconRevert, IconQuote,
   IconCopy, IconCheck,
 } from './icons';
@@ -481,17 +481,8 @@ const ShellInner: React.FC = () => {
     ta.style.height = `${Math.min(ta.scrollHeight, 220)}px`;
   }, [draft]);
 
-  /* ---- ⌘K ---- */
-  const searchRef = useRef<HTMLInputElement | null>(null);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault(); searchRef.current?.focus();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  /* 搜索框已下线（侧栏里塞个无功能空壳输入框没意义）。⌘K 保留给未来的
+     全局命令面板（spotlight）时再接回。 */
 
   /* ---- scroll to bottom ----
    * `stream?.content` changes on every chunk; the old version did a sync
@@ -1083,11 +1074,6 @@ const ShellInner: React.FC = () => {
       <div className={`v2-app${collapsed ? ' collapsed' : ''}`}>
         {/* ===== sidebar ===== */}
         <aside className="v2-side">
-          <div className="v2-search">
-            <IconSearch />
-            <input ref={searchRef} placeholder="搜索 (⌘K)" />
-          </div>
-
           <nav className="v2-nav">
             {([
               { k: 'chat',    label: '聊天',   ic: <IconChat /> },
@@ -1171,6 +1157,7 @@ const ShellInner: React.FC = () => {
               activeId={topTabs.activeId}
               onActivate={activateTopTab}
               onClose={closeTopTab}
+              onTogglePin={(t) => topTabs.togglePin(t.id)}
             />
             <div className="v2-grow" />
           </div>
@@ -1384,7 +1371,7 @@ const ShellInner: React.FC = () => {
                         }
                       }}
                     >
-                      <IconSkill />
+                      <IconModel />
                     </button>
                     <div className="v2-modepills" ref={pillsRef}>
                       <span className="v2-indicator" ref={indicatorRef} />

@@ -580,11 +580,61 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, mcp }
   return session;
 }
 
+/* ------------------------------------------------------------------ *
+ * 附件（拖入文件 / 附件按钮 / 粘贴图片）→ 注入用户消息。
+ *   - 图片 → Anthropic image content block（base64），模型直接「看见」（视觉）；
+ *   - 其它文件 → 在文本里追加 @绝对路径 引用，让 agent 用 Read 工具读取分析；
+ *   - cursor 无 streaming-input / 视觉，统一退化成「@路径」文本引用。
+ * 渲染层对图片附件总带 dataUrl（拖/粘贴自带，dialog 选取由 pickFiles 回填），
+ * 故主进程只解析 dataUrl，不再回读磁盘。
+ * ------------------------------------------------------------------ */
+const IMAGE_MIME = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml',
+};
+function imageMimeForPath(p) { return IMAGE_MIME[path.extname(p || '').toLowerCase()] || null; }
+
+/** data:<mime>;base64,<data> → SDK image block；失败返回 null。 */
+function dataUrlToImageBlock(dataUrl) {
+  const m = /^data:([^;,]+);base64,(.*)$/s.exec(dataUrl || '');
+  if (!m) return null;
+  return { type: 'image', source: { type: 'base64', media_type: m[1], data: m[2] } };
+}
+
+/** 把带 path 的附件折成「参考文件」文本，供 agent Read。
+ *  includeImages=false（claude）：图片走视觉 image block，不在文本里重复引用；
+ *  includeImages=true（cursor，无视觉）：图片文件也按 @路径 引用，至少能被 Read。 */
+function fileRefsText(prompt, attachments, includeImages) {
+  const refs = (attachments || [])
+    .filter((a) => a && a.path && (includeImages || a.kind !== 'image'))
+    .map((a) => `@${a.path}`);
+  if (!refs.length) return prompt || '';
+  return `${prompt || ''}${prompt ? '\n\n' : ''}参考以下文件（请读取并分析）：\n${refs.join('\n')}`;
+}
+
+/** Claude 用户消息内容：有附件 → [文本块, 图片块…]；无 → 原字符串。 */
+function buildClaudeContent(prompt, attachments) {
+  if (!Array.isArray(attachments) || attachments.length === 0) return prompt;
+  const images = [];
+  for (const a of attachments) {
+    if (!a || a.kind !== 'image') continue;
+    const block = a.dataUrl ? dataUrlToImageBlock(a.dataUrl) : null;
+    if (block) images.push(block);
+  }
+  const text = fileRefsText(prompt, attachments);
+  if (!images.length) return text;
+  const out = [];
+  if (text) out.push({ type: 'text', text });
+  out.push(...images);
+  return out;
+}
+
 /** 发一个回合：会话不存在则懒创建（带 resume），然后把用户消息推进流。
  *  模型在发送这一刻才应用：冷启已用 options.model 起；暖会话且模型变了才 setModel
- *  （setModel 会注入「Set model to …」回显，渲染层会过滤掉，不当对话显示）。 */
-async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode, model, mcp, apiKey }) {
-  if (provider === 'cursor') return cursorSend(sender, { cwd, sessionId, prompt, permMode, model, apiKey });
+ *  （setModel 会注入「Set model to …」回显，渲染层会过滤掉，不当对话显示）。
+ *  attachments：拖入/选取的文件 + 粘贴的图片（见上方注入逻辑）。 */
+async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode, model, mcp, apiKey, attachments }) {
+  if (provider === 'cursor') return cursorSend(sender, { cwd, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, apiKey });
   let s = sessions.get(cwd);
   if (!s) s = startSession(sender, { cwd, provider, sessionId, permMode, model, mcp });
   if (!s) return { ok: false };
@@ -593,7 +643,7 @@ async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode,
     try { await s.query.setModel(want || undefined); } catch { /* */ }
   }
   s.model = want;
-  s.input.push({ type: 'user', message: { role: 'user', content: prompt }, parent_tool_use_id: null });
+  s.input.push({ type: 'user', message: { role: 'user', content: buildClaudeContent(prompt, attachments) }, parent_tool_use_id: null });
   return { ok: true };
 }
 
@@ -938,6 +988,27 @@ function registerLocalAgent(ipcMain, dialog) {
     });
     if (res.canceled || !res.filePaths[0]) return null;
     return res.filePaths[0];
+  });
+  // 附件按钮：多选任意文件作为参考。图片回填 dataUrl 供前端缩略图 + 主进程视觉块；
+  // 其它文件只回元信息（发送时折成 @路径 让 agent 读取）。超大图片（>8MB）不内联 dataUrl，
+  // 退化为按路径引用，避免 IPC/base64 撑爆。
+  ipcMain.handle('localAgent:pickFiles', async () => {
+    const res = await dialog.showOpenDialog({
+      title: '选择参考文件', properties: ['openFile', 'multiSelections'],
+    });
+    if (res.canceled || !Array.isArray(res.filePaths)) return [];
+    const out = [];
+    for (const p of res.filePaths) {
+      const mime = imageMimeForPath(p);
+      let size = 0; try { size = (await fsp.stat(p)).size; } catch { /* */ }
+      let dataUrl;
+      if (mime && mime !== 'image/svg+xml' && size > 0 && size <= 8 * 1024 * 1024) {
+        try { dataUrl = `data:${mime};base64,${(await fsp.readFile(p)).toString('base64')}`; } catch { /* */ }
+      }
+      // 仅当成功内联 dataUrl 才作为「图片」（走视觉）；否则（超大/SVG/读失败）退化为按 @路径 让 agent 读取。
+      out.push({ kind: dataUrl ? 'image' : 'file', name: path.basename(p), path: p, mime: mime || null, size, dataUrl });
+    }
+    return out;
   });
   ipcMain.handle('localAgent:listSessions', (_e, { provider, cwd }) => listSessions(provider, cwd));
   ipcMain.handle('localAgent:readSession', (_e, { provider, cwd, sessionId }) => readSession(provider, cwd, sessionId));
