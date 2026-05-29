@@ -108,6 +108,69 @@ export interface ImagePromptPackItem {
   };
 }
 
+/** Event payload pushed by the OpenAI image SSE relay. `partial` arrives 1-3
+ *  times during a generation as the model refines the image; `done` arrives
+ *  exactly once at the end; `error` may arrive at any time and is terminal. */
+export interface OpenAIStreamEvent {
+  type: 'partial' | 'done' | 'error';
+  index?: number;
+  data?: string;
+  mimeType?: string;
+  message?: string;
+}
+
+/** Generic SSE consumer for our /api/media/openai/image/{generate,edit}
+ *  streaming endpoints. Reads `data: {json}\n\n` frames off a fetch body and
+ *  fans them out to `onEvent`. Resolves when the stream ends. */
+async function streamOpenAIImage(
+  endpoint: string,
+  body: any,
+  onEvent: (e: OpenAIStreamEvent) => void,
+): Promise<void> {
+  const res = await api.fetchRaw(`${BASE()}${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({ ...body, stream: true }),
+  });
+  if (!res.ok || !res.body) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j?.error) msg = j.error;
+    } catch { /* keep generic */ }
+    onEvent({ type: 'error', message: msg });
+    return;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    // SSE frames are separated by blank lines (\n\n). A frame can have multiple
+    // "data: " lines which concatenate; we only need single-line frames here.
+    while (true) {
+      const sep = buf.indexOf('\n\n');
+      if (sep < 0) break;
+      const frame = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      const dataLines = frame
+        .split('\n')
+        .filter((l) => l.startsWith('data: '))
+        .map((l) => l.slice(6));
+      if (dataLines.length === 0) continue;
+      const payload = dataLines.join('\n');
+      try {
+        const obj = JSON.parse(payload) as OpenAIStreamEvent;
+        onEvent(obj);
+      } catch {
+        /* drop malformed frame */
+      }
+    }
+  }
+}
+
 export const mediaApi = {
   getProviders: () =>
     req<{ providers: MediaProvider[]; model_registry?: ModelRegistryEntry[] }>('/providers'),
@@ -205,9 +268,10 @@ export const mediaApi = {
     config_id?: string;
     model?: string;
     size?: string;
-    response_format?: string;
+    aspect_ratio?: string;
+    count?: number;
   }) =>
-    req<{ media?: unknown[]; error?: string }>('/openai/image/generations', {
+    req<{ media?: unknown[]; content?: string; error?: string }>('/openai/image/generate', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
@@ -215,14 +279,49 @@ export const mediaApi = {
   openaiImageEdits: (body: {
     prompt: string;
     image_b64?: string;
-    image_mime?: string;
+    images_b64?: string[];
     config_id?: string;
     model?: string;
+    size?: string;
+    aspect_ratio?: string;
+    count?: number;
   }) =>
-    req<{ media?: unknown[]; error?: string }>('/openai/image/edits', {
+    req<{ media?: unknown[]; content?: string; error?: string }>('/openai/image/edit', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+
+  /** Streaming variant of openaiImageGenerations. Calls onEvent with
+   *  partial/done/error frames as they arrive from OpenAI. */
+  openaiImageGenerationsStream: (
+    body: {
+      prompt: string;
+      config_id?: string;
+      model?: string;
+      size?: string;
+      aspect_ratio?: string;
+      count?: number;
+      partial_images?: number;
+    },
+    onEvent: (e: OpenAIStreamEvent) => void,
+  ) => streamOpenAIImage('/openai/image/generate', body, onEvent),
+
+  /** Streaming variant of openaiImageEdits. Same event shape as the generation
+   *  variant — partial frames render progressively, done emits the final image. */
+  openaiImageEditsStream: (
+    body: {
+      prompt: string;
+      image_b64?: string;
+      images_b64?: string[];
+      config_id?: string;
+      model?: string;
+      size?: string;
+      aspect_ratio?: string;
+      count?: number;
+      partial_images?: number;
+    },
+    onEvent: (e: OpenAIStreamEvent) => void,
+  ) => streamOpenAIImage('/openai/image/edit', body, onEvent),
 
   // ─── Runway 视频 ───
 

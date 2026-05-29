@@ -73,10 +73,7 @@ const KnowledgeView: React.FC = () => {
   return (
     <div className="v2-view">
       <div className="v2-view-head v2-kb-head">
-        <div>
-          <h2>知识库</h2>
-          <p>知识域 · 记忆 / 文档 / 检索 — via Smartnote Cloud</p>
-        </div>
+        <h2>知识库</h2>
         <div className="v2-kb-conn">
           <ConnDot state={conn} />
           <span>{
@@ -282,7 +279,13 @@ const MemoriesTab: React.FC<{ domain: string | null }> = ({ domain }) => {
       {list && list.length > 0 && (
         <div className="v2-kb-list">
           {list.map((m) => (
-            <MemoryRow key={m.id} m={m} onPin={() => void onPin(m)} onEdit={() => setEditing(m)} onDelete={() => void onDelete(m)} />
+            <MemoryRowMemo
+              key={m.id}
+              m={m}
+              onPin={onPin}
+              onEdit={setEditing as (m: Memory) => void}
+              onDelete={onDelete}
+            />
           ))}
         </div>
       )}
@@ -299,7 +302,17 @@ const MemoriesTab: React.FC<{ domain: string | null }> = ({ domain }) => {
   );
 };
 
-const MemoryRow: React.FC<{ m: Memory; onPin: () => void; onEdit: () => void; onDelete: () => void }> = ({ m, onPin, onEdit, onDelete }) => (
+/** Row receives an `m` plus per-action callbacks that take `m` directly. The
+ *  parent no longer creates `() => void onPin(m)` per render; identity stays
+ *  stable across re-renders so React.memo actually skips the work for the
+ *  98 rows that didn't change when one was pinned. */
+interface MemoryRowProps {
+  m: Memory;
+  onPin: (m: Memory) => void;
+  onEdit: (m: Memory) => void;
+  onDelete: (m: Memory) => void;
+}
+const MemoryRow: React.FC<MemoryRowProps> = ({ m, onPin, onEdit, onDelete }) => (
   <div className={`v2-kb-card${m.pinned ? ' pinned' : ''}`}>
     <div className="hd">
       <span className={`v2-pill ${KIND_TONES[m.kind]}`}>{KIND_LABELS[m.kind]}</span>
@@ -308,9 +321,9 @@ const MemoryRow: React.FC<{ m: Memory; onPin: () => void; onEdit: () => void; on
       {m.tags && m.tags.length > 3 && <span className="v2-pill mute" title={m.tags.slice(3).map((t) => `#${t}`).join(' ')}>+{m.tags.length - 3}</span>}
       <span className="grow" />
       <div className="acts">
-        <button className={`iconbtn${m.pinned ? ' on' : ''}`} title={m.pinned ? '取消置顶' : '置顶'} onClick={onPin}><IconPin filled={m.pinned} /></button>
-        <button className="iconbtn" title="编辑" onClick={onEdit}><IconEdit /></button>
-        <button className="iconbtn danger" title="删除" onClick={onDelete}><IconTrash /></button>
+        <button className={`iconbtn${m.pinned ? ' on' : ''}`} title={m.pinned ? '取消置顶' : '置顶'} onClick={() => onPin(m)}><IconPin filled={m.pinned} /></button>
+        <button className="iconbtn" title="编辑" onClick={() => onEdit(m)}><IconEdit /></button>
+        <button className="iconbtn danger" title="删除" onClick={() => onDelete(m)}><IconTrash /></button>
       </div>
     </div>
     <ExpandableBody text={m.content} lines={5} />
@@ -320,6 +333,7 @@ const MemoryRow: React.FC<{ m: Memory; onPin: () => void; onEdit: () => void; on
     </div>
   </div>
 );
+const MemoryRowMemo = React.memo(MemoryRow);
 
 const MemoryEditModal: React.FC<{
   memory: Memory | null;

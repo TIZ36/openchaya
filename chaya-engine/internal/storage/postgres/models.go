@@ -135,6 +135,22 @@ type LLMConfig struct {
 
 func (l *LLMConfig) BeforeCreate(tx *gorm.DB) error { setUUID(&l.ID); return nil }
 
+// ========== LocalAgentCredential ==========
+// 本地 CLI Agent（cursor / codex / gemini）的凭据。纯供桌面端本地驱动使用，
+// 不是后端 LLM provider，故独立于 LLMConfig，避免污染模型选择列表。按用户作用域。
+
+type LocalAgentCredential struct {
+	ID        string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	UserID    string    `gorm:"type:uuid;uniqueIndex:idx_lac_user_provider;not null" json:"user_id"`
+	TenantID  string    `gorm:"type:uuid;index" json:"tenant_id"`
+	Provider  string    `gorm:"uniqueIndex:idx_lac_user_provider;not null" json:"provider"` // cursor / codex / gemini
+	APIKey    string    `gorm:"column:api_key" json:"api_key,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (c *LocalAgentCredential) BeforeCreate(tx *gorm.DB) error { setUUID(&c.ID); return nil }
+
 // ========== LLMProvider ==========
 
 type LLMProvider struct {

@@ -46,14 +46,20 @@ import {
   IconPlus, IconSearch, IconSend, IconSidebar,
   IconSkill, IconChevron, IconAspect,
   IconEdit, IconRevert, IconQuote,
+  IconCopy, IconCheck,
 } from './icons';
 import { getLLMConfigs, type LLMConfigFromDB } from '../services/llmApi';
 import { updateSessionLLMConfig } from '../services/chat';
 import { updateRoleProfile } from '../services/roleApi';
 import { mcpApi, type MCPServer } from '../services/integrationsApi';
-import { LocalAgentTree, LocalAgentConversation, LocalAgentTabs } from './LocalAgentView';
+import { LocalAgentTree, LocalAgentConversation } from './LocalAgentView';
 import { useLocalAgent } from './useLocalAgent';
 import { isLocalAgentAvailable } from './services/localAgent';
+import { TopTabs } from './TopTabs';
+import {
+  useTopTabs, localTabId, chatTabId, GALLERY_TAB_ID, KB_TAB_ID,
+  type TopTab,
+} from './useTopTabs';
 
 type NavKey = 'chat' | 'gallery' | 'kb' | 'local';
 type Mode = 'chat' | 'create';
@@ -73,12 +79,22 @@ interface Batch {
     style: string;
     negative: string;
     refs: { id: string; data: string; mimeType: string; directive: string }[];
+    /** Model selection at the moment of send — needed by "重新生成" so the
+     *  rerun targets the same provider/model even if the user has switched
+     *  models in between. Optional so historical batches still type-check. */
+    configId?: string;
+    model?: string;
+    provider?: string;
   };
   slots: (string | null)[];
   errors: (string | null)[];
   pending: boolean;
   /** Wall-clock generation time in ms, set once the batch settles. */
   elapsedMs?: number;
+  /** ms timestamp when generation started — used by the BatchView ticker to
+   *  show "正在画 N 张 · 12s" while pending so users see progress, not a static
+   *  shimmer. Absent on rows reloaded from DB (they're never pending). */
+  startedAt?: number;
 }
 
 const ClientShell: React.FC = () => {
@@ -127,8 +143,10 @@ const ShellInner: React.FC = () => {
   const [agentSettingsFor, setAgentSettingsFor] = useState<Session | null>(null);
   /** Full-screen lightbox for any chat image (persisted or live-batch). */
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  /** "创作配方" 详情弹框 —— 点击 spec 气泡触发；只读，配套外部已有的重生入口。 */
+  const [specDetail, setSpecDetail] = useState<Batch | null>(null);
   /** Pending destructive confirm for 回退 / 回退并编辑 (both rewind history). */
-  const [confirmRewind, setConfirmRewind] = useState<{ kind: 'revert' | 'edit'; m: Message } | null>(null);
+  const [confirmRewind, setConfirmRewind] = useState<{ kind: 'revert' | 'edit' | 'rerun'; m: Message } | null>(null);
 
   /* ---- knowledge domains (@提及): smartnote workspace tags ---- */
   const [domains, setDomains] = useState<DomainTag[]>([]);
@@ -172,15 +190,190 @@ const ShellInner: React.FC = () => {
 
   // Local Agents（纯本地，与后端无关）：状态上提，侧栏树 + 主区对话共享。
   // provider 由设置决定；探测惰性触发（进入该 nav 才 detect，配合 loading 动画）。
+  // typewriter 与 chat 共用一套设置 —— 用户期望"AI 输出体感"是统一的、跨 闲聊
+  // / agent对话 / Local Agents 一致；分两套节奏让用户在三个面板间感觉割裂。
+  // 旧字段 cliStreamSmooth/Speed 保留在 settings 类型里只为向后兼容，不再读。
   const la = useLocalAgent(activeNav === 'local', settings.localAgentProvider ?? 'claude', {
-    enabled: settings.cliStreamSmooth ?? true,
-    speed: settings.cliStreamSpeed ?? 'normal',
+    enabled: settings.chatStreamSmooth ?? true,
+    speed: settings.chatStreamSpeed ?? 'normal',
   });
+
+  // 全局 topbar tab 条：跨 Local / Chat / Gallery / KB。activeId 同步自现有状态机，
+  // 这里只持有「打开了哪些 + 每条的未读/批准信号」。
+  const topTabs = useTopTabs();
+
+  // ----- 镜像：把 la.tabs 同步成 TopTabs 中的 local 类 tab（来源唯一 = useLocalAgent）。
+  //   关键性能点：la.tabs 的引用在每个 stream chunk 都会变（liveMsgs 增长），
+  //   但「这条 tab 在 topbar 上长什么样」只受 cwd / title / groupId / 项目名 影响。
+  //   用结构指纹作为 dep，effect 只在真正结构变化时跑一次。
+  const localTabsFingerprint = la.tabs.map((t) => `${t.cwd}|${t.title}|${t.groupId ?? ''}`).join('§');
+  const projectsFingerprint = la.projects.map((p) => `${p.path}|${p.name ?? ''}`).join('§');
+  useEffect(() => {
+    la.tabs.forEach((t) => {
+      const proj = la.projects.find((p) => p.path === t.cwd);
+      const label = proj?.name || t.title || t.cwd.split('/').pop() || t.cwd;
+      topTabs.add({
+        id: localTabId(t.cwd),
+        kind: 'local',
+        label,
+        cwd: t.cwd,
+        provider: la.provider,
+      });
+    });
+    const live = new Set(la.tabs.map((t) => localTabId(t.cwd)));
+    topTabs.tabs
+      .filter((tt) => tt.kind === 'local' && !live.has(tt.id))
+      .forEach((tt) => { topTabs.remove(tt.id); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localTabsFingerprint, projectsFingerprint, la.provider]);
+
+  // ----- attn / unread 信号：与上面同理，只看会触发信号变化的字段。
+  //   messages.length 仅在 stream 落库时变化（liveMsgs 不算），所以指纹包含 length
+  //   不会因 token 流而过度触发。
+  const lastMsgCountRef = useRef<Record<string, number>>({});
+  const signalsFingerprint = la.tabs.map((t) => `${t.cwd}:${t.messages.length}:${t.perm ? 1 : 0}:${t.question ? 1 : 0}`).join('§');
+  useEffect(() => {
+    la.tabs.forEach((t) => {
+      const id = localTabId(t.cwd);
+      const attn = !!(t.perm || t.question);
+      topTabs.setAttn(id, attn);
+      const prev = lastMsgCountRef.current[t.cwd] ?? t.messages.length;
+      if (t.messages.length > prev && t.cwd !== la.activeCwd) topTabs.markUnread(id);
+      lastMsgCountRef.current[t.cwd] = t.messages.length;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signalsFingerprint, la.activeCwd]);
+
+  // ----- 打开 / 激活 / 关闭。
+  // 侧栏点击 chat / agent 会话 → 加到 topTabs（重复点击会被 topTabs.add 的短路过滤掉）
+  // + setActiveSessionId 触发 chat backend 切换。
+  const openChatTab = useCallback((s: Session) => {
+    const id = chatTabId(s.session_id);
+    topTabs.add({
+      id, kind: 'chat',
+      label: s.name || s.title || s.preview_text || '新对话',
+      sessionId: s.session_id,
+      sessionType: s.session_type,
+      isPrimary: s.is_primary,
+    });
+    topTabs.setActiveId(id);
+    topTabs.clearUnread(id);
+    setActiveNav('chat');
+    setActiveSessionId(s.session_id);
+  }, [topTabs, setActiveSessionId]);
+
+  const openGalleryTab = useCallback(() => {
+    topTabs.add({ id: GALLERY_TAB_ID, kind: 'gallery', label: '画廊' });
+    topTabs.setActiveId(GALLERY_TAB_ID);
+    setActiveNav('gallery');
+  }, [topTabs]);
+
+  const openKBTab = useCallback(() => {
+    topTabs.add({ id: KB_TAB_ID, kind: 'kb', label: '知识库' });
+    topTabs.setActiveId(KB_TAB_ID);
+    setActiveNav('kb');
+  }, [topTabs]);
+
+  const activateTopTab = useCallback((t: TopTab) => {
+    topTabs.setActiveId(t.id);
+    topTabs.clearUnread(t.id);
+    if (t.kind === 'gallery') setActiveNav('gallery');
+    else if (t.kind === 'kb') setActiveNav('kb');
+    else if (t.kind === 'local' && t.cwd) {
+      setActiveNav('local');
+      la.setActiveTab(t.cwd);
+    } else if (t.kind === 'chat' && t.sessionId) {
+      setActiveNav('chat');
+      setActiveSessionId(t.sessionId);
+    }
+  }, [topTabs, la, setActiveSessionId]);
+
+  const closeTopTab = useCallback((t: TopTab) => {
+    if (t.kind === 'local' && t.cwd) {
+      la.closeTab(t.cwd);   // 镜像 effect 会同步移除 topTabs 里的 entry
+      return;
+    }
+    const wasActive = topTabs.activeId === t.id;
+    const idx = topTabs.tabs.findIndex((x) => x.id === t.id);
+    const remaining = topTabs.tabs.filter((x) => x.id !== t.id);
+    topTabs.remove(t.id);
+    if (wasActive) {
+      const nextTab = remaining[Math.max(0, idx - 1)] ?? remaining[0];
+      if (nextTab) activateTopTab(nextTab);
+      else setActiveNav('chat');
+    }
+  }, [la, topTabs, activateTopTab]);
+
+  // ----- 同步 activeId：外部状态机变化时把 topTabs.activeId 拉到位（teahouse picker
+  // 创建新会话、createTopicAndOpen、首次进入某 view 等路径）。
+  useEffect(() => {
+    let id: string | null = null;
+    if (activeNav === 'gallery') id = GALLERY_TAB_ID;
+    else if (activeNav === 'kb') id = KB_TAB_ID;
+    else if (activeNav === 'local' && la.activeCwd) id = localTabId(la.activeCwd);
+    else if (activeNav === 'chat' && activeSessionId) id = chatTabId(activeSessionId);
+    if (id !== topTabs.activeId) topTabs.setActiveId(id);
+    if (id) topTabs.clearUnread(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeNav, activeSessionId, la.activeCwd]);
+
+  // ----- 新创建的 / 外部切换到的 chat session 自动建 tab。
+  // 关键性能点：deps 只放 (activeNav, activeSessionId) —— effect 只在「切到不同会话」
+  // 那一刻跑一次。元数据列表（agents/recents/teahouses）通过 ref 读取，不参与 dep
+  // 比较，避免后端拉新一次 → effect 重跑 → topTabs 抖动 → ShellInner 全树重渲。
+  const chatMetaRef = useRef({ agents, recents, teahouses });
+  useEffect(() => { chatMetaRef.current = { agents, recents, teahouses }; }, [agents, recents, teahouses]);
+  useEffect(() => {
+    if (activeNav !== 'chat' || !activeSessionId) return;
+    const meta = chatMetaRef.current;
+    const s = [...meta.agents, ...meta.recents, ...meta.teahouses].find((x) => x.session_id === activeSessionId);
+    // topTabs.add 已带短路：spec 相同时不会 setState，对长会话流式期完全无开销。
+    topTabs.add({
+      id: chatTabId(activeSessionId),
+      kind: 'chat',
+      label: s?.name || s?.title || s?.preview_text || '新对话',
+      sessionId: activeSessionId,
+      sessionType: s?.session_type,
+      isPrimary: s?.is_primary,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeNav, activeSessionId]);
+
+  // ----- Label 同步：会话改名后刷新已开 chat tab 的显示名。
+  // deps 是 (agents, recents, teahouses) —— 后端元数据更新时跑（频率很低，非每帧）。
+  // 内部对每条 chat tab 做 add(...)；spec 没变则 add 直接返回原数组（不重渲）。
+  useEffect(() => {
+    const all = [...agents, ...recents, ...teahouses];
+    topTabs.tabs.forEach((t) => {
+      if (t.kind !== 'chat' || !t.sessionId) return;
+      const s = all.find((x) => x.session_id === t.sessionId);
+      if (!s) return;
+      topTabs.add({
+        id: t.id, kind: 'chat',
+        label: s.name || s.title || s.preview_text || '新对话',
+        sessionId: t.sessionId,
+        sessionType: s.session_type,
+        isPrimary: s.is_primary,
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agents, recents, teahouses]);
 
   // Color theme + light/dark appearance → attributes on the .chaya-v2 root.
   // 'system' follows the OS via matchMedia and live-updates.
   const appearance = settings.appearance ?? 'system';
-  const theme = settings.theme ?? 'default';
+  // 'warm' / 'linear' were retired from the theme picker — silently coerce any
+  // persisted value back to the minimalist default so users on a stale setting
+  // don't get a CSS variant that's no longer maintained or selectable in UI.
+  // 默认主题 = anthropic（象牙陶土）。'default'（极简）已下线 —— 持久化在 localStorage
+   // 里的旧值统一规整回 anthropic，确保用户不会停在已不再维护的 CSS 变体。
+  const rawTheme = settings.theme ?? 'anthropic';
+  const theme: typeof rawTheme = (
+    (rawTheme as string) === 'warm' ||
+    (rawTheme as string) === 'linear' ||
+    (rawTheme as string) === 'midnight' ||
+    (rawTheme as string) === 'default'
+  ) ? 'anthropic' : rawTheme;
   const [systemDark, setSystemDark] = useState(
     () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-color-scheme: dark)').matches,
   );
@@ -199,7 +392,7 @@ const ShellInner: React.FC = () => {
   const glassZones = settings.glassZones ?? ['composer', 'menu', 'modal'];
   const glassIntensity = settings.glassIntensity ?? 'standard';
   const glassAttr = (
-    glassZones.some((z) => z === 'sidebar' || z === 'topbar')
+    glassZones.some((z) => z === 'sidebar' || z === 'topbar' || z === 'main')
       ? [...glassZones, 'ambient']
       : glassZones
   ).join(' ');
@@ -207,11 +400,11 @@ const ShellInner: React.FC = () => {
   const updateSettings = useCallback((patch: Partial<ClientSettings>) => {
     setSettings((p) => ({ ...p, ...patch }));
   }, []);
-  // Click the CLI badge to cycle provider: claude → codex → gemini → claude.
+  // Click the CLI badge to cycle provider: claude → cursor → codex → gemini → claude.
   // provider is settings-driven and detect() already returns all of them, so
   // switching just re-points `current` — no re-detection needed.
   const cycleLocalAgentProvider = useCallback(() => {
-    const order = ['claude', 'codex', 'gemini'] as const;
+    const order = ['claude', 'cursor', 'codex', 'gemini'] as const;
     setSettings((p) => {
       const cur = p.localAgentProvider ?? 'claude';
       return { ...p, localAgentProvider: order[(order.indexOf(cur) + 1) % order.length] };
@@ -257,7 +450,7 @@ const ShellInner: React.FC = () => {
       (c.model || '').toLowerCase().includes('gemini'),
     );
     const pick = byDefault || byGemini || pool[0];
-    if (pick) create.setModelConfig(pick.config_id, pick.model);
+    if (pick) create.setModelConfig(pick.config_id, pick.model, pick.provider);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [llmConfigs, settings.defaultLLMConfigId]);
 
@@ -300,12 +493,52 @@ const ShellInner: React.FC = () => {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  /* ---- scroll to bottom ---- */
+  /* ---- scroll to bottom ----
+   * `stream?.content` changes on every chunk; the old version did a sync
+   * read of `scrollHeight` + write of `scrollTop` per chunk, which forces
+   * layout/paint each time and tanks perf at 100+ messages. Now:
+   *   1. rAF-batched so N chunks in one frame collapse into ONE scroll;
+   *   2. bails if the user has scrolled up more than 200px — auto-scroll
+   *      yanking someone away from history they're reading is the worst
+   *      kind of jank. Reading mode now sticks.
+   *   3. 切到不同会话时 (打开对话) 必须强制落底，无视上面的 200px 守卫——
+   *      上一个会话的 scrollTop 对新会话没意义；不强制就会留在"看起来空白"
+   *      的顶部（旧 bug）。等会话内有消息真正渲染完才把 ref 推进。 */
   const streamRef = useRef<HTMLDivElement | null>(null);
+  const scrollRafRef = useRef<number | null>(null);
+  const lastScrolledSidRef = useRef<string | null>(null);
   useEffect(() => {
-    const el = streamRef.current; if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [messages.length, stream?.content, activeSessionId, batches]);
+    if (scrollRafRef.current != null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const el = streamRef.current;
+      if (!el) return;
+      const sessionChanged = lastScrolledSidRef.current !== activeSessionId;
+      if (sessionChanged) {
+        el.scrollTop = el.scrollHeight;
+        // 只有等消息真正落地 (length>0) 才认为"这次会话切换的滚动已结算"。
+        // 否则后续 messages 异步加载完那帧会走"同 session"分支并被 200px
+        // 守卫拦下，停在顶部。
+        if (messages.length > 0) lastScrolledSidRef.current = activeSessionId;
+        return;
+      }
+      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distFromBottom > 200) return;
+      el.scrollTop = el.scrollHeight;
+    });
+    return () => {
+      if (scrollRafRef.current != null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    };
+    // Dep is batches.length, not batches itself. Per-slot updates during
+    // image streaming (partial frames) call setBatches with a new array
+    // reference — depending on `batches` would refire the rAF scroll on
+    // every partial frame, ~60Hz, allocating a new closure each time. The
+    // scroll position is only interesting when a NEW batch appears (length
+    // changes); slot refinement is contained to the BatchView itself.
+  }, [messages.length, stream?.content, activeSessionId, batches.length]);
 
   /* ---- recents (topic + teahouse mixed, freshest first) ---- */
   const mergedRecents: Session[] = useMemo(() => {
@@ -325,8 +558,13 @@ const ShellInner: React.FC = () => {
 
   /* ---- topic title ---- */
   const activeRecord: Session | undefined = useMemo(() => {
-    const all = [...agents, ...mergedRecents];
-    return all.find((x) => x.session_id === activeSessionId);
+    // Find via two early-exit scans instead of spreading both arrays into a
+    // new one and walking the combined length — avoids an allocation on
+    // every agents/teahouses change for what is almost always a one-list
+    // hit (the active record lives in exactly one bucket).
+    if (!activeSessionId) return undefined;
+    return agents.find((x) => x.session_id === activeSessionId)
+      || mergedRecents.find((x) => x.session_id === activeSessionId);
   }, [agents, mergedRecents, activeSessionId]);
   const activeTitle = activeRecord?.name || activeRecord?.title || (activeSessionId ? '会话' : '');
 
@@ -424,31 +662,52 @@ const ShellInner: React.FC = () => {
     }
     // create mode
     if (generating) return;
-    const batchId = `b-${Date.now()}`;
-    const count = create.cfg.count;
-    const specSnapshot = {
+    const specSnapshot: Batch['spec'] = {
       aspect: create.cfg.aspect,
-      count,
+      count: create.cfg.count,
       style: create.cfg.style,
       negative: create.cfg.negative,
       refs: create.refs.map((r) => ({ id: r.id, data: r.data, mimeType: r.mimeType, directive: r.directive })),
+      configId: create.cfg.configId,
+      model: create.cfg.model,
+      provider: create.cfg.provider,
     };
+    setDraft('');
+    setCbarOpen(false);
+    await runCreationBatchRef.current(text, specSnapshot, activeSessionId);
+    return;
+  }, [draft, mode, sending, generating, activeRecord, sendMessage, create, activeSessionId, quoted, clearQuote, pickedDomains]);
+
+  // Hoisted creation-batch runner. Both the initial send (above) and 重新生成
+  // (below) drive their state through this so the behaviour stays identical —
+  // batches array, optimistic UI, persist user spec, run generate, persist
+  // assistant images, reload, drop live batch.
+  //
+  // Stored on a ref so handleSend can forward to it without needing to list it
+  // in its deps array (which would force a fresh handleSend on every batch).
+  const runCreationBatchRef = useRef<(t: string, s: Batch['spec'], sid: string | null) => Promise<void>>(async () => {});
+  const runCreationBatch = useCallback(async (
+    text: string,
+    specSnapshot: Batch['spec'],
+    persistSid: string | null,
+  ): Promise<void> => {
+    const batchId = `b-${Date.now()}`;
+    const count = specSnapshot.count;
+    const startedAtMs = Date.now();
     setBatches((bs) => [...bs, {
       batchId,
-      sessionId: activeSessionId,
+      sessionId: persistSid,
       promptDisplay: text,
       spec: specSnapshot,
       slots: Array.from({ length: count }, () => null),
       errors: Array.from({ length: count }, () => null),
       pending: true,
+      startedAt: startedAtMs,
     }]);
-    setDraft('');
-    setCbarOpen(false);  // auto-fold so the slots are visible
     setGenerating(true);
     // Persist the spec card as a user message in the current conversation so
     // the dialogue is durable across reloads. Best-effort — gen still works
     // even if no active session.
-    const persistSid = activeSessionId;
     if (persistSid) {
       void persistCreationUserSpec(persistSid, text, specSnapshot).catch(() => {});
     }
@@ -461,8 +720,23 @@ const ShellInner: React.FC = () => {
     // reload. Building `settled` from these locals sidesteps React's timing.
     const localSlots: (string | null)[] = Array.from({ length: count }, () => null);
     const localErrors: (string | null)[] = Array.from({ length: count }, () => null);
-    const startedAt = Date.now();
+    const startedAt = startedAtMs;
     try {
+      // Always drive generate() with the explicit spec snapshot — for the
+      // initial call it equals live state; for 重新生成 it equals the frozen
+      // historical spec even if the user has since swapped models or refs.
+      const overrideCfg = {
+        aspect: specSnapshot.aspect,
+        count: specSnapshot.count,
+        style: specSnapshot.style,
+        negative: specSnapshot.negative,
+        configId: specSnapshot.configId,
+        model: specSnapshot.model,
+        provider: specSnapshot.provider,
+      };
+      const overrideRefs = specSnapshot.refs.map((r) => ({
+        id: r.id, data: r.data, mimeType: r.mimeType, directive: r.directive,
+      }));
       await create.generate(text, (idx, dataUri, err) => {
         if (dataUri) localSlots[idx] = dataUri;
         if (err) localErrors[idx] = err;
@@ -472,6 +746,17 @@ const ShellInner: React.FC = () => {
           if (dataUri) slots[idx] = dataUri;
           if (err) errors[idx] = err;
           return { ...b, slots, errors };
+        }));
+      }, { cfg: overrideCfg, refs: overrideRefs }, (idx, partialUri) => {
+        // Partial frames update the visual slot only — localSlots stays at
+        // null until the final 'done' arrives. This keeps the persist step
+        // honest: if streaming dies mid-way we don't save a blurry partial as
+        // if it were the user's final art.
+        setBatches((bs) => bs.map((b) => {
+          if (b.batchId !== batchId) return b;
+          const slots = b.slots.slice();
+          slots[idx] = partialUri;
+          return { ...b, slots };
         }));
       });
     } finally {
@@ -517,7 +802,10 @@ const ShellInner: React.FC = () => {
         }
       }
     }
-  }, [draft, mode, sending, generating, activeRecord, sendMessage, create, activeSessionId, quoted, clearQuote, pickedDomains]);
+  }, [create, reloadActiveMessages]);
+  // Keep the ref pointing at the latest runCreationBatch so handleSend's stale
+  // closure forwards to the current implementation.
+  useEffect(() => { runCreationBatchRef.current = runCreationBatch; }, [runCreationBatch]);
 
   // Quote a message (works for both user and AI messages); focus the composer
   // so the user can immediately type the follow-up that references it.
@@ -526,18 +814,137 @@ const ShellInner: React.FC = () => {
     setMode('chat');
     setTimeout(() => taRef.current?.focus(), 0);
   }, [quoteMessage]);
+  // 稳定回调：前一版本里 messages.map 内联 (msg) => setConfirmRewind(...) 每次渲染
+  // 都是新函数引用，会击穿 MessageView 的 React.memo。useCallback 锁住身份，let
+  // memo 真正生效——长会话下的非激活消息不再每个 chunk 重渲。
+  const onRevertMessage = useCallback((msg: Message) => setConfirmRewind({ kind: 'revert', m: msg }), []);
+  const onEditMessage = useCallback((msg: Message) => setConfirmRewind({ kind: 'edit', m: msg }), []);
+  const onRerunCreation = useCallback((msg: Message) => setConfirmRewind({ kind: 'rerun', m: msg }), []);
+  // 持久化的 user-spec 消息点击 → 重建一个 Batch 形状喂给详情弹框。
+  // refs 的真实 base64 在 ext.media 里；directive 在 ext.creation_spec.refs 里 —— 拉链合并。
+  const onOpenSpecFromMessage = useCallback((msg: Message) => {
+    const ext: any = typeof msg.ext === 'string'
+      ? (() => { try { return JSON.parse(msg.ext as unknown as string); } catch { return {}; } })()
+      : (msg.ext || {});
+    const cs: any = ext.creation_spec || {};
+    const mediaArr: any[] = Array.isArray(ext.media) ? ext.media : [];
+    const specRefs: any[] = Array.isArray(cs.refs) ? cs.refs : [];
+    const refs = mediaArr
+      .filter((md: any) => !!md?.data && (md.type === 'image' || !md.type))
+      .map((md: any, i: number) => ({
+        id: `hist-${msg.message_id}-${i}`,
+        data: typeof md.data === 'string' && md.data.startsWith('data:')
+          ? md.data.slice(md.data.indexOf(',') + 1) : md.data,
+        mimeType: md.mimeType || 'image/png',
+        directive: specRefs[i]?.directive || '',
+      }));
+    setSpecDetail({
+      batchId: `hist-${msg.message_id}`,
+      sessionId: activeSessionId,
+      promptDisplay: msg.content || '',
+      spec: {
+        aspect: cs.aspect || '1:1',
+        count: cs.count || refs.length || 1,
+        style: cs.style || '',
+        negative: cs.negative || '',
+        refs,
+        configId: cs.configId,
+        model: cs.model,
+        provider: cs.provider,
+      },
+      slots: [],
+      errors: [],
+      pending: false,
+    });
+  }, [activeSessionId]);
+  // LocalAgentTree.onEnter 必须稳定，否则它的 React.memo 在 ShellInner 每次重渲时都失效。
+  const enterLocal = useCallback(() => setActiveNav('local'), []);
+  // 侧栏 ⋯ 菜单：稳定 handler，让 AgentRow/ChatRow 的 React.memo 真正生效。
+  const onSidebarMore = useCallback((s: Session, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setRowMenu({ session: s, x: r.right, y: r.bottom + 4 });
+  }, []);
 
   // Run a confirmed rewind. 'edit' additionally lifts the message text back
-  // into the composer so the user can amend and resend it.
-  const runRewind = useCallback(async (kind: 'revert' | 'edit', m: Message) => {
+  // into the composer so the user can amend and resend it. 'rerun' reads the
+  // creation spec from the message's ext, wipes the message + everything
+  // after, then fires runCreationBatch with the frozen spec so the result lands
+  // in place — same prompt, same model, same refs, fresh images.
+  const runRewind = useCallback(async (
+    kind: 'revert' | 'edit' | 'rerun',
+    m: Message,
+    opts?: { useLiveModel?: boolean },
+  ) => {
     const text = m.content || '';
+    if (kind === 'rerun') {
+      const sid = activeSessionId;
+      if (!sid) return;
+      const ext: any = typeof m.ext === 'string'
+        ? (() => { try { return JSON.parse(m.ext as unknown as string); } catch { return {}; } })()
+        : (m.ext || {});
+      const cs = ext.creation_spec || {};
+      const mediaArr: any[] = Array.isArray(ext.media) ? ext.media : [];
+      // Rebuild refs by zipping creation_spec.refs (directive+mime) with
+      // ext.media (the actual base64 payloads). Either side may be empty for
+      // pure text→image batches.
+      const specRefs: any[] = Array.isArray(cs.refs) ? cs.refs : [];
+      const refs = mediaArr.map((md: any, i: number) => ({
+        id: `rerun-${i}-${Date.now()}`,
+        data: typeof md?.data === 'string' && md.data.startsWith('data:')
+          ? (md.data.split(',')[1] || '')
+          : (md?.data || ''),
+        mimeType: md?.mimeType || specRefs[i]?.mimeType || 'image/png',
+        directive: specRefs[i]?.directive || '',
+      })).filter((r) => r.data);
+      // Model selection on rerun:
+      //   - opts.useLiveModel=true  → user explicitly chose to override in
+      //                                the confirm dialog (e.g. escaping a
+      //                                broken Gemini snapshot); use live cfg.
+      //   - snapshot has model info → honour it ("记住当时" semantics).
+      //   - snapshot missing        → fall back to live cfg (old messages
+      //                                pre-date the per-message model persist).
+      const hasModelSnapshot = !!(cs.configId || cs.model || cs.provider);
+      const useLive = opts?.useLiveModel === true || !hasModelSnapshot;
+      const fallbackConfigId = useLive ? create.cfg.configId : cs.configId;
+      const fallbackModel = useLive ? create.cfg.model : cs.model;
+      const fallbackProvider = useLive ? create.cfg.provider : cs.provider;
+      const spec: Batch['spec'] = {
+        aspect: cs.aspect || '1:1',
+        count: typeof cs.count === 'number' ? cs.count : 1,
+        style: cs.style || '',
+        negative: cs.negative || '',
+        refs,
+        configId: fallbackConfigId,
+        model: fallbackModel,
+        provider: fallbackProvider,
+      };
+      // Switch UI into create mode and echo the historical config into the
+      // live composer (model picker chip + aspect/count/style/negative chips +
+      // ref strip), so the user *sees* what's being rerun before/during the
+      // batch — not just images appearing out of nowhere.
+      setMode('create');
+      create.setModelConfig(spec.configId, spec.model, spec.provider);
+      create.setStyle(spec.style);
+      create.setNegative(spec.negative);
+      create.setAspect(spec.aspect);
+      create.setCount(spec.count);
+      create.replaceRefs(refs);
+      setCbarOpen(true);
+      // Wipe the historical spec + everything after it. revertToMessage
+      // deletes the anchor itself too — that's fine, runCreationBatch
+      // re-persists a fresh user spec with identical content.
+      await revertToMessage(m.message_id);
+      await runCreationBatchRef.current(text, spec, sid);
+      return;
+    }
     await revertToMessage(m.message_id);
     if (kind === 'edit') {
       setMode('chat');
       setDraft(text);
       setTimeout(() => { const ta = taRef.current; if (ta) { ta.focus(); ta.setSelectionRange(text.length, text.length); } }, 0);
     }
-  }, [revertToMessage]);
+  }, [revertToMessage, activeSessionId, create]);
 
   /* ---- @域 mention autocomplete ---- */
   // Domains matching the live @token, minus ones already picked.
@@ -632,6 +1039,15 @@ const ShellInner: React.FC = () => {
     () => !!activeSessionId && agents.some((a) => a.session_id === activeSessionId),
     [agents, activeSessionId],
   );
+  // Filter once per (batches, activeSessionId) change instead of twice per
+  // render (empty-state guard + map). Previously this filter ran on every
+  // stream chunk through ClientShell's re-render, allocating a fresh array
+  // even when no batch existed for the session — wasted GC churn on the hot
+  // streaming path.
+  const activeBatches = useMemo(
+    () => batches.filter((b) => b.sessionId === activeSessionId),
+    [batches, activeSessionId],
+  );
 
   /* ---- inline chip panel (only one open at a time) ---- */
   type ChipKey = null | 'style' | 'aspect' | 'count' | 'negative';
@@ -683,11 +1099,12 @@ const ShellInner: React.FC = () => {
                 key={it.k}
                 className={`v2-row${activeNav === it.k ? ' active' : ''}`}
                 onClick={() => {
-                  setActiveNav(it.k);
-                  if (it.k === 'chat') {
-                    setMode('chat');
-                    setTeahousePickerOpen(true);
-                  }
+                  if (it.k === 'gallery') { openGalleryTab(); return; }
+                  if (it.k === 'kb') { openKBTab(); return; }
+                  // chat: 不直接建 tab（要等用户选一个具体会话或 teahouse picker 落地）
+                  setActiveNav('chat');
+                  setMode('chat');
+                  setTeahousePickerOpen(true);
                 }}
               >
                 <div className="v2-ic">{it.ic}</div>
@@ -698,7 +1115,7 @@ const ShellInner: React.FC = () => {
 
           {/* Local Agents 项目树：常驻侧栏，不必进入该 nav 才显示；未配置则只剩空标题。 */}
           {isLocalAgentAvailable() && (
-            <LocalAgentTree la={la} onEnter={() => setActiveNav('local')} onCycleProvider={cycleLocalAgentProvider} />
+            <LocalAgentTree la={la} onEnter={enterLocal} onCycleProvider={cycleLocalAgentProvider} />
           )}
 
           <div className="v2-sec">
@@ -708,26 +1125,13 @@ const ShellInner: React.FC = () => {
           <div className="v2-agents">
             {loadingMeta && agents.length === 0 && <SkeletonRows n={2} />}
             {agents.map((a) => (
-              <div
+              <AgentRow
                 key={a.session_id}
-                className={`v2-a${activeSessionId === a.session_id ? ' active' : ''}`}
-                onClick={() => { setActiveNav('chat'); setActiveSessionId(a.session_id); }}
-                title={a.name || a.title}
-              >
-                <div className="v2-side-av">
-                  {a.avatar
-                    ? <img src={a.avatar.startsWith('data:') ? a.avatar : `data:image/png;base64,${a.avatar}`} alt="" />
-                    : <AgentIcon a={a} />}
-                </div>
-                <div className="v2-nm">
-                  {a.name || a.title || '未命名'}
-                  {a.is_primary && <span className="v2-pri">primary</span>}
-                </div>
-                <div
-                  className="v2-more"
-                  onClick={(e) => { e.stopPropagation(); const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setRowMenu({ session: a, x: r.right, y: r.bottom + 4 }); }}
-                >⋯</div>
-              </div>
+                a={a}
+                active={activeSessionId === a.session_id}
+                onOpen={openChatTab}
+                onMore={onSidebarMore}
+              />
             ))}
             {!loadingMeta && agents.length === 0 && (
               <div style={{ padding: '8px 12px', fontSize: 12, color: 'var(--c-ink-4)' }}>还没有 agent</div>
@@ -737,23 +1141,15 @@ const ShellInner: React.FC = () => {
           <div className="v2-sec"><span>Chats</span></div>
           <div className="v2-recents">
             {loadingMeta && mergedRecents.length === 0 && <SkeletonRows n={6} />}
-            {mergedRecents.map((r) => {
-              const tea = (r as any).ext?.teahouse === true;
-              return (
-                <div
-                  key={r.session_id}
-                  className={`v2-r${activeSessionId === r.session_id ? ' active' : ''}${tea ? ' teahouse' : ''}`}
-                  onClick={() => { setActiveNav('chat'); setActiveSessionId(r.session_id); }}
-                  title={r.name || r.title}
-                >
-                  <span className="v2-t">{r.name || r.title || r.preview_text || (tea ? '新聊天' : '空会话')}</span>
-                  <span
-                    className="v2-more"
-                    onClick={(e) => { e.stopPropagation(); const rect = (e.currentTarget as HTMLElement).getBoundingClientRect(); setRowMenu({ session: r, x: rect.right, y: rect.bottom + 4 }); }}
-                  >⋯</span>
-                </div>
-              );
-            })}
+            {mergedRecents.map((r) => (
+              <ChatRow
+                key={r.session_id}
+                r={r}
+                active={activeSessionId === r.session_id}
+                onOpen={openChatTab}
+                onMore={onSidebarMore}
+              />
+            ))}
             {!loadingMeta && mergedRecents.length === 0 && (
               <div style={{ padding: '8px 12px', fontSize: 12, color: 'var(--c-ink-4)' }}>暂无会话</div>
             )}
@@ -768,20 +1164,20 @@ const ShellInner: React.FC = () => {
 
         {/* ===== main ===== */}
         <main className="v2-main">
-          <div className={`v2-topbar${activeNav === 'local' ? ' v2-topbar-tabs' : ''}`}>
-            {activeNav === 'local' ? (
-              <LocalAgentTabs la={la} />
-            ) : (
-              <button className="v2-crumb">
-                {activeNav === 'gallery' ? '画廊'
-                  : activeNav === 'kb' ? '知识库'
-                  : (activeTitle || '新对话')}
-                <span className="v2-chev">▾</span>
-              </button>
-            )}
+          <div className="v2-topbar v2-topbar-tabs">
+            <TopTabs
+              la={la}
+              tabs={topTabs.tabs}
+              activeId={topTabs.activeId}
+              onActivate={activateTopTab}
+              onClose={closeTopTab}
+            />
             <div className="v2-grow" />
           </div>
 
+          {/* key={activeNav} 让视图切换时 React 重挂载内部子树，配合 .v2-view-frame 的
+             v2-view-in 透明度入场，给 nav 切换一个 160ms 安静的过场（不动 layout）。 */}
+          <div className="v2-view-frame" key={activeNav}>
           {activeNav === 'gallery' && <GalleryView />}
           {activeNav === 'kb' && <KnowledgeView />}
           {activeNav === 'local' && <LocalAgentConversation la={la} />}
@@ -789,7 +1185,7 @@ const ShellInner: React.FC = () => {
           {activeNav === 'chat' && <>
           <section className="v2-stream" ref={streamRef}>
             <div className="v2-msgs">
-              {messages.length === 0 && batches.filter((b) => b.sessionId === activeSessionId).length === 0 && !stream && !thinking && (
+              {messages.length === 0 && activeBatches.length === 0 && !stream && !thinking && (
                 <EmptyState title={activeTitle} />
               )}
 
@@ -799,15 +1195,17 @@ const ShellInner: React.FC = () => {
                   m={m}
                   showTokens={!!settings.showTokenCost}
                   onPreviewImage={setPreviewSrc}
-                  onRevert={(msg) => setConfirmRewind({ kind: 'revert', m: msg })}
-                  onEdit={(msg) => setConfirmRewind({ kind: 'edit', m: msg })}
+                  onRevert={onRevertMessage}
+                  onEdit={onEditMessage}
                   onQuote={onQuoteMessage}
+                  onRerunCreation={onRerunCreation}
+                  onOpenSpec={onOpenSpecFromMessage}
                 />
               ))}
 
-              {batches.filter((b) => b.sessionId === activeSessionId).map((b) => (
+              {activeBatches.map((b) => (
                 <React.Fragment key={b.batchId}>
-                  <CreateSpecCard b={b} />
+                  <CreateSpecCard b={b} onOpenDetail={() => setSpecDetail(b)} />
                   <BatchView b={b} onPreviewImage={setPreviewSrc} />
                 </React.Fragment>
               ))}
@@ -874,6 +1272,9 @@ const ShellInner: React.FC = () => {
                       setNegative={create.setNegative}
                       setAspect={create.setAspect}
                       setCount={create.setCount}
+                      aspectOptions={create.caps.aspects}
+                      countMax={create.caps.maxCount}
+                      aspectHint={create.caps.hint}
                       close={() => setOpenChip(null)}
                     />
                   )}
@@ -1012,6 +1413,7 @@ const ShellInner: React.FC = () => {
             </div>
           </div>
           </>}
+          </div>{/* /.v2-view-frame */}
         </main>
       </div>
 
@@ -1019,18 +1421,41 @@ const ShellInner: React.FC = () => {
         <ImagePreview src={previewSrc} onClose={() => setPreviewSrc(null)} />
       )}
 
-      {confirmRewind && (
-        <ConfirmRewind
-          kind={confirmRewind.kind}
-          preview={truncate(confirmRewind.m.content || '（空消息）', 60)}
-          onCancel={() => setConfirmRewind(null)}
-          onConfirm={() => {
-            const c = confirmRewind;
-            setConfirmRewind(null);
-            void runRewind(c.kind, c.m);
-          }}
+      {specDetail && (
+        <CreateSpecDetailModal
+          b={specDetail}
+          onClose={() => setSpecDetail(null)}
+          onPreviewImage={setPreviewSrc}
         />
       )}
+
+      {confirmRewind && (() => {
+        // For rerun: surface the model that will be used so the user isn't
+        // surprised when a frozen historical Gemini spec re-fires the geo-block
+        // they're trying to escape from. Also offers a one-click override to
+        // the live picker.
+        let historicalModel: string | undefined;
+        if (confirmRewind.kind === 'rerun') {
+          const e: any = typeof confirmRewind.m.ext === 'string'
+            ? (() => { try { return JSON.parse(confirmRewind.m.ext as unknown as string); } catch { return {}; } })()
+            : (confirmRewind.m.ext || {});
+          historicalModel = e?.creation_spec?.model || undefined;
+        }
+        return (
+          <ConfirmRewind
+            kind={confirmRewind.kind}
+            preview={truncate(confirmRewind.m.content || '（空消息）', 60)}
+            historicalModel={historicalModel}
+            liveModel={create.cfg.model}
+            onCancel={() => setConfirmRewind(null)}
+            onConfirm={(opts) => {
+              const c = confirmRewind;
+              setConfirmRewind(null);
+              void runRewind(c.kind, c.m, opts);
+            }}
+          />
+        );
+      })()}
 
       {rowMenu && (
         <RowMenu
@@ -1092,7 +1517,7 @@ const ShellInner: React.FC = () => {
           onClose={() => setContextPopOpen(false)}
           onPickModel={async (cfg) => {
             if (mode === 'create') {
-              create.setModelConfig(cfg.config_id, cfg.model);
+              create.setModelConfig(cfg.config_id, cfg.model, (cfg as any).provider);
             } else if (activeSessionId && activeRecord) {
               try {
                 // Agent-bound sessions store llm_config_id on the
@@ -1143,65 +1568,89 @@ const TeahousePicker: React.FC<{
   onClose: () => void;
   onPick: (cfg: LLMConfigFromDB, modelOverride: string) => void;
 }> = ({ configs, onClose, onPick }) => {
-  const enabled = (configs || []).filter((c) => c.enabled !== false);
-  const [picked, setPicked] = useState<LLMConfigFromDB | null>(enabled[0] || null);
+  // 「发起聊天」与对话模型选择保持一致：创作专用模型（media_visible）不出现。
+  // 创作模型有自己专属的选择入口（创作模式的 ▲），混进来会让用户用 SDXL/Flux
+  // 起一个聊天会话却聊不出东西。
+  const enabled = (configs || []).filter((c) => c.enabled !== false && !c.media_visible);
+  // 按 provider 分组一次（顺序稳定，跟着 PICK_PROVIDER_ORDER）。
+  const grouped = useMemo(() => groupConfigsByProvider(enabled), [enabled]);
+  const [activeProvider, setActiveProvider] = useState<string | null>(grouped[0]?.[0] ?? null);
+  // 右侧当前能选的模型
+  const activeConfigs = useMemo(
+    () => grouped.find(([p]) => p === activeProvider)?.[1] ?? [],
+    [grouped, activeProvider],
+  );
+  const [picked, setPicked] = useState<LLMConfigFromDB | null>(activeConfigs[0] ?? null);
+  // 切 provider 时，picked 自动跟到该 provider 的第一个 config。
+  useEffect(() => { setPicked(activeConfigs[0] ?? null); }, [activeProvider]); // eslint-disable-line react-hooks/exhaustive-deps
   const [modelOverride, setModelOverride] = useState('');
   useEffect(() => { setModelOverride(''); }, [picked?.config_id]);
+
   return (
     <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="v2-modal" onMouseDown={(e) => e.stopPropagation()} style={{ maxWidth: 480, padding: 20 }}>
-        <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 4 }}>发起聊天</div>
-        <div style={{ fontSize: 13, color: 'var(--c-ink-4)', marginBottom: 12 }}>
-          选一个模型直接开聊，本次会话不经过 Agent。
+      <div className="v2-modal v2-pickmodal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="v2-modal-hd">
+          <h3>发起聊天</h3>
+          <button className="x" onClick={onClose} aria-label="关闭">✕</button>
         </div>
         {enabled.length === 0 ? (
-          <div style={{ fontSize: 13, color: 'var(--c-ink-4)' }}>
-            还没有可用的 LLM 配置，先在设置里添加一个。
+          <div className="v2-pickmodal-empty">
+            还没有可用的模型 — 去 设置 · 模型 添加。
           </div>
         ) : (
-          <>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 320, overflowY: 'auto' }}>
-              {enabled.map((c) => (
+          <div className="v2-pickmodal-split">
+            {/* 左：provider 厂商列表 */}
+            <aside className="v2-pickmodal-providers" role="listbox" aria-label="厂商">
+              {grouped.map(([provider, items]) => (
                 <button
-                  key={c.config_id}
+                  key={provider}
                   type="button"
-                  className={`v2-pick${picked?.config_id === c.config_id ? ' on' : ''}`}
-                  onClick={() => setPicked(c)}
-                  style={{
-                    textAlign: 'left', padding: '8px 12px', borderRadius: 8,
-                    border: `1px solid ${picked?.config_id === c.config_id ? 'var(--c-accent)' : 'var(--c-line)'}`,
-                    background: picked?.config_id === c.config_id ? 'var(--c-tint)' : 'transparent',
-                    cursor: 'pointer',
-                  }}
+                  role="option"
+                  aria-selected={provider === activeProvider}
+                  className={`v2-pickmodal-provider${provider === activeProvider ? ' on' : ''}`}
+                  onClick={() => setActiveProvider(provider)}
                 >
-                  <div style={{ fontSize: 14, fontWeight: 500 }}>{c.shortname || c.name}</div>
-                  <div style={{ fontSize: 12, color: 'var(--c-ink-4)' }}>
-                    {c.provider} · {c.model || '默认模型'}
-                  </div>
+                  <span className="nm">{PICK_PROVIDER_LABELS[provider] || provider}</span>
+                  <span className="cnt">{items.length}</span>
                 </button>
               ))}
+            </aside>
+            {/* 右：该 provider 在「设置 · 模型」里录入的模型列表 */}
+            <div className="v2-pickmodal-models">
+              {activeConfigs.length === 0 ? (
+                <div className="v2-pickmodal-empty">该厂商下还没有可用模型。</div>
+              ) : (
+                <div className="v2-pickmodal-modellist">
+                  {activeConfigs.map((c) => (
+                    <button
+                      key={c.config_id}
+                      type="button"
+                      className={`v2-pick${picked?.config_id === c.config_id ? ' on' : ''}`}
+                      onClick={() => setPicked(c)}
+                    >
+                      <div className="v2-pick-nm">{c.shortname || c.name}</div>
+                      <div className="v2-pick-ds">{c.model || '默认模型'}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="v2-pickmodal-override">
+                <label>模型覆盖（可选）</label>
+                <input
+                  type="text"
+                  value={modelOverride}
+                  onChange={(e) => setModelOverride(e.target.value)}
+                  placeholder={picked?.model || ''}
+                />
+              </div>
             </div>
-            <div style={{ marginTop: 12 }}>
-              <label style={{ fontSize: 12, color: 'var(--c-ink-4)' }}>模型覆盖（可选）</label>
-              <input
-                type="text"
-                value={modelOverride}
-                onChange={(e) => setModelOverride(e.target.value)}
-                placeholder={picked?.model || ''}
-                style={{
-                  width: '100%', marginTop: 4, padding: '6px 10px',
-                  border: '1px solid var(--c-line)', borderRadius: 6, fontSize: 13,
-                  background: 'transparent', color: 'inherit',
-                }}
-              />
-            </div>
-          </>
+          </div>
         )}
-        <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button type="button" onClick={onClose} className="v2-btn">取消</button>
+        <div className="v2-modal-foot">
+          <button type="button" onClick={onClose} className="v2-mbtn">取消</button>
           <button
             type="button"
-            className="v2-btn primary"
+            className="v2-mbtn primary"
             disabled={!picked}
             onClick={() => picked && onPick(picked, modelOverride.trim())}
           >
@@ -1291,28 +1740,75 @@ const RowMenu: React.FC<{
  *  app's typography rules can scope all child elements without leaking.
  *  Streaming-safe: react-markdown re-parses on each render, but our batched
  *  chunk flushing (32 chars / 16ms) keeps the cost bounded. */
-const MD: React.FC<{ text: string }> = React.memo(({ text }) => (
+// Module-level constants — hoisted so react-markdown sees stable identity for
+// `components` / plugin arrays across renders (otherwise the internal pipeline
+// re-builds children even when text is unchanged).
+const AnchorBlank: React.FC<any> = ({ node: _n, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" />;
+
+/** Provider 显示名（与 SettingsModal 保持一致）。 */
+const PICK_PROVIDER_LABELS: Record<string, string> = {
+  openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini',
+  deepseek: 'DeepSeek', qwen: 'Qwen', ollama: 'Ollama',
+  local: 'Local', custom: 'Custom',
+};
+const PICK_PROVIDER_ORDER = ['openai', 'anthropic', 'gemini', 'deepseek', 'qwen', 'ollama', 'local', 'custom'];
+/** 按 provider 分组 LLM 配置；命中 PICK_PROVIDER_ORDER 的厂商排在前面，其余 alphabetical。 */
+function groupConfigsByProvider(configs: LLMConfigFromDB[]): [string, LLMConfigFromDB[]][] {
+  const buckets = new Map<string, LLMConfigFromDB[]>();
+  configs.forEach((c) => {
+    const k = (c.provider || 'custom').toLowerCase();
+    const arr = buckets.get(k);
+    if (arr) arr.push(c); else buckets.set(k, [c]);
+  });
+  return Array.from(buckets.entries()).sort((a, b) => {
+    const ai = PICK_PROVIDER_ORDER.indexOf(a[0]);
+    const bi = PICK_PROVIDER_ORDER.indexOf(b[0]);
+    const aRank = ai < 0 ? 99 : ai;
+    const bRank = bi < 0 ? 99 : bi;
+    if (aRank !== bRank) return aRank - bRank;
+    return a[0].localeCompare(b[0]);
+  });
+}
+// PlainCode strips the `inline` / `node` props that rehypeInlineCodeProperty
+// attaches before they leak to the DOM <code> element (react warns about
+// unknown boolean attrs). Used in MD_PLAIN (streaming, no Shiki).
+const PlainCode: React.FC<any> = ({ node: _n, inline: _i, ...props }) => <code {...props} />;
+const MD_REMARK = [remarkGfm];
+// hast Element type identity is wobbly across pnpm-deduped @types/hast versions —
+// react-markdown's `Components` map insists on its own `Element`, and our
+// CodeBlock declares `node?: Element` from `react-shiki/web`'s re-export. The
+// runtime contract is identical; cast through `any` once at the boundary.
+type MdComponents = React.ComponentProps<typeof ReactMarkdown>['components'];
+// Rich = Shiki-highlighted code (settled messages).
+const MD_RICH = { a: AnchorBlank, code: CodeBlock as any, pre: PreBlock as any } as MdComponents;
+// Plain = react-markdown's default <pre><code> — used during streaming so a
+// growing fenced code block doesn't trigger Shiki on every chunk. PlainCode
+// is custom only to swallow the `inline` prop.
+const MD_PLAIN = { a: AnchorBlank, code: PlainCode } as MdComponents;
+
+const MD: React.FC<{ text: string; live?: boolean }> = React.memo(({ text, live }) => (
   <div className="v2-md">
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={MD_REMARK}
       rehypePlugins={mdRehypePlugins}
-      components={{
-        a: ({ node: _n, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" />,
-        code: CodeBlock,
-        pre: PreBlock,
-      } as React.ComponentProps<typeof ReactMarkdown>['components']}
+      components={live ? MD_PLAIN : MD_RICH}
     >{text}</ReactMarkdown>
   </div>
 ));
+MD.displayName = 'MD';
 
-const MessageView: React.FC<{
+interface MessageViewProps {
   m: Message;
   showTokens?: boolean;
   onPreviewImage?: (src: string) => void;
   onRevert?: (m: Message) => void;
   onEdit?: (m: Message) => void;
   onQuote?: (m: Message) => void;
-}> = ({ m, showTokens, onPreviewImage, onRevert, onEdit, onQuote }) => {
+  onRerunCreation?: (m: Message) => void;
+  /** Open the spec-detail modal for a persisted user creation message. */
+  onOpenSpec?: (m: Message) => void;
+}
+const MessageViewImpl: React.FC<MessageViewProps> = ({ m, showTokens, onPreviewImage, onRevert, onEdit, onQuote, onRerunCreation, onOpenSpec }) => {
   const role = m.role === 'user' ? 'user' : 'assistant';
   // Defensive: some backends (or older persisted rows) hand ext back as a
   // JSON-stringified blob rather than an object. Normalise once so the
@@ -1363,6 +1859,10 @@ const MessageView: React.FC<{
       ))}
     </div>
   ) : null;
+  // Marker for create-mode user messages that can be re-fired with the same
+  // spec. Newer messages carry the explicit flag; older ones still match by
+  // having a creation_spec attached.
+  const canRerun = m.role === 'user' && (ext.creation_retriggerable === true || !!spec);
   const actions = (
     <div className="v2-msg-actions">
       {m.role === 'user' && onRevert && (
@@ -1370,6 +1870,19 @@ const MessageView: React.FC<{
       )}
       {m.role === 'user' && !spec && onEdit && (
         <button className="v2-msg-act" title="回退并编辑这条" onClick={() => onEdit(m)}><IconEdit /></button>
+      )}
+      {canRerun && onRerunCreation && (
+        <button
+          className="v2-msg-act"
+          title="按相同设置重新生成（删除此消息之后的所有内容）"
+          onClick={() => onRerunCreation(m)}
+        >
+          {/* Inline so we don't have to wire a new icon export. */}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="23 4 23 10 17 10" />
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+          </svg>
+        </button>
       )}
       {onQuote && (
         <button className="v2-msg-act" title="引用这条作为下条上下文" onClick={() => onQuote(m)}><IconQuote /></button>
@@ -1379,12 +1892,22 @@ const MessageView: React.FC<{
 
   // User-side create spec: render chips + ref thumbs inside the bubble.
   if (m.role === 'user' && spec) {
+    const { label: modelLabel, muted: modelMuted } = specModelLabel(spec);
+    const openDetail = () => onOpenSpec?.(m);
     return (
       <div className="v2-msg user">
         <div className="v2-body" style={{ maxWidth: '90%' }}>
           {quoteChip}
           {domainCite}
-          <div className="v2-bubble v2-spec">
+          <div
+            className={`v2-bubble v2-spec${onOpenSpec ? ' v2-spec-clickable' : ''}`}
+            role={onOpenSpec ? 'button' : undefined}
+            tabIndex={onOpenSpec ? 0 : undefined}
+            aria-label={onOpenSpec ? '查看创作配方详情' : undefined}
+            title={onOpenSpec ? '查看创作配方' : undefined}
+            onClick={onOpenSpec ? openDetail : undefined}
+            onKeyDown={onOpenSpec ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(); } } : undefined}
+          >
             <div className="v2-spec-chips">
               <span className="v2-spec-chip"><IconAspect />{spec.aspect}</span>
               <span className="v2-spec-chip">× {spec.count}</span>
@@ -1395,12 +1918,16 @@ const MessageView: React.FC<{
             {media.length > 0 && (
               <div className="v2-spec-refs">
                 {media.filter((x: any) => x.type === 'image').map((img: any, i: number) => (
-                  <div key={i} className="v2-spec-ref" onClick={() => onPreviewImage?.(imgSrc(img))}>
+                  // 阻止冒泡到气泡 onClick，避免点缩略图同时打开详情弹框。
+                  <div key={i} className="v2-spec-ref" onClick={(e) => { e.stopPropagation(); onPreviewImage?.(imgSrc(img)); }}>
                     <img src={imgSrc(img)} alt={`#${i + 1}`} />
                   </div>
                 ))}
               </div>
             )}
+            <span className={`v2-spec-stamp${modelMuted ? ' muted' : ''}`} aria-hidden>
+              <i className="dot" />{modelLabel}
+            </span>
           </div>
           {actions}
         </div>
@@ -1432,17 +1959,13 @@ const MessageView: React.FC<{
              *  payload and render it as <img>. */}
             {media.filter((x: any) => !!x?.data || !!x?.url).map((img: any, i: number) => {
               const src = imgSrc(img);
-              if (m.role === 'assistant') {
-                // eslint-disable-next-line no-console
-                console.log('[MessageView] assistant img', m.message_id, i, 'src head:', src.slice(0, 60), 'len:', src.length);
-              }
               return (
                 <div
                   key={i}
                   className="v2-ph clickable"
                   onClick={() => onPreviewImage?.(src)}
                 >
-                  <img src={src} alt="" onError={(e) => { console.warn('[MessageView] img onError', m.message_id, i, e); }} />
+                  <img src={src} alt="" />
                 </div>
               );
             })}
@@ -1456,36 +1979,83 @@ const MessageView: React.FC<{
     </div>
   );
 };
+/* React.memo with default shallow compare. Stream chunks update `stream`
+ * upstream but `messages[]` stays referentially stable; with this memo every
+ * past MessageView short-circuits on each chunk render. The callbacks below
+ * are also stabilised at the call-site via useCallback so this isn't defeated. */
+const MessageView = React.memo(MessageViewImpl);
 
 /** Confirm dialog for the two destructive rewind actions (回退 / 回退并编辑).
  *  Both delete the target message and everything after it, so we gate them
  *  behind an explicit confirm. Esc / backdrop cancels; Enter confirms. */
 const ConfirmRewind: React.FC<{
-  kind: 'revert' | 'edit';
+  kind: 'revert' | 'edit' | 'rerun';
   preview: string;
-  onConfirm: () => void;
+  /** rerun only: model recorded in the historical message's creation_spec. */
+  historicalModel?: string;
+  /** rerun only: model currently selected in the create-mode picker. */
+  liveModel?: string;
+  onConfirm: (opts?: { useLiveModel?: boolean }) => void;
   onCancel: () => void;
-}> = ({ kind, preview, onConfirm, onCancel }) => {
+}> = ({ kind, preview, historicalModel, liveModel, onConfirm, onCancel }) => {
+  // Default to the frozen historical model — "记住当时" is the documented
+  // semantic. The user can flip to the live picker per-rerun when they need
+  // to escape a snapshot whose model is broken (e.g. Gemini geo-blocked).
+  const [useLive, setUseLive] = useState(false);
+  const canOverride = kind === 'rerun'
+    && !!historicalModel && !!liveModel && historicalModel !== liveModel;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onCancel();
-      if (e.key === 'Enter') onConfirm();
+      if (e.key === 'Enter') onConfirm(kind === 'rerun' ? { useLiveModel: useLive } : undefined);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onConfirm, onCancel]);
+  }, [onConfirm, onCancel, kind, useLive]);
+  const title = kind === 'rerun' ? '按相同设置重新生成？'
+    : kind === 'edit' ? '回退并编辑这条消息？'
+    : '回退到这条消息？';
+  const cta = kind === 'rerun' ? '重新生成' : kind === 'edit' ? '回退并编辑' : '回退';
   return (
     <div className="v2-confirm-backdrop" onClick={onCancel}>
       <div className="v2-confirm" onClick={(e) => e.stopPropagation()}>
-        <div className="v2-confirm-title">{kind === 'edit' ? '回退并编辑这条消息？' : '回退到这条消息？'}</div>
+        <div className="v2-confirm-title">{title}</div>
         <div className="v2-confirm-quote">“{preview}”</div>
         <div className="v2-confirm-body">
-          这会删除这条消息<strong>以及它之后的所有消息</strong>（含 AI 回复），不可恢复。
+          {kind === 'rerun' ? (
+            <>会删除这条消息<strong>之后的所有消息</strong>（含 AI 生成的图片），并按相同的提示词、比例、参考图重新出图。不可恢复。</>
+          ) : (
+            <>这会删除这条消息<strong>以及它之后的所有消息</strong>（含 AI 回复），不可恢复。</>
+          )}
           {kind === 'edit' && ' 原文会回填到输入框，供你修改后重新发送。'}
         </div>
+        {kind === 'rerun' && historicalModel && (
+          <div className="v2-confirm-body" style={{ marginTop: 8, padding: 10, borderRadius: 8, background: 'var(--c-paper-2, rgba(0,0,0,0.04))' }}>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>将使用模型</div>
+            <div style={{ marginTop: 4, fontWeight: 600 }}>
+              {useLive ? (liveModel || '当前选择') : historicalModel}
+              <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, opacity: 0.6 }}>
+                {useLive ? '（当前 picker）' : '（原消息）'}
+              </span>
+            </div>
+            {canOverride && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, cursor: 'pointer', fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={useLive}
+                  onChange={(e) => setUseLive(e.target.checked)}
+                />
+                <span>改用当前选择的模型 <code style={{ padding: '0 4px', borderRadius: 4, background: 'rgba(0,0,0,0.08)' }}>{liveModel}</code></span>
+              </label>
+            )}
+          </div>
+        )}
         <div className="v2-confirm-actions">
           <button className="v2-btn ghost" onClick={onCancel}>取消</button>
-          <button className="v2-btn danger" onClick={onConfirm}>{kind === 'edit' ? '回退并编辑' : '回退'}</button>
+          <button
+            className="v2-btn danger"
+            onClick={() => onConfirm(kind === 'rerun' ? { useLiveModel: useLive } : undefined)}
+          >{cta}</button>
         </div>
       </div>
     </div>
@@ -1547,12 +2117,45 @@ const ImagePreview: React.FC<{ src: string; onClose: () => void }> = ({ src, onC
  *  aspect / count / style / negative, the prompt, and small ref thumbs.
  *  Acts as the user's outgoing message in the chat stream so the dialogue
  *  remains chronological. */
-const CreateSpecCard: React.FC<{ b: Batch }> = ({ b }) => {
+/** 把 spec 的 provider/model 翻译成「市场名」—— 优先用人话（GPT-Image / Flux），
+ *  没有匹配则降级到 model 本体；都没有就标"未知模型"。 */
+function specModelLabel(spec: Batch['spec']): { label: string; muted: boolean } {
+  const m = (spec.model || '').trim();
+  const p = (spec.provider || '').toLowerCase();
+  // 常见图像模型 → 友好名
+  const friendly: Array<[RegExp, string]> = [
+    [/^gpt-image/i, 'GPT-Image'],
+    [/^dall[-_]?e[-_]?3/i, 'DALL·E 3'],
+    [/^dall[-_]?e/i, 'DALL·E'],
+    [/^flux[-_].*pro/i, 'Flux Pro'],
+    [/^flux/i, 'Flux'],
+    [/^imagen/i, 'Imagen'],
+    [/midjourney|^mj/i, 'Midjourney'],
+    [/^sd[-_]?xl/i, 'SDXL'],
+    [/stable[-_]?diffusion/i, 'Stable Diffusion'],
+    [/^gemini.*image/i, 'Gemini Image'],
+  ];
+  for (const [re, name] of friendly) if (re.test(m)) return { label: name, muted: false };
+  if (m) return { label: m, muted: false };
+  if (p && PICK_PROVIDER_LABELS[p]) return { label: PICK_PROVIDER_LABELS[p], muted: false };
+  return { label: '未知模型', muted: true };
+}
+
+const CreateSpecCard: React.FC<{ b: Batch; onOpenDetail: () => void }> = ({ b, onOpenDetail }) => {
   const { aspect, count, style, negative, refs } = b.spec;
+  const { label: modelLabel, muted: modelMuted } = specModelLabel(b.spec);
   return (
     <div className="v2-msg user">
       <div className="v2-body" style={{ maxWidth: '90%' }}>
-        <div className="v2-bubble v2-spec">
+        <div
+          className="v2-bubble v2-spec v2-spec-clickable"
+          role="button"
+          tabIndex={0}
+          aria-label="查看创作配方详情"
+          title="查看创作配方"
+          onClick={onOpenDetail}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenDetail(); } }}
+        >
           <div className="v2-spec-chips">
             <span className="v2-spec-chip"><IconAspect />{aspect}</span>
             <span className="v2-spec-chip">× {count}</span>
@@ -1571,9 +2174,104 @@ const CreateSpecCard: React.FC<{ b: Batch }> = ({ b }) => {
               ))}
             </div>
           )}
+          {/* 右下角小角章：谁画的。整气泡都可点，标签不单独 stopPropagation。 */}
+          <span className={`v2-spec-stamp${modelMuted ? ' muted' : ''}`} aria-hidden>
+            <i className="dot" />{modelLabel}
+          </span>
         </div>
       </div>
     </div>
+  );
+};
+
+/** 创作配方详情：只读，配套外部已有的"重新生成"入口（这里不放主操作）。 */
+const CreateSpecDetailModal: React.FC<{
+  b: Batch;
+  onClose: () => void;
+  onPreviewImage: (src: string) => void;
+}> = ({ b, onClose, onPreviewImage }) => {
+  const { aspect, count, style, negative, refs, model, provider } = b.spec;
+  const { label: modelLabel } = specModelLabel(b.spec);
+  const prompt = b.promptDisplay.trim();
+  const [copied, setCopied] = useState(false);
+  const onCopyPrompt = async () => {
+    if (!prompt) return;
+    try { await navigator.clipboard.writeText(prompt); } catch { /* ignore */ }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <Modal
+      title="创作配方"
+      subtitle={modelLabel}
+      wide
+      onClose={onClose}
+    >
+      <div className="v2-modal-sec">
+        <div className="lab">配置</div>
+        <div className="v2-spec-chips">
+          <span className="v2-spec-chip"><IconAspect />{aspect}</span>
+          <span className="v2-spec-chip">× {count} 张</span>
+          {style.trim() && <span className="v2-spec-chip" title={style}>风格 · {truncate(style, 28)}</span>}
+          {negative.trim() && <span className="v2-spec-chip" title={negative}>负面 · {truncate(negative, 22)}</span>}
+          {(model || provider) && (
+            <span className="v2-spec-chip" title={`${provider || ''}${model ? ` · ${model}` : ''}`}>
+              模型 · {model || PICK_PROVIDER_LABELS[(provider || '').toLowerCase()] || provider}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="v2-modal-sec">
+        <div className="lab" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>提示词</span>
+          {prompt && (
+            <button
+              type="button"
+              className="v2-mini-copy"
+              onClick={onCopyPrompt}
+              title={copied ? '已复制' : '复制提示词'}
+              aria-label="复制提示词"
+            >
+              {copied ? <IconCheck /> : <IconCopy />}
+              <span>{copied ? '已复制' : '复制'}</span>
+            </button>
+          )}
+        </div>
+        {prompt ? (
+          <pre className="v2-spec-prompt">{prompt}</pre>
+        ) : (
+          <div className="v2-modal-note">（仅用参考图，未写提示词）</div>
+        )}
+      </div>
+
+      {negative.trim() && (
+        <div className="v2-modal-sec">
+          <div className="lab">负面提示</div>
+          <pre className="v2-spec-prompt v2-spec-prompt-neg">{negative.trim()}</pre>
+        </div>
+      )}
+
+      {refs.length > 0 && (
+        <div className="v2-modal-sec">
+          <div className="lab">参考图 · {refs.length}</div>
+          <div className="v2-spec-refs v2-spec-refs-lg">
+            {refs.map((r, i) => (
+              <button
+                key={r.id}
+                type="button"
+                className="v2-spec-ref"
+                title={r.directive || `#${i + 1}`}
+                onClick={() => onPreviewImage(`data:${r.mimeType};base64,${r.data}`)}
+              >
+                <img src={`data:${r.mimeType};base64,${r.data}`} alt={r.directive || `参考 ${i + 1}`} />
+                {r.directive && <span className="v2-spec-ref-directive">{truncate(r.directive, 22)}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 };
 
@@ -1625,7 +2323,12 @@ async function persistCreationUserSpec(
       aspect: spec.aspect, count: spec.count, style: spec.style,
       negative: spec.negative,
       refs: spec.refs.map((r) => ({ directive: r.directive, mimeType: r.mimeType })),
+      configId: spec.configId, model: spec.model, provider: spec.provider,
     },
+    // Marks the message as eligible for the 重新生成 quick action — the UI keys
+    // off this flag rather than sniffing `creation_spec` so future non-rerunnable
+    // creation messages can opt out cleanly.
+    creation_retriggerable: true,
   };
   if (media.length > 0) ext.media = media;
   await api.post(`/api/sessions/${sid}/messages`, {
@@ -1676,26 +2379,43 @@ function creationDoneCaption(n: number, elapsedMs?: number): string {
   return s;
 }
 
-const BatchView: React.FC<{ b: Batch; onPreviewImage?: (src: string) => void }> = ({ b, onPreviewImage }) => (
-  <div className="v2-msg assistant">
-    <div className="v2-body">
-      <p style={{ color: 'var(--c-ink-3)', fontSize: 13 }}>
-        {b.pending
-          ? `正在画 ${b.slots.length} 张…`
-          : creationDoneCaption(b.slots.filter(Boolean).length, b.elapsedMs)}
-      </p>
-      <div className="v2-imgs">
-        {b.slots.map((s, i) => (
-          <div key={i} className={`v2-ph${s ? ' clickable' : ''}`} onClick={s ? () => onPreviewImage?.(s) : undefined}>
-            {s ? <img src={s} alt={`#${i + 1}`} /> :
-              b.errors[i] ? <span style={{ fontSize: 11, color: 'var(--c-ink-4)' }} title={b.errors[i] || ''}>失败</span> :
-              <span className="v2-shimmer-tile" />}
-          </div>
-        ))}
+const BatchView: React.FC<{ b: Batch; onPreviewImage?: (src: string) => void }> = React.memo(({ b, onPreviewImage }) => {
+  // Live elapsed counter for pending batches. gpt-image-2 takes 30-60s end to
+  // end; without a visible timer the shimmer-only state feels broken. We tick
+  // every 500ms (cheap enough; only one batch is pending at a time) and stop
+  // as soon as the batch settles. Settled batches show the final elapsedMs.
+  const [elapsedSec, setElapsedSec] = useState<number>(
+    b.pending && b.startedAt ? Math.floor((Date.now() - b.startedAt) / 1000) : 0,
+  );
+  useEffect(() => {
+    if (!b.pending || !b.startedAt) return;
+    const tick = () => setElapsedSec(Math.floor((Date.now() - (b.startedAt || 0)) / 1000));
+    tick();
+    const id = window.setInterval(tick, 500);
+    return () => window.clearInterval(id);
+  }, [b.pending, b.startedAt]);
+  return (
+    <div className="v2-msg assistant">
+      <div className="v2-body">
+        <p style={{ color: 'var(--c-ink-3)', fontSize: 13 }}>
+          {b.pending
+            ? `正在画 ${b.slots.length} 张 · ${elapsedSec}s`
+            : creationDoneCaption(b.slots.filter(Boolean).length, b.elapsedMs)}
+        </p>
+        <div className="v2-imgs">
+          {b.slots.map((s, i) => (
+            <div key={i} className={`v2-ph${s ? ' clickable' : ''}`} onClick={s ? () => onPreviewImage?.(s) : undefined}>
+              {s ? <img src={s} alt={`#${i + 1}`} /> :
+                b.errors[i] ? <span style={{ fontSize: 11, color: 'var(--c-ink-4)' }} title={b.errors[i] || ''}>失败</span> :
+                <span className="v2-shimmer-tile" />}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
-  </div>
-);
+  );
+});
+BatchView.displayName = 'BatchView';
 
 const RefPill: React.FC<{ idx: number; r: RefImage; onChange: (v: string) => void; onRemove: () => void }> = ({ idx, r, onChange, onRemove }) => (
   <div className="v2-ref">
@@ -1714,7 +2434,15 @@ const GalleryView: React.FC = () => {
   const [items, setItems] = useState<MediaOutputItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState<MediaOutputItem | null>(null);
-  useEffect(() => {
+  // Select mode keys off `selectMode` rather than `selected.size > 0` so the
+  // user can enter selection without picking anything first (and so an empty
+  // selection still shows the "退出选择" affordance instead of silently exiting).
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+
+  const reload = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     mediaApi.listOutputs(120, 0)
@@ -1723,13 +2451,80 @@ const GalleryView: React.FC = () => {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, []);
+  useEffect(() => reload(), [reload]);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPreview(null); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (preview) setPreview(null);
+        else if (confirmDel) setConfirmDel(false);
+        else if (selectMode) { setSelectMode(false); setSelected(new Set()); }
+      }
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, [preview, confirmDel, selectMode]);
+
+  // Group items by their YYYY-MM-DD created_at, descending. Stable order
+  // within a group (server returns desc by created_at).
+  const groups = useMemo(() => {
+    const byDay = new Map<string, MediaOutputItem[]>();
+    for (const it of items) {
+      const key = (it.created_at || '').slice(0, 10) || '未知日期';
+      if (!byDay.has(key)) byDay.set(key, []);
+      byDay.get(key)!.push(it);
+    }
+    return Array.from(byDay.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [items]);
+
+  // Stable callbacks so the memoized GalleryGroup / GalleryTile don't re-mount
+  // every selection toggle. Without useCallback the prop identity flips on
+  // each render and React.memo's shallow compare always fails.
+  const toggleOne = useCallback((id: string) => {
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
   }, []);
-  if (loading) {
-    return <div className="v2-view"><div className="v2-view-head"><h2>画廊</h2><p>加载中…</p></div></div>;
+  const toggleGroup = useCallback((ids: string[]) => {
+    setSelected((s) => {
+      const next = new Set(s);
+      const allOn = ids.every((id) => next.has(id));
+      for (const id of ids) {
+        if (allOn) next.delete(id); else next.add(id);
+      }
+      return next;
+    });
+  }, []);
+  const selectAll = useCallback(
+    () => setSelected(new Set(items.map((it) => it.output_id))),
+    [items],
+  );
+  const clearSel = useCallback(() => setSelected(new Set()), []);
+  const exitSelect = useCallback(() => { setSelectMode(false); setSelected(new Set()); }, []);
+
+  const runBatchDelete = async () => {
+    if (selected.size === 0) { setConfirmDel(false); return; }
+    setDeleting(true);
+    const ids = Array.from(selected);
+    const results = await Promise.allSettled(ids.map((id) => mediaApi.deleteOutput(id)));
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    setDeleting(false);
+    setConfirmDel(false);
+    // Optimistically drop the deleted ones from the local list so the UI doesn't
+    // flash the just-deleted tiles before the reload finishes. Anything that
+    // server-side failed will come back on the reload.
+    setItems((cur) => cur.filter((it) => !selected.has(it.output_id)));
+    setSelected(new Set());
+    setSelectMode(false);
+    reload();
+    if (failed > 0) {
+      console.warn(`[v2] gallery delete: ${failed}/${ids.length} failed`);
+    }
+  };
+
+  if (loading && items.length === 0) {
+    return <div className="v2-view"><div className="v2-view-head"><h2>画廊</h2></div></div>;
   }
   if (items.length === 0) {
     return (
@@ -1737,29 +2532,52 @@ const GalleryView: React.FC = () => {
         <div className="v2-view-head"><h2>画廊</h2></div>
         <div className="v2-gallery-empty">
           <div className="h">还没有作品</div>
-          <div>在创作模式下生成的图片会归到这里。</div>
         </div>
       </div>
     );
   }
+
+  const headerActions = (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginLeft: 'auto' }}>
+      {!selectMode && (
+        <button className="v2-btn ghost" onClick={() => setSelectMode(true)}>选择</button>
+      )}
+      {selectMode && (
+        <>
+          <span style={{ fontSize: 12, opacity: 0.7 }}>已选 {selected.size} / {items.length}</span>
+          <button className="v2-btn ghost" onClick={selected.size === items.length ? clearSel : selectAll}>
+            {selected.size === items.length ? '清空' : '全选'}
+          </button>
+          <button
+            className="v2-btn danger"
+            disabled={selected.size === 0 || deleting}
+            onClick={() => setConfirmDel(true)}
+          >删除选中</button>
+          <button className="v2-btn ghost" onClick={exitSelect}>退出选择</button>
+        </>
+      )}
+    </div>
+  );
+
   return (
     <div className="v2-view">
-      <div className="v2-view-head"><h2>画廊</h2><p>{items.length} 件作品 · 最近 120 张</p></div>
-      <div className="v2-gallery">
-        {items.map((it) => {
-          const url = mediaApi.getOutputFileUrl(it.output_id);
-          const title = (it.prompt || '').split(/[.。\n]/)[0].slice(0, 40);
-          return (
-            <div key={it.output_id} className="v2-gtile" onClick={() => setPreview(it)}>
-              {it.media_type === 'video' && <span className="v2-vidbadge">VIDEO</span>}
-              {it.media_type === 'video'
-                ? <video src={url} muted />
-                : <img src={url} alt={title} loading="lazy" />}
-              <div className="v2-meta">{title || '无名'}</div>
-            </div>
-          );
-        })}
+      <div className="v2-view-head">
+        <h2>画廊</h2>
+        <span className="v2-view-count">{items.length}</span>
+        {headerActions}
       </div>
+      {groups.map(([day, list]) => (
+        <GalleryGroup
+          key={day}
+          day={day}
+          list={list}
+          selected={selected}
+          selectMode={selectMode}
+          onToggleGroup={toggleGroup}
+          onToggleOne={toggleOne}
+          onPreview={setPreview}
+        />
+      ))}
       {preview && (
         <div className="v2-lightbox" onClick={() => setPreview(null)}>
           <div className="v2-lb-close">✕</div>
@@ -1768,9 +2586,156 @@ const GalleryView: React.FC = () => {
             : <img src={mediaApi.getOutputFileUrl(preview.output_id)} alt="" />}
         </div>
       )}
+      {confirmDel && (
+        <div className="v2-confirm-backdrop" onClick={() => !deleting && setConfirmDel(false)}>
+          <div className="v2-confirm" onClick={(e) => e.stopPropagation()}>
+            <div className="v2-confirm-title">删除选中的 {selected.size} 件作品？</div>
+            <div className="v2-confirm-body">
+              将从数据库永久删除（含源文件），<strong>不可恢复</strong>。已分享或保存到 Google Drive 的副本不受影响。
+            </div>
+            <div className="v2-confirm-actions">
+              <button className="v2-btn ghost" disabled={deleting} onClick={() => setConfirmDel(false)}>取消</button>
+              <button className="v2-btn danger" disabled={deleting} onClick={() => void runBatchDelete()}>
+                {deleting ? '删除中…' : '删除'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
+/* Hoisted Gallery style constants — previously these were 4 fresh objects
+   per tile per render (with 120 items that's 480 allocations on every
+   selection toggle). Static literals now share references across renders. */
+const GALLERY_GROUP_STYLE = { marginBottom: 24 } as const;
+const GALLERY_DAY_HEAD_STYLE: React.CSSProperties = {
+  display: 'flex', alignItems: 'baseline', gap: 10, padding: '6px 4px',
+  borderBottom: '1px solid var(--c-rule, rgba(0,0,0,0.08))', marginBottom: 10,
+};
+const GALLERY_DAY_TITLE_STYLE: React.CSSProperties = { fontWeight: 600, fontSize: 14 };
+const GALLERY_DAY_COUNT_STYLE: React.CSSProperties = { fontSize: 12, opacity: 0.6 };
+const GALLERY_DAY_TOGGLE_STYLE: React.CSSProperties = { marginLeft: 'auto', fontSize: 12, padding: '2px 8px' };
+const GALLERY_TILE_SEL_STYLE: React.CSSProperties = { outline: '3px solid var(--c-accent, #2b6cb0)', outlineOffset: -3 };
+const GALLERY_CHECK_BASE_STYLE: React.CSSProperties = {
+  position: 'absolute', top: 6, left: 6, width: 22, height: 22,
+  borderRadius: '50%',
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  fontSize: 13, fontWeight: 700, border: '1px solid rgba(0,0,0,0.15)',
+  boxShadow: '0 1px 3px rgba(0,0,0,0.2)', zIndex: 2,
+  pointerEvents: 'none',
+};
+const GALLERY_CHECK_ON_STYLE: React.CSSProperties = {
+  ...GALLERY_CHECK_BASE_STYLE,
+  background: 'var(--c-accent, #2b6cb0)', color: 'white',
+};
+const GALLERY_CHECK_OFF_STYLE: React.CSSProperties = {
+  ...GALLERY_CHECK_BASE_STYLE,
+  background: 'rgba(255,255,255,0.85)', color: 'var(--c-ink-3)',
+};
+
+interface GalleryTileProps {
+  it: MediaOutputItem;
+  isSel: boolean;
+  selectMode: boolean;
+  onToggleOne: (id: string) => void;
+  onPreview: (it: MediaOutputItem) => void;
+}
+const GalleryTile = React.memo<GalleryTileProps>(({ it, isSel, selectMode, onToggleOne, onPreview }) => {
+  const url = mediaApi.getOutputFileUrl(it.output_id);
+  const title = (it.prompt || '').split(/[.。\n]/)[0].slice(0, 40);
+  return (
+    <div
+      className={`v2-gtile${isSel ? ' selected' : ''}`}
+      style={isSel ? GALLERY_TILE_SEL_STYLE : undefined}
+      onClick={() => selectMode ? onToggleOne(it.output_id) : onPreview(it)}
+    >
+      {selectMode && (
+        <div style={isSel ? GALLERY_CHECK_ON_STYLE : GALLERY_CHECK_OFF_STYLE}>
+          {isSel ? '✓' : ''}
+        </div>
+      )}
+      {it.media_type === 'video' && <span className="v2-vidbadge">VIDEO</span>}
+      {it.media_type === 'video'
+        ? <video src={url} muted />
+        : <img src={url} alt={title} loading="lazy" />}
+      <div className="v2-meta">{title || '无名'}</div>
+    </div>
+  );
+});
+GalleryTile.displayName = 'GalleryTile';
+
+interface GalleryGroupProps {
+  day: string;
+  list: MediaOutputItem[];
+  selected: Set<string>;
+  selectMode: boolean;
+  onToggleGroup: (ids: string[]) => void;
+  onToggleOne: (id: string) => void;
+  onPreview: (it: MediaOutputItem) => void;
+}
+const GalleryGroup = React.memo<GalleryGroupProps>(({
+  day, list, selected, selectMode, onToggleGroup, onToggleOne, onPreview,
+}) => {
+  // ids + count computed in a single pass instead of map() + filter() over
+  // the same list — keeps the hot path tight when selection toggles.
+  const ids = useMemo(() => list.map((x) => x.output_id), [list]);
+  const allInDay = useMemo(() => {
+    if (ids.length === 0) return false;
+    for (const id of ids) if (!selected.has(id)) return false;
+    return true;
+  }, [ids, selected]);
+  return (
+    <div style={GALLERY_GROUP_STYLE}>
+      <div style={GALLERY_DAY_HEAD_STYLE}>
+        <div style={GALLERY_DAY_TITLE_STYLE}>{dayLabel(day)}</div>
+        <div style={GALLERY_DAY_COUNT_STYLE}>{list.length} 件</div>
+        {selectMode && (
+          <button
+            className="v2-btn ghost"
+            style={GALLERY_DAY_TOGGLE_STYLE}
+            onClick={() => onToggleGroup(ids)}
+          >
+            {allInDay ? '取消选该天' : `选中该天 (${list.length})`}
+          </button>
+        )}
+      </div>
+      <div className="v2-gallery">
+        {list.map((it) => (
+          <GalleryTile
+            key={it.output_id}
+            it={it}
+            isSel={selected.has(it.output_id)}
+            selectMode={selectMode}
+            onToggleOne={onToggleOne}
+            onPreview={onPreview}
+          />
+        ))}
+      </div>
+    </div>
+  );
+});
+GalleryGroup.displayName = 'GalleryGroup';
+
+/** Friendly date heading for a YYYY-MM-DD key — "今天 / 昨天 / 周X · 2026-05-28". */
+function dayLabel(ymdKey: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymdKey)) return ymdKey;
+  const today = new Date();
+  const todayKey = isoYMD(today);
+  if (ymdKey === todayKey) return `今天 · ${ymdKey}`;
+  const yd = new Date(today); yd.setDate(yd.getDate() - 1);
+  if (ymdKey === isoYMD(yd)) return `昨天 · ${ymdKey}`;
+  const d = new Date(ymdKey + 'T00:00:00');
+  const wd = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()] || '';
+  return `${wd} · ${ymdKey}`;
+}
+function isoYMD(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 const ModelBadge: React.FC<{
   mode: Mode;
@@ -1812,8 +2777,10 @@ const ContextPopover: React.FC<{
   // Agent-level config moved to the sidebar agent row's ⋯ menu.
   return (
     <Modal
-      title={mode === 'create' ? '选创作模型' : '选对话模型'}
+      title={mode === 'create' ? '创作模型' : '对话模型'}
       onClose={onClose}
+      modalClass="v2-pickmodal"
+      bodyless
     >
       <ModelPicker
         wantMedia={mode === 'create'}
@@ -1828,10 +2795,13 @@ const Modal: React.FC<{
   title: string;
   subtitle?: string;
   wide?: boolean;
+  modalClass?: string;
+  /** 跳过 v2-modal-body 包裹，children 直接挂在 v2-modal flex 列下（用于 split 等需要全幅布局的内容）。 */
+  bodyless?: boolean;
   onClose: () => void;
   footer?: React.ReactNode;
   children: React.ReactNode;
-}> = ({ title, subtitle, wide, onClose, footer, children }) => {
+}> = ({ title, subtitle, wide, modalClass, bodyless, onClose, footer, children }) => {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -1839,13 +2809,13 @@ const Modal: React.FC<{
   }, [onClose]);
   return (
     <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={`v2-modal${wide ? ' wide' : ''}`} onMouseDown={(e) => e.stopPropagation()}>
+      <div className={`v2-modal${wide ? ' wide' : ''}${modalClass ? ' ' + modalClass : ''}`} onMouseDown={(e) => e.stopPropagation()}>
         <div className="v2-modal-hd">
           <h3>{title}</h3>
           {subtitle && <span className="v2-modal-sub">{subtitle}</span>}
           <button className="x" onClick={onClose}>✕</button>
         </div>
-        <div className="v2-modal-body">{children}</div>
+        {bodyless ? children : <div className="v2-modal-body">{children}</div>}
         {footer && <div className="v2-modal-foot">{footer}</div>}
       </div>
     </div>
@@ -1866,29 +2836,78 @@ const ModelPicker: React.FC<{
   const list = useMemo(() => {
     if (!configs) return null;
     const enabled = configs.filter((c) => c.enabled !== false);
-    return wantMedia ? enabled.filter((c) => c.media_visible) : enabled;
+    // 严格互斥：媒体可见的模型只在「创作」里出现；对话模式只看非媒体模型。
+    return wantMedia ? enabled.filter((c) => c.media_visible) : enabled.filter((c) => !c.media_visible);
   }, [configs, wantMedia]);
 
-  if (!list) return <div className="v2-ctxpop-empty">加载中…</div>;
+  const grouped = useMemo(() => list ? groupConfigsByProvider(list) : [], [list]);
+  // 默认锚定到当前已选模型所在的厂商；否则取第一组。
+  const initialProvider = useMemo(() => {
+    if (!list || !currentConfigId) return grouped[0]?.[0] ?? null;
+    const cur = list.find((c) => c.config_id === currentConfigId);
+    return (cur?.provider || '').toLowerCase() || grouped[0]?.[0] || null;
+  }, [list, currentConfigId, grouped]);
+  const [activeProvider, setActiveProvider] = useState<string | null>(initialProvider);
+  useEffect(() => { if (activeProvider == null && initialProvider) setActiveProvider(initialProvider); }, [initialProvider, activeProvider]);
+  const activeConfigs = useMemo(
+    () => grouped.find(([p]) => p === activeProvider)?.[1] ?? [],
+    [grouped, activeProvider],
+  );
+
+  if (!list) return <div className="v2-pickmodal-empty">加载中…</div>;
   if (list.length === 0) {
     return (
-      <div className="v2-ctxpop-empty">
-        {wantMedia ? '没有标为"创作可见"的模型。去 设置 · 模型 录入。' : '还没有可用的模型，去 设置 · 模型 录入。'}
+      <div className="v2-pickmodal-empty">
+        {wantMedia ? '没有创作模型。去 设置 · 模型 添加。' : '没有对话模型。去 设置 · 模型 添加。'}
       </div>
     );
   }
   return (
-    <div className="v2-ctxpop-list">
-      {list.map((c) => (
-        <div
-          key={c.config_id}
-          className={`v2-ctxpop-item${c.config_id === currentConfigId ? ' active' : ''}`}
-          onClick={() => onPick(c)}
-        >
-          <div className="nm">{c.shortname || c.name}<small>{c.model || c.provider}</small></div>
-          <div className="tag">{c.provider}</div>
-        </div>
-      ))}
+    <div className="v2-pickmodal-split">
+      <aside className="v2-pickmodal-providers" role="listbox" aria-label="厂商">
+        {grouped.map(([provider, items]) => {
+          const hasCurrent = !!currentConfigId && items.some((c) => c.config_id === currentConfigId);
+          return (
+            <button
+              key={provider}
+              type="button"
+              role="option"
+              aria-selected={provider === activeProvider}
+              className={`v2-pickmodal-provider${provider === activeProvider ? ' on' : ''}${hasCurrent ? ' has-current' : ''}`}
+              onClick={() => setActiveProvider(provider)}
+            >
+              <span className="nm">{PICK_PROVIDER_LABELS[provider] || provider}</span>
+              <span className="cnt">{items.length}</span>
+            </button>
+          );
+        })}
+      </aside>
+      <div className="v2-pickmodal-models">
+        {activeConfigs.length === 0 ? (
+          <div className="v2-pickmodal-empty">该厂商下还没有可用模型。</div>
+        ) : (
+          <div className="v2-pickmodal-modellist">
+            {activeConfigs.map((c) => {
+              const isCurrent = c.config_id === currentConfigId;
+              return (
+                <button
+                  key={c.config_id}
+                  type="button"
+                  className={`v2-pick${isCurrent ? ' on' : ''}`}
+                  onClick={() => onPick(c)}
+                  aria-current={isCurrent || undefined}
+                >
+                  <div className="v2-pick-main">
+                    <div className="v2-pick-nm">{c.shortname || c.name}</div>
+                    <div className="v2-pick-ds">{c.model || '默认模型'}</div>
+                  </div>
+                  {isCurrent && <span className="v2-pick-check" aria-label="当前">✓</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
@@ -2055,7 +3074,10 @@ const ChipPanel: React.FC<{
   setCount: (v: number) => void;
   setNegative: (v: string) => void;
   close: () => void;
-}> = ({ which, cfg, setStyle, setAspect, setCount, setNegative, close }) => {
+  aspectOptions?: string[];
+  countMax?: number;
+  aspectHint?: string;
+}> = ({ which, cfg, setStyle, setAspect, setCount, setNegative, close, aspectOptions, countMax, aspectHint }) => {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
     window.addEventListener('keydown', onKey);
@@ -2066,11 +3088,15 @@ const ChipPanel: React.FC<{
     return <StylePanel cfg={cfg} setStyle={setStyle} close={close} />;
   }
   if (which === 'aspect') {
+    const aspects = aspectOptions && aspectOptions.length > 0 ? aspectOptions : ASPECT_OPTIONS;
     return (
       <div className="v2-panel">
-        <div className="v2-panel-hd">比例</div>
+        <div className="v2-panel-hd">
+          比例
+          {aspectHint ? <span className="v2-panel-hint" style={{ marginLeft: 8, opacity: 0.6, fontSize: 12 }}>{aspectHint}</span> : null}
+        </div>
         <div className="v2-options">
-          {ASPECT_OPTIONS.map((a) => (
+          {aspects.map((a) => (
             <div key={a} className={`v2-opt${cfg.aspect === a ? ' active' : ''}`} onClick={() => { setAspect(a); }}>
               <span>{a}</span>
             </div>
@@ -2080,11 +3106,13 @@ const ChipPanel: React.FC<{
     );
   }
   if (which === 'count') {
+    const max = countMax ?? 8;
+    const opts = COUNT_OPTIONS.filter((n) => n <= max);
     return (
       <div className="v2-panel">
         <div className="v2-panel-hd">一次画几张</div>
         <div className="v2-options">
-          {COUNT_OPTIONS.map((n) => (
+          {opts.map((n) => (
             <div key={n} className={`v2-opt${cfg.count === n ? ' active' : ''}`} onClick={() => { setCount(n); }}>
               <span>{n} 张</span>
             </div>
@@ -2287,7 +3315,10 @@ const StreamView: React.FC<{ content: string; reasoning: string }> = ({ content,
       {reasoning && <ThinkBlock reasoning={reasoning} streaming={true} hasContent={!!content} />}
       {content ? (
         <div className="v2-stream-md">
-          <MD text={content} />
+          {/* live=true 切到无 Shiki 的纯 markdown：流式时如果出现 fenced code，
+             逐 chunk 重 highlight 是顶级性能杀手；settled 后 MessageView 会用
+             MD_RICH 重新挂载并完成高亮。 */}
+          <MD text={content} live />
           <span className="v2-caret">▍</span>
         </div>
       ) : !reasoning && <p className="v2-pending">等候首字…</p>}
@@ -2303,12 +3334,13 @@ const ThinkingDots: React.FC = () => (
   </div>
 );
 
-const EmptyState: React.FC<{ title: string }> = ({ title }) => (
+const EmptyState: React.FC<{ title: string }> = React.memo(({ title }) => (
   <div className="v2-empty">
     <div className="v2-empty-title">{title || '新会话'}</div>
     <div className="v2-empty-sub">从下面开始聊 · Enter 发送 · Shift+Enter 换行 · 切到「创作」可以拖入参考图</div>
   </div>
-);
+));
+EmptyState.displayName = 'EmptyState';
 
 const SkeletonRows: React.FC<{ n: number }> = ({ n }) => (
   <>
@@ -2341,13 +3373,59 @@ function userInitials(): string {
   return n.slice(0, 1).toUpperCase();
 }
 
-const AgentIcon: React.FC<{ a: Session }> = ({ a }) => {
+const AgentIcon: React.FC<{ a: Session }> = React.memo(({ a }) => {
   if (a.is_primary) return <IconAgentPrimary />;
   const key = (a.name || a.title || '').toLowerCase();
   if (/绘|画|paint|draw|art/.test(key)) return <IconAgentPainter />;
   if (/史|doc|记|note|写/.test(key)) return <IconAgentDoc />;
   if (/码|code|dev/.test(key)) return <IconAgentCode />;
   return <IconAgentDoc />;
-};
+});
+AgentIcon.displayName = 'AgentIcon';
+
+/** Sidebar Agent 行：React.memo + 稳定 props，长会话流式期间不再随父重渲。 */
+const AgentRow = React.memo<{
+  a: Session; active: boolean;
+  onOpen: (s: Session) => void;
+  onMore: (s: Session, e: React.MouseEvent) => void;
+}>(({ a, active, onOpen, onMore }) => (
+  <div
+    className={`v2-a${active ? ' active' : ''}`}
+    onClick={() => onOpen(a)}
+    title={a.name || a.title}
+  >
+    <div className="v2-side-av">
+      {a.avatar
+        ? <img src={a.avatar.startsWith('data:') ? a.avatar : `data:image/png;base64,${a.avatar}`} alt="" />
+        : <AgentIcon a={a} />}
+    </div>
+    <div className="v2-nm">
+      {a.name || a.title || '未命名'}
+      {a.is_primary && <span className="v2-pri">primary</span>}
+    </div>
+    <div className="v2-more" onClick={(e) => onMore(a, e)}>⋯</div>
+  </div>
+));
+AgentRow.displayName = 'AgentRow';
+
+/** Sidebar Chat 行：同 AgentRow，单独走是因为 markup 不同（无头像、teahouse 标记）。 */
+const ChatRow = React.memo<{
+  r: Session; active: boolean;
+  onOpen: (s: Session) => void;
+  onMore: (s: Session, e: React.MouseEvent) => void;
+}>(({ r, active, onOpen, onMore }) => {
+  const tea = (r as any).ext?.teahouse === true;
+  return (
+    <div
+      className={`v2-r${active ? ' active' : ''}${tea ? ' teahouse' : ''}`}
+      onClick={() => onOpen(r)}
+      title={r.name || r.title}
+    >
+      <span className="v2-t">{r.name || r.title || r.preview_text || (tea ? '新聊天' : '空会话')}</span>
+      <span className="v2-more" onClick={(e) => onMore(r, e)}>⋯</span>
+    </div>
+  );
+});
+ChatRow.displayName = 'ChatRow';
 
 export default ClientShell;

@@ -18,6 +18,11 @@ contextBridge.exposeInMainWorld('chateeElectron', {
     interrupt: (cwd) => ipcRenderer.invoke('localAgent:interrupt', { cwd }),
     sessionClose: (cwd) => ipcRenderer.invoke('localAgent:sessionClose', { cwd }),
     setPermMode: (cwd, permMode) => ipcRenderer.invoke('localAgent:setPermMode', { cwd, permMode }),
+    setModel: (cwd, model) => ipcRenderer.invoke('localAgent:setModel', { cwd, model }),
+    listMcp: (cwd) => ipcRenderer.invoke('localAgent:listMcp', { cwd }),
+    setMcp: (cwd, mcp) => ipcRenderer.invoke('localAgent:setMcp', { cwd, mcp }),
+    mcpStatus: (cwd) => ipcRenderer.invoke('localAgent:mcpStatus', { cwd }),
+    reconnectMcp: (cwd, name) => ipcRenderer.invoke('localAgent:reconnectMcp', { cwd, name }),
     // 订阅流式事件；返回取消订阅函数。
     onEvent: (cb) => {
       const handler = (_e, data) => cb(data);

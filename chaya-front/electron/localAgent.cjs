@@ -18,6 +18,8 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
+const cursorDriver = require('./cursorDriver.cjs');
 
 /* GUI 启动的 Electron 在 macOS 下 PATH 很贫瘠，CLI 往往找不到。
  * 补上常见安装目录，并据此解析二进制全路径。 */
@@ -40,6 +42,43 @@ function augmentedPath() {
 
 function childEnv() {
   return { ...process.env, PATH: augmentedPath() };
+}
+
+/* ------------------------------------------------------------------ *
+ * MCP：读 ~/.claude.json（Claude Code CLI 配置）里的 MCP server，
+ * 让用户在本地 agent 里按需启用（默认全关，保持冷启快）。
+ * ------------------------------------------------------------------ */
+function readClaudeJson() {
+  try { return JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8')); }
+  catch { return {}; }
+}
+/** 列出某 cwd 可用的 MCP server（全局 + 该项目级），返回 [{name, scope, type}]（不含密钥）。 */
+function listMcpConfigs(cwd) {
+  const j = readClaudeJson();
+  const out = [];
+  const seen = new Set();
+  const add = (m, scope) => {
+    for (const name in (m || {})) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const c = m[name] || {};
+      out.push({ name, scope, type: c.type || (c.command ? 'stdio' : 'http') });
+    }
+  };
+  const proj = (j.projects && cwd && j.projects[cwd]) ? j.projects[cwd].mcpServers : null;
+  add(proj, 'project');
+  add(j.mcpServers, 'global');
+  return out;
+}
+/** 把启用的 MCP 名字解析成 SDK options.mcpServers（从 ~/.claude.json 取真实配置含密钥）。 */
+function resolveMcp(cwd, names) {
+  if (!Array.isArray(names) || names.length === 0) return undefined;
+  const j = readClaudeJson();
+  const proj = (j.projects && cwd && j.projects[cwd]) ? (j.projects[cwd].mcpServers || {}) : {};
+  const glob = j.mcpServers || {};
+  const out = {};
+  for (const name of names) { const c = proj[name] || glob[name]; if (c) out[name] = c; }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** 在 PATH（含补充目录）里找可执行文件全路径，找不到返回 null。 */
@@ -69,6 +108,7 @@ function getVersion(bin) {
  * ------------------------------------------------------------------ */
 const PROVIDERS = {
   claude: { id: 'claude', label: 'Claude Code', bin: 'claude', live: true },
+  cursor: { id: 'cursor', label: 'Cursor', bin: 'cursor-agent', live: true, needsApiKey: true },
   codex: { id: 'codex', label: 'Codex', bin: 'codex', live: false },
   gemini: { id: 'gemini', label: 'Gemini', bin: 'gemini', live: false },
 };
@@ -165,6 +205,7 @@ async function findProjectDir(cwd) {
 
 /** 列出某 cwd 下的 Claude 会话（轻量：只取标题/首条提示/时间）。 */
 async function listSessions(provider, cwd) {
+  if (provider === 'cursor') return cursorListSessions(cwd);
   // Only Claude has session-history scanning wired up. codex/gemini are
   // detection-only stubs for now, so return empty rather than leaking Claude's
   // sessions into another provider's tree. (Their dirs get added when run is.)
@@ -219,6 +260,7 @@ async function peekSession(jsonlPath) {
 
 /** 完整读取一个会话，归一化成可渲染的消息列表。 */
 async function readSession(provider, cwd, sessionId) {
+  if (provider === 'cursor') return cursorReadSession(cwd, sessionId);
   if ((provider || 'claude') !== 'claude') return { messages: [] };
   const dir = await findProjectDir(cwd);
   if (!dir) return { messages: [] };
@@ -241,6 +283,7 @@ async function readSession(provider, cwd, sessionId) {
 /** 删除一个会话 transcript。默认移到系统回收站（可恢复）；不支持则硬删。
  *  安全检查：目标必须落在 ~/.claude/projects 之内，且文件名是合法 sessionId。 */
 async function deleteSession(provider, cwd, sessionId) {
+  if (provider === 'cursor') return cursorDeleteSession(cwd, sessionId);
   if ((provider || 'claude') !== 'claude') return { ok: false, error: 'unsupported provider' };
   if (!sessionId || /[/\\]/.test(sessionId)) return { ok: false, error: 'bad sessionId' };
   const dir = await findProjectDir(cwd);
@@ -448,7 +491,7 @@ function clearPerms(cwd, message) {
 }
 
 /** 起一个常驻会话（懒创建，首条消息时调用）。失败返回 null 并已发 error 事件。 */
-function startSession(sender, { cwd, provider, sessionId, permMode }) {
+function startSession(sender, { cwd, provider, sessionId, permMode, model, mcp }) {
   const def = PROVIDERS[provider || 'claude'];
   if (!def || !def.live) { sender.send('localAgent:event', { cwd, ev: { type: 'error', error: `${provider} 暂不支持实时对话` } }); return null; }
   const bin = resolveBin(def.bin);
@@ -489,7 +532,8 @@ function startSession(sender, { cwd, provider, sessionId, permMode }) {
     });
   });
 
-  const session = { input, ac, query: null };
+  const mcpServers = resolveMcp(cwd, mcp);
+  const session = { input, ac, query: null, model: model || null, mcp: Array.isArray(mcp) ? mcp.slice() : [] };
   sessions.set(cwd, session);
 
   (async () => {
@@ -508,15 +552,21 @@ function startSession(sender, { cwd, provider, sessionId, permMode }) {
           // 不连 ~/.claude.json 的环境 MCP（feishu/gitlab/ruflo 等）——本地编码 agent 用不到，
           // 而连接它们会给每次冷启加好几秒。需要再单独配。
           strictMcpConfig: true,
+          ...(mcpServers ? { mcpServers } : {}),
           includePartialMessages: true,
           pathToClaudeCodeExecutable: bin,
           abortController: ac,
           env: childEnv(),
           stderr: (data) => emit({ type: 'stderr', text: String(data) }),
+          ...(model ? { model } : {}),
           ...(sessionId ? { resume: sessionId } : {}),
         },
       });
       session.query = q;
+      // 拉一次该 provider/账号下可选模型，推给渲染层填「模型选择器」（/model 等价）。
+      if (typeof q.supportedModels === 'function') {
+        q.supportedModels().then((ms) => emit({ type: 'models', models: ms })).catch(() => {});
+      }
       for await (const msg of q) { if (!emit(msg)) break; }   // 帧没了就停，别空转
     } catch (e) {
       if (!ac.signal.aborted) emit({ type: 'error', error: String(e && e.message || e) });
@@ -530,25 +580,94 @@ function startSession(sender, { cwd, provider, sessionId, permMode }) {
   return session;
 }
 
-/** 发一个回合：会话不存在则懒创建（带 resume），然后把用户消息推进流。 */
-function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode }) {
+/** 发一个回合：会话不存在则懒创建（带 resume），然后把用户消息推进流。
+ *  模型在发送这一刻才应用：冷启已用 options.model 起；暖会话且模型变了才 setModel
+ *  （setModel 会注入「Set model to …」回显，渲染层会过滤掉，不当对话显示）。 */
+async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode, model, mcp, apiKey }) {
+  if (provider === 'cursor') return cursorSend(sender, { cwd, sessionId, prompt, permMode, model, apiKey });
   let s = sessions.get(cwd);
-  if (!s) s = startSession(sender, { cwd, provider, sessionId, permMode });
+  if (!s) s = startSession(sender, { cwd, provider, sessionId, permMode, model, mcp });
   if (!s) return { ok: false };
+  const want = model || null;
+  if (s.query && want !== s.model && typeof s.query.setModel === 'function') {
+    try { await s.query.setModel(want || undefined); } catch { /* */ }
+  }
+  s.model = want;
   s.input.push({ type: 'user', message: { role: 'user', content: prompt }, parent_tool_use_id: null });
   return { ok: true };
 }
 
 /** 预热：打开/聚焦会话时就起常驻进程（提前付冷启 + resume 读盘），
  *  等用户真正发送时已是暖的——首 token 从 ~10s 降到 ~2s。已有则不重起。 */
-function sessionWarm(sender, { cwd, provider, sessionId, permMode }) {
+function sessionWarm(sender, { cwd, provider, sessionId, permMode, model, mcp, apiKey }) {
+  if (provider === 'cursor') return cursorWarm(sender, { cwd, sessionId, permMode, model, apiKey });
   if (sessions.has(cwd)) return { ok: true };
-  const s = startSession(sender, { cwd, provider, sessionId, permMode });
+  const s = startSession(sender, { cwd, provider, sessionId, permMode, model, mcp });
   return { ok: !!s };
+}
+
+/** 运行中改 MCP（/mcp 等价）：重设该会话启用的 MCP server，并回推连接状态。 */
+async function sessionSetMcp({ cwd, mcp }) {
+  const s = sessions.get(cwd);
+  if (!s) return { ok: false };
+  s.mcp = Array.isArray(mcp) ? mcp.slice() : [];
+  if (s.query && typeof s.query.setMcpServers === 'function') {
+    try {
+      await s.query.setMcpServers(resolveMcp(cwd, s.mcp) || {});
+      if (typeof s.query.mcpServerStatus === 'function') {
+        const st = await s.query.mcpServerStatus();
+        if (!s.ac.signal.aborted && !s.sender?.isDestroyed?.()) {
+          // 通过事件回推（emit 仅在 startSession 闭包里；这里直接用 sessions 的 sender 不可得，
+          // 故由渲染层在 system/init 与轮询时读取；此处仅确保已应用）。
+        }
+        return { ok: true, servers: st };
+      }
+    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+    return { ok: true };
+  }
+  return { ok: true };   // 会话未起：下次发送/预热会以 s.mcp 起
+}
+
+/** 探测 MCP 连接状态。 */
+async function sessionMcpStatus({ cwd }) {
+  const s = sessions.get(cwd);
+  if (s?.query && typeof s.query.mcpServerStatus === 'function') {
+    try { return { ok: true, servers: await s.query.mcpServerStatus() }; }
+    catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  }
+  return { ok: false };
+}
+
+/** 重连某个 MCP server（不通时用），完成后回最新状态。 */
+async function sessionReconnectMcp({ cwd, name }) {
+  const s = sessions.get(cwd);
+  if (s?.query && typeof s.query.reconnectMcpServer === 'function') {
+    try {
+      await s.query.reconnectMcpServer(name);
+      const servers = typeof s.query.mcpServerStatus === 'function' ? await s.query.mcpServerStatus() : undefined;
+      return { ok: true, servers };
+    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  }
+  return { ok: false };
+}
+
+/** 运行中切模型（/model 等价）。会话不存在则忽略（下次发送会以选中的 model 起）。 */
+async function sessionSetModel({ cwd, model }) {
+  const cu = cursorSessions.get(cwd);
+  if (cu) { cu.model = model || null; return { ok: true }; }   // cursor 一次性进程：下回合 spawn 时生效
+  const s = sessions.get(cwd);
+  if (s?.query && typeof s.query.setModel === 'function') {
+    try { await s.query.setModel(model || undefined); } catch { /* */ }
+    s.model = model || null;   // 记录已应用，发送时不再重复 setModel
+    return { ok: true };
+  }
+  return { ok: false };
 }
 
 /** 中断当前回合，但保留常驻会话（可继续发）。 */
 async function sessionInterrupt({ cwd }) {
+  const cu = cursorSessions.get(cwd);
+  if (cu) { try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ } return { ok: true }; }
   const s = sessions.get(cwd);
   if (s?.query) { try { await s.query.interrupt(); } catch { /* ignore */ } return { ok: true }; }
   return { ok: false };
@@ -556,6 +675,13 @@ async function sessionInterrupt({ cwd }) {
 
 /** 关闭某标签的常驻会话，回收进程（切会话/新建/关标签/换 provider 时调）。 */
 function sessionClose({ cwd }) {
+  const cu = cursorSessions.get(cwd);
+  if (cu) {
+    cursorSessions.delete(cwd);
+    try { if (cu.ac) cu.ac.abort(); } catch { /* */ }
+    try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ }
+    return { ok: true };
+  }
   const s = sessions.get(cwd);
   if (!s) return { ok: false };
   sessions.delete(cwd);
@@ -567,6 +693,8 @@ function sessionClose({ cwd }) {
 
 /** 会话进行中切换权限模式（Tab 切档即时生效）。 */
 async function sessionSetPermMode({ cwd, permMode }) {
+  const cu = cursorSessions.get(cwd);
+  if (cu) { cu.permMode = permMode || 'force'; return { ok: true }; }   // cursor 一次性进程：下回合 spawn 时生效
   const mode = PERM_MODES.includes(permMode) ? permMode : 'default';
   const s = sessions.get(cwd);
   if (s?.query) { try { await s.query.setPermissionMode(mode); } catch { /* */ } return { ok: true }; }
@@ -579,6 +707,223 @@ function permissionRespond(permId, decision) {
   pendingPerms.delete(permId);
   e.settle(decision);   // settle 规整 allow/deny 成 SDK 要求的形状
   return { ok: true };
+}
+
+/* ------------------------------------------------------------------ *
+ * 实时驱动 Cursor —— 无状态一次性进程（每回合 spawn 一次 `cursor-agent -p`）。
+ * 与 Claude 的常驻 query 不同：cursor headless 没有 streaming-input 常驻，靠
+ * --resume <session_id> 续上下文；首回合无 resume，从 init 捕获 session_id 留作下回合。
+ * 事件经 cursorDriver.normalizeEvent 翻成渲染层的 SDK 形状，渲染层零改动。
+ * headless 必须 CURSOR_API_KEY（渲染层从后端凭据拉到、随 payload 传入）。
+ * ------------------------------------------------------------------ */
+const cursorSessions = new Map();   // cwd -> { child, ac, sessionId, model, permMode, apiKey }
+
+/** 可选模型是账号级、基本不变 —— 整个进程只拉一次（`cursor-agent models` 实测 ~4.7s，
+ *  绝不能每回合都跑）。缓存命中即同步回推；并发请求复用同一次拉取。 */
+let _cursorModels = null;       // ModelInfo[] | null
+let _cursorModelsInflight = null;
+function fetchCursorModels(bin, apiKey, emit) {
+  if (_cursorModels) { if (_cursorModels.length) emit({ type: 'models', models: _cursorModels }); return; }
+  if (!_cursorModelsInflight) {
+    _cursorModelsInflight = new Promise((resolve) => {
+      execFile(bin, ['models'], { env: { ...childEnv(), ...(apiKey ? { CURSOR_API_KEY: apiKey } : {}) }, timeout: 10000 }, (err, stdout) => {
+        _cursorModels = err ? [] : cursorDriver.parseModels(stdout);
+        _cursorModelsInflight = null;
+        resolve(_cursorModels);
+      });
+    });
+  }
+  _cursorModelsInflight.then((models) => { if (models && models.length) emit({ type: 'models', models }); });
+}
+
+/** 发一个 cursor 回合：spawn 进程、流式解析、按 cwd 路由事件回渲染层。 */
+function cursorSend(sender, { cwd, sessionId, prompt, permMode, model, apiKey }) {
+  const bin = resolveBin('cursor-agent');
+  if (!bin) { sender.send('localAgent:event', { cwd, ev: { type: 'error', error: '未找到 cursor-agent，请确认已安装' } }); return { ok: false }; }
+  const prev = cursorSessions.get(cwd);
+  const key = apiKey || (prev && prev.apiKey) || null;
+  if (!key) { sender.send('localAgent:event', { cwd, ev: { type: 'error', error: '需要 Cursor API Key —— 请在设置里录入' } }); return { ok: false }; }
+  // 防孤儿：上回合若有未退的子进程（异常路径，渲染层 running 已防双发），先收掉再起新的，避免事件串扰。
+  if (prev && prev.child) { try { prev.ac && prev.ac.abort(); } catch { /* */ } try { prev.child.kill('SIGTERM'); } catch { /* */ } prev.child = null; }
+
+  const ac = new AbortController();
+  const emit = (ev) => {
+    if (sender.isDestroyed()) { try { ac.abort(); } catch { /* */ } return false; }
+    try { sender.send('localAgent:event', { cwd, ev }); return true; }
+    catch { try { ac.abort(); } catch { /* */ } return false; }
+  };
+
+  // 续接 id：优先用本会话上回合捕获的 session_id，否则用打开历史会话传入的 sessionId。
+  const resumeId = (prev && prev.sessionId) || sessionId || null;
+  const args = cursorDriver.spawnArgs({ prompt, sessionId: resumeId, model, permMode });
+
+  let child;
+  try {
+    child = spawn(bin, args, { cwd, env: { ...childEnv(), CURSOR_API_KEY: key }, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) {
+    emit({ type: 'error', error: String(e && e.message || e) });
+    return { ok: false };
+  }
+
+  const session = { child, ac, sessionId: resumeId, model: model || null, permMode: permMode || 'force', apiKey: key };
+  cursorSessions.set(cwd, session);
+  ac.signal.addEventListener('abort', () => { try { child.kill('SIGTERM'); } catch { /* */ } });
+
+  const ctx = cursorDriver.makeTurnState();
+  let sawResult = false;
+  let stderrBuf = '';
+  let buf = '';
+  child.stdout.on('data', (d) => {
+    buf += d.toString('utf8');
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+      if (!line.trim()) continue;
+      let o;
+      try { o = JSON.parse(line); } catch { continue; }   // 非 JSON（trust 提示等）→ 跳过
+      for (const ev of cursorDriver.normalizeEvent(o, ctx)) {
+        if (ev.type === 'result') sawResult = true;
+        if (!emit(ev)) return;
+      }
+      if (ctx.sessionId) session.sessionId = ctx.sessionId;   // 留作下回合 --resume
+    }
+  });
+  child.stderr.on('data', (d) => { stderrBuf += d.toString('utf8'); });
+  child.on('error', (e) => { emit({ type: 'error', error: String(e && e.message || e) }); emit({ type: 'session_closed' }); });
+  child.on('close', (code) => {
+    session.child = null;
+    if (!sawResult) {
+      const msg = stderrBuf.trim() || (code ? `cursor-agent 退出码 ${code}` : '会话结束');
+      emit({ type: 'error', error: msg });
+      emit({ type: 'session_closed' });   // 解除「处理中」
+    }
+    // 正常结束（已收到 result）：会话保留在 map（含 session_id）供下回合续接，进程已退。
+  });
+
+  // 模型列表已缓存才同步回推（绝不在 send 里 spawn `models`——那会每回合多花 ~4.7s）。
+  // 未缓存时不在此拉取：warm 已负责首拉；真没 warm 过也不该拖慢这一回合。
+  if (_cursorModels && _cursorModels.length) emit({ type: 'models', models: _cursorModels });
+  return { ok: true };
+}
+
+/** cursor 预热：起不动常驻进程，只登记会话状态（让发送前的 setModel/permMode 生效）+ 拉模型列表。 */
+function cursorWarm(sender, { cwd, sessionId, permMode, model, apiKey }) {
+  const bin = resolveBin('cursor-agent');
+  if (!bin) return { ok: false };
+  const prev = cursorSessions.get(cwd);
+  const key = apiKey || (prev && prev.apiKey) || null;
+  if (!prev) cursorSessions.set(cwd, { child: null, ac: null, sessionId: sessionId || null, model: model || null, permMode: permMode || 'force', apiKey: key });
+  else { if (apiKey) prev.apiKey = key; if (model !== undefined) prev.model = model || null; if (permMode) prev.permMode = permMode; }
+  if (key) fetchCursorModels(bin, key, (ev) => { try { sender.send('localAgent:event', { cwd, ev }); } catch { /* */ } });
+  return { ok: true };
+}
+
+/* ------------------------------------------------------------------ *
+ * Cursor 历史落盘读取 —— ~/.cursor/chats/<md5(cwd)>/<sessionId>/store.db
+ *   <sessionId>（agent-uuid 目录名）= --resume 的 id。
+ *   用系统 sqlite3 CLI 读（自动处理 WAL，零原生依赖）：meta(JSON) + blobs(内容寻址)。
+ *   根 blob protobuf 的 field-1 = 有序消息哈希；消息 blob = JSON。
+ * ------------------------------------------------------------------ */
+function cursorChatsDir(cwd) {
+  return path.join(os.homedir(), '.cursor', 'chats', crypto.createHash('md5').update(cwd).digest('hex'));
+}
+
+let _sqliteBin;
+function sqliteBin() {
+  if (_sqliteBin === undefined) _sqliteBin = resolveBin('sqlite3') || '/usr/bin/sqlite3';
+  return _sqliteBin;
+}
+
+function sqliteQuery(db, sql) {
+  return new Promise((resolve) => {
+    execFile(sqliteBin(), [db, sql], { maxBuffer: 128 * 1024 * 1024, timeout: 15000 }, (err, stdout) => {
+      if (err) return resolve('');
+      resolve(String(stdout || ''));
+    });
+  });
+}
+
+/** 读一个会话的全部消息（+ 派生 preview/turns）。失败返回 null。 */
+async function cursorLoadSession(db) {
+  const metaHex = (await sqliteQuery(db, 'SELECT value FROM meta LIMIT 1')).trim();
+  if (!metaHex) return null;
+  let meta;
+  try { meta = JSON.parse(Buffer.from(metaHex, 'hex').toString('utf8')); } catch { return null; }
+  if (!meta || !meta.latestRootBlobId) return { meta, messages: [], preview: null, turns: 0 };
+
+  // 一次性取出所有 blob（id<TAB>hex），在内存里组 DAG。
+  const dump = await sqliteQuery(db, "SELECT id || char(9) || hex(data) FROM blobs");
+  const blobs = new Map();
+  for (const line of dump.split('\n')) {
+    const tab = line.indexOf('\t');
+    if (tab < 0) continue;
+    const id = line.slice(0, tab);
+    const hex = line.slice(tab + 1).trim();
+    if (id && hex) blobs.set(id, Buffer.from(hex, 'hex'));
+  }
+  const root = blobs.get(meta.latestRootBlobId);
+  if (!root) return { meta, messages: [], preview: null, turns: 0 };
+
+  const messages = [];
+  let preview = null;
+  let turns = 0;
+  for (const h of cursorDriver.rootChildHashes(root)) {
+    const b = blobs.get(h);
+    if (!b) continue;
+    let o;
+    try { o = JSON.parse(b.toString('utf8')); } catch { continue; }
+    if (o.role === 'user') {
+      turns += 1;
+      if (!preview) {
+        const txt = cursorDriver.cleanUserText(typeof o.content === 'string'
+          ? o.content
+          : Array.isArray(o.content) ? o.content.filter((p) => p && p.type === 'text').map((p) => p.text || '').join('\n') : '');
+        if (txt) preview = txt.slice(0, 120);
+      }
+    }
+    const m = cursorDriver.mapStoredMessage(o);
+    if (m) messages.push(m);
+  }
+  return { meta, messages, preview, turns };
+}
+
+async function cursorListSessions(cwd) {
+  const dir = cursorChatsDir(cwd);
+  let uuids;
+  try { uuids = (await fsp.readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name); }
+  catch { return []; }
+  const out = await Promise.all(uuids.map(async (sessionId) => {
+    const db = path.join(dir, sessionId, 'store.db');
+    let mtime = 0;
+    try { mtime = (await fsp.stat(db)).mtimeMs; } catch { return null; }
+    const loaded = await cursorLoadSession(db);
+    if (!loaded) return null;
+    const name = loaded.meta && loaded.meta.name;
+    const title = (name && name !== 'New Agent') ? name : (loaded.preview || null);
+    return { sessionId, title, preview: loaded.preview, turns: loaded.turns, updatedAt: mtime || (loaded.meta && loaded.meta.createdAt) || 0 };
+  }));
+  return out.filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+async function cursorReadSession(cwd, sessionId) {
+  const db = path.join(cursorChatsDir(cwd), sessionId, 'store.db');
+  const loaded = await cursorLoadSession(db);
+  return { messages: loaded ? loaded.messages : [] };
+}
+
+async function cursorDeleteSession(cwd, sessionId) {
+  if (!sessionId || /[/\\]/.test(sessionId)) return { ok: false, error: 'bad sessionId' };
+  const root = path.join(os.homedir(), '.cursor', 'chats');
+  const target = path.join(cursorChatsDir(cwd), sessionId);
+  if (!target.startsWith(root + path.sep)) return { ok: false, error: 'out of bounds' };
+  try {
+    const { shell } = require('electron');
+    await shell.trashItem(target);
+    return { ok: true, trashed: true };
+  } catch {
+    try { await fsp.rm(target, { recursive: true, force: true }); return { ok: true, trashed: false }; }
+    catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -604,6 +949,11 @@ function registerLocalAgent(ipcMain, dialog) {
   ipcMain.handle('localAgent:interrupt', (_e, { cwd }) => sessionInterrupt({ cwd }));
   ipcMain.handle('localAgent:sessionClose', (_e, { cwd }) => sessionClose({ cwd }));
   ipcMain.handle('localAgent:setPermMode', (_e, { cwd, permMode }) => sessionSetPermMode({ cwd, permMode }));
+  ipcMain.handle('localAgent:setModel', (_e, { cwd, model }) => sessionSetModel({ cwd, model }));
+  ipcMain.handle('localAgent:listMcp', (_e, { cwd }) => listMcpConfigs(cwd));
+  ipcMain.handle('localAgent:setMcp', (_e, { cwd, mcp }) => sessionSetMcp({ cwd, mcp }));
+  ipcMain.handle('localAgent:mcpStatus', (_e, { cwd }) => sessionMcpStatus({ cwd }));
+  ipcMain.handle('localAgent:reconnectMcp', (_e, { cwd, name }) => sessionReconnectMcp({ cwd, name }));
 }
 
 module.exports = {

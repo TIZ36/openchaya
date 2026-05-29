@@ -24,27 +24,43 @@ interface Props {
   onClose: () => void;
 }
 
-type Tab = 'account' | 'prefs' | 'rag' | 'models' | 'mcp' | 'localagent';
+type Tab = 'account' | 'appearance' | 'prefs' | 'services' | 'models' | 'mcp' | 'localagent';
 
-const TAB_GROUPS: { group: string; hint: string; items: { id: Tab; label: string }[] }[] = [
+/** 三段分组，按"范围"而不是"对谁生效"分：
+ *  · 个人 — 你的账号与本机偏好
+ *  · 能力 — 跨闲聊 / agent 共用的模型与外部能力
+ *  · 桌面 — 仅桌面版（Electron）才有的本机 agent
+ *  比之前的"基础设置 / Agent 设置"语义更准（RAG/MCP 闲聊也会用到，不只是 agent）。
+ *  Hint 行去掉 —— label 已自明，多一行只是噪声，让 nav 高度更安静。
+ */
+const TAB_GROUPS: { group: string; items: { id: Tab; label: string }[] }[] = [
   {
-    group: '基础设置',
-    hint: '对闲聊和 agent 都生效',
+    group: '个人',
     items: [
-      { id: 'account',  label: '账号' },
-      { id: 'prefs',    label: '偏好' },
-      { id: 'models',   label: '模型' },
-      ...(isLocalAgentAvailable() ? [{ id: 'localagent' as Tab, label: 'Local Agents' }] : []),
+      { id: 'account',    label: '账号' },
+      { id: 'appearance', label: '外观' },
+      { id: 'prefs',      label: '偏好' },
     ],
   },
   {
-    group: 'Agent 设置',
-    hint: '仅 agent 配置后生效',
+    group: '能力',
     items: [
-      { id: 'rag',      label: '知识 / RAG' },
-      { id: 'mcp',      label: 'MCP 工具' },
+      { id: 'models',  label: '模型' },
+      { id: 'mcp',     label: 'MCP 工具' },
     ],
   },
+  {
+    group: '外部',
+    items: [
+      { id: 'services', label: '服务' },
+    ],
+  },
+  ...(isLocalAgentAvailable() ? [{
+    group: '桌面',
+    items: [
+      { id: 'localagent' as Tab, label: 'Local Agents' },
+    ],
+  }] : []),
 ];
 
 // FontId slots are kept for storage compatibility; mapping:
@@ -74,6 +90,7 @@ const GLASS_ZONES: { id: GlassZone; label: string; sub: string }[] = [
   { id: 'menu',     label: '菜单 / 抽屉', sub: '右键菜单、侧边抽屉浮层' },
   { id: 'modal',    label: '弹窗背景',    sub: '打开设置等弹窗时，背后界面磨砂下沉' },
   { id: 'sidebar',  label: '侧栏',        sub: '会自动叠加微弱环境层，玻璃才显现' },
+  { id: 'main',     label: '主界面',      sub: '白卡片本体磨砂；与侧栏一起开效果最佳' },
   { id: 'topbar',   label: '顶栏',        sub: '消息从标题栏下方滚过、被柔化' },
   { id: 'bubble',   label: '用户气泡',    sub: '慎用：正文区加玻璃可能影响可读性' },
 ];
@@ -87,11 +104,8 @@ export const GLASS_DEFAULT_ZONES: GlassZone[] = ['composer', 'menu', 'modal'];
 // surface = swatch canvas (dark-first brands show their dark bg);
 // ramp = [tint, base, deep] accent layers shown as chips
 const THEMES: { id: ColorTheme; label: string; sub: string; surface: string; ramp: [string, string, string] }[] = [
-  { id: 'default',   label: '极简',      sub: '纯白单色',   surface: '#ffffff', ramp: ['#e6e6e6', '#6e6e6e', '#0d0d0d'] },
-  { id: 'anthropic', label: 'Anthropic', sub: '象牙陶土',   surface: '#faf6f1', ramp: ['#f5e5de', '#d97757', '#c15f3c'] },
-  { id: 'warm',      label: 'Warm',      sub: '纸感琥珀',   surface: '#faf6ee', ramp: ['#f0e1c6', '#c8923f', '#8a5824'] },
-  { id: 'cursor',    label: 'Cursor',    sub: '极夜石墨青', surface: '#181818', ramp: ['#3a6f6a', '#82d2ce', '#c2ece9'] },
-  { id: 'linear',    label: 'Linear',    sub: '极夜靛蓝',   surface: '#08090a', ramp: ['#3a3f7a', '#5e6ad2', '#8299ff'] },
+  { id: 'anthropic', label: 'Anthropic', sub: '象牙陶土',   surface: '#faf9f5', ramp: ['#f5e5de', '#d97757', '#c15f3c'] },
+  { id: 'cursor',    label: 'Cursor',    sub: '极夜石墨青', surface: '#0e0f12', ramp: ['#162e2b', '#7eede0', '#b4f0e7'] },
 ];
 
 const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, onClose }) => {
@@ -115,7 +129,6 @@ const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, on
               <div key={g.group} className="v2-settings-nav-group">
                 <div className="v2-settings-nav-head">
                   <span className="grp">{g.group}</span>
-                  <span className="hint">{g.hint}</span>
                 </div>
                 {g.items.map((t) => (
                   <button
@@ -130,9 +143,10 @@ const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, on
             ))}
           </nav>
           <div className="v2-settings-pane">
-            {tab === 'account'  && <AccountPane onLogout={onLogout} />}
-            {tab === 'prefs'    && <PrefsPane settings={settings} updateSettings={updateSettings} />}
-            {tab === 'rag'      && <RagPane settings={settings} updateSettings={updateSettings} />}
+            {tab === 'account'    && <AccountPane onLogout={onLogout} />}
+            {tab === 'appearance' && <AppearancePane settings={settings} updateSettings={updateSettings} />}
+            {tab === 'prefs'      && <PrefsPane settings={settings} updateSettings={updateSettings} />}
+            {tab === 'services' && <ServicesPane settings={settings} updateSettings={updateSettings} />}
             {tab === 'models'   && <ModelsPane settings={settings} updateSettings={updateSettings} />}
             {tab === 'mcp'      && <McpPane />}
             {tab === 'localagent' && <LocalAgentPane settings={settings} updateSettings={updateSettings} />}
@@ -179,80 +193,96 @@ const Switch: React.FC<{ checked: boolean; onChange: (b: boolean) => void }> = (
 const AccountPane: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const u = api.getUser();
   const plan = u?.tenant?.plan || 'free';
-
-  const saved = (typeof window !== 'undefined' && localStorage.getItem('chatee_backend_url')) || '';
-  const [endpoint, setEndpoint] = useState(saved);
-  const [probe, setProbe] = useState<{ ok: boolean; text: string } | null>(null);
-  const [probing, setProbing] = useState(false);
-
-  const effective = getBackendUrl();
-  const trimmed = endpoint.trim();
-  const dirty = trimmed !== saved;
-
-  const onProbe = async () => {
-    const base = (trimmed || effective).replace(/\/+$/, '');
-    setProbing(true);
-    setProbe(null);
-    try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 5000);
-      const r = await fetch(`${base}/health`, { signal: ctrl.signal });
-      clearTimeout(t);
-      setProbe(r.ok ? { ok: true, text: `连接正常 · ${r.status}` } : { ok: false, text: `响应 ${r.status}` });
-    } catch (e: any) {
-      setProbe({ ok: false, text: e?.name === 'AbortError' ? '超时' : '连不上' });
-    } finally {
-      setProbing(false);
+  const displayName = u?.name || u?.email?.split('@')[0] || '—';
+  const initials = (() => {
+    const n = displayName;
+    if (!n || n === '—') return '?';
+    if (/[a-zA-Z]/.test(n[0])) {
+      const parts = n.split(/[^a-zA-Z]/).filter(Boolean);
+      return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || n[0].toUpperCase();
     }
-  };
-
-  const onSave = () => {
-    if (trimmed) localStorage.setItem('chatee_backend_url', trimmed);
-    else localStorage.removeItem('chatee_backend_url');
-    (window as any).__cachedBackendUrl = trimmed;
-    if (window.confirm('服务端点已保存，需要刷新页面才能生效。现在刷新？')) window.location.reload();
-  };
+    return n.slice(0, 1).toUpperCase();
+  })();
 
   return (
-    <>
-      <Section title="账号">
-        <Row label="邮箱"><div className="v2-set-val">{u?.email || '—'}</div></Row>
-        <Row label="名字"><div className="v2-set-val">{u?.name || '—'}</div></Row>
-        <Row label="套餐"><div className="v2-set-val"><span className="v2-pill">{String(plan).toUpperCase()}</span></div></Row>
-        {u?.tenant?.name && <Row label="租户"><div className="v2-set-val">{u.tenant.name}</div></Row>}
-      </Section>
-      <Section title="服务端点" hint="后端 API / WebSocket 的地址，所有请求都走这里；改完需刷新生效">
-        <Row label="后端地址" sub={`留空则自动推断 · 当前实际使用：${effective}`}>
-          <input
-            className="v2-set-select"
-            style={{ minWidth: 260 }}
-            value={endpoint}
-            onChange={(e) => { setEndpoint(e.target.value); setProbe(null); }}
-            placeholder="http://localhost:3002"
-          />
-        </Row>
-        <Row label="">
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            {probe && (
-              <span className={`v2-pill ${probe.ok ? 'ok' : 'mute'}`} style={!probe.ok ? { background: '#fff7ed', color: '#c2410c' } : undefined}>
-                {probe.text}
-              </span>
+    <div className="v2-acc">
+      {/* Identity card — avatar + name with email/plan/tenant inline as
+          icon+text meta. */}
+      <div className="v2-acc-id">
+        <div className="v2-acc-av">{initials}</div>
+        <div className="v2-acc-id-r">
+          <div className="v2-acc-nm">{displayName}</div>
+          <div className="v2-acc-meta">
+            <span className="v2-acc-meta-i" title="邮箱"><AccIconMail />{u?.email || '—'}</span>
+            <span className="v2-acc-meta-pill" title="套餐">{String(plan).toUpperCase()}</span>
+            {u?.tenant?.name && (
+              <span className="v2-acc-meta-i" title="租户"><AccIconBuilding />{u.tenant.name}</span>
             )}
-            <button className="v2-set-btn" onClick={() => void onProbe()} disabled={probing}>
-              {probing ? '探测中…' : '探测连接'}
-            </button>
-            <button className="v2-set-btn primary" onClick={onSave} disabled={!dirty}>保存并刷新</button>
           </div>
-        </Row>
-      </Section>
-      <Section title="登出">
-        <Row label="退出当前账号" sub="会清掉本机的 token，回到登入界面">
-          <button className="v2-set-danger" onClick={() => { if (window.confirm('退出当前账号？')) onLogout(); }}>退出</button>
-        </Row>
-      </Section>
-    </>
+        </div>
+      </div>
+
+      {/* Logout — single icon+text danger button. window.confirm carries
+          the warning. The previous endpoint/probe block was promoted out
+          of 账号 into the 外部 · 服务 tab. */}
+      <div className="v2-acc-foot">
+        <button
+          className="v2-set-danger v2-acc-btn"
+          onClick={() => { if (window.confirm('退出当前账号？')) onLogout(); }}
+        >
+          <AccIconPower /><span>退出账号</span>
+        </button>
+      </div>
+    </div>
   );
 };
+
+/* AccountPane-local 14px line icons. Inline so polish doesn't pollute the
+   shared icons.tsx, which is curated for surface-wide patterns. */
+const AccIconMail = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <path d="M3 7l9 6 9-6" />
+  </svg>
+);
+const AccIconBuilding = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <rect x="5" y="3" width="14" height="18" rx="1.5" />
+    <path d="M9 7h2M13 7h2M9 11h2M13 11h2M9 15h2M13 15h2" />
+  </svg>
+);
+const AccIconServer = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <rect x="3" y="5" width="18" height="6" rx="1.5" />
+    <rect x="3" y="13" width="18" height="6" rx="1.5" />
+    <circle cx="7" cy="8" r="0.6" fill="currentColor" />
+    <circle cx="7" cy="16" r="0.6" fill="currentColor" />
+  </svg>
+);
+const AccIconRadar = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M5 17a8 8 0 1 1 14 0" />
+    <path d="M8 17a5 5 0 1 1 8 0" />
+    <circle cx="12" cy="17" r="1.2" fill="currentColor" />
+  </svg>
+);
+const AccIconSave = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M5 5h11l3 3v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" />
+    <path d="M8 5v5h7V5M8 20v-6h8v6" />
+  </svg>
+);
+const AccIconCloud = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.4A4 4 0 0 1 17 18H7z" />
+  </svg>
+);
+const AccIconPower = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M12 4v8" />
+    <path d="M7 7a7 7 0 1 0 10 0" />
+  </svg>
+);
 
 const GlassControl: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => {
   const zones = settings.glassZones ?? GLASS_DEFAULT_ZONES;
@@ -285,10 +315,13 @@ const GlassControl: React.FC<{ settings: ClientSettings; updateSettings: (p: Par
   );
 };
 
-const PrefsPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => (
+/** 外观面板：明暗 · 主题 · 毛玻璃 · 字体 — 从 偏好 抽出独立的左导航 tab。
+ *  独立后用户更容易找到也更容易做"换皮"动作；旧的 偏好 现在专注对话行为
+ *  与出字速度。注意：所有 setting key 都不变，对外行为 / 持久化无影响。 */
+const AppearancePane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => (
   <>
-    <Section title="外观" hint="明暗与配色立即生效，整个界面跟随切换">
-      <Row label="明暗" sub="深色模式护眼；跟随系统会随 macOS 外观自动切换">
+    <Section title="明暗">
+      <Row label="" sub="跟随系统会随 macOS / Windows 外观自动切换">
         <div className="v2-seg">
           {APPEARANCES.map((a) => (
             <button
@@ -301,12 +334,14 @@ const PrefsPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partia
           ))}
         </div>
       </Row>
-      <Row label="颜色主题" sub="只换配色，不动排版字体">
+    </Section>
+    <Section title="主题">
+      <Row label="" sub="只换配色，不动排版字体">
         <div className="v2-theme-row">
           {THEMES.map((t) => (
             <button
               key={t.id}
-              className={`v2-theme-chip${(settings.theme ?? 'default') === t.id ? ' active' : ''}`}
+              className={`v2-theme-chip${(settings.theme ?? 'anthropic') === t.id ? ' active' : ''}`}
               onClick={() => updateSettings({ theme: t.id })}
               title={`${t.label} · ${t.sub}`}
             >
@@ -339,6 +374,11 @@ const PrefsPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partia
         ))}
       </div>
     </Section>
+  </>
+);
+
+const PrefsPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => (
+  <>
     <Section title="对话">
       <Row label="Enter 发送" sub="关闭后：Enter 换行，⌘/⌃+Enter 发送">
         <Switch checked={settings.cmdEnterToSend ?? true} onChange={(v) => updateSettings({ cmdEnterToSend: v })} />
@@ -353,21 +393,13 @@ const PrefsPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partia
         <Switch checked={!!settings.autoTTS} onChange={(v) => updateSettings({ autoTTS: v })} />
       </Row>
     </Section>
-    <Section title="出字速度" hint="模型 token 是突发到达的（一坨一坨蹦）。开启后逐字匀速显示，更像打字机。对话与 CLI 分别控制。">
-      <Row label="对话匀速出字" sub="闲聊 + agent 的流式回复按匀速吐字；关闭则到达即显示">
+    <Section title="出字速度" hint="模型 token 是突发到达的（一坨一坨蹦）。开启后逐字匀速显示，更像打字机。闲聊 / agent对话 / Local Agents 共用此速度。">
+      <Row label="匀速出字" sub="关闭则到达即显示">
         <Switch checked={settings.chatStreamSmooth ?? true} onChange={(v) => updateSettings({ chatStreamSmooth: v })} />
       </Row>
       {(settings.chatStreamSmooth ?? true) && (
-        <Row label="对话速度" sub="慢 = 明显打字机感；快 = 几乎贴近实时">
+        <Row label="速度" sub="慢 = 明显打字机感；快 = 几乎贴近实时">
           <SpeedSeg value={settings.chatStreamSpeed ?? 'normal'} onChange={(sp) => updateSettings({ chatStreamSpeed: sp })} />
-        </Row>
-      )}
-      <Row label="CLI 匀速出字" sub="Local Agents（本地 CLI）的流式回复按匀速吐字">
-        <Switch checked={settings.cliStreamSmooth ?? true} onChange={(v) => updateSettings({ cliStreamSmooth: v })} />
-      </Row>
-      {(settings.cliStreamSmooth ?? true) && (
-        <Row label="CLI 速度" sub="慢 = 明显打字机感；快 = 几乎贴近实时">
-          <SpeedSeg value={settings.cliStreamSpeed ?? 'normal'} onChange={(sp) => updateSettings({ cliStreamSpeed: sp })} />
         </Row>
       )}
     </Section>
@@ -389,35 +421,88 @@ const SpeedSeg: React.FC<{ value: TypeSpeed; onChange: (v: TypeSpeed) => void }>
   </div>
 );
 
-const LA_PROVIDERS: { id: 'claude' | 'codex' | 'gemini'; label: string; live: boolean }[] = [
-  { id: 'claude', label: 'Claude Code', live: true },
-  { id: 'codex', label: 'Codex', live: false },
-  { id: 'gemini', label: 'Gemini', live: false },
+type LAProviderId = 'claude' | 'cursor' | 'codex' | 'gemini';
+interface LAProvider {
+  id: LAProviderId;
+  label: string;
+  /** 一句话说明：是谁、谁做的 */
+  vendor: string;
+  /** CLI 命令名（用户校验是否安装） */
+  cli: string;
+  /** 是否已支持实时对话 */
+  live: boolean;
+  /** 安装链接（hover title） */
+  installUrl: string;
+}
+const LA_PROVIDERS: LAProvider[] = [
+  { id: 'claude', label: 'Claude Code', vendor: 'Anthropic',     cli: 'claude',       live: true,  installUrl: 'https://docs.anthropic.com/claude/docs/claude-code' },
+  { id: 'cursor', label: 'Cursor',       vendor: 'Cursor.com',   cli: 'cursor-agent', live: true,  installUrl: 'https://docs.cursor.com/cli' },
+  { id: 'codex',  label: 'Codex',        vendor: 'OpenAI',       cli: 'codex',        live: false, installUrl: 'https://platform.openai.com/docs/codex' },
+  { id: 'gemini', label: 'Gemini',       vendor: 'Google',       cli: 'gemini',       live: false, installUrl: 'https://github.com/google-gemini/gemini-cli' },
 ];
+
+/** Cursor headless 模式需要 API Key（cursor-agent 的交互式登录态不被 -p 模式认）。
+ *  存后端（/api/local-agent/credentials），驱动起进程时注入 CURSOR_API_KEY。 */
+const CursorKeyRow: React.FC = () => {
+  const [masked, setMasked] = useState<string | null>(null);   // 已存的（打码）
+  const [input, setInput] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.get<Array<{ provider: string; api_key?: string }>>('/api/local-agent/credentials')
+      .then((list) => { const c = (list || []).find((x) => x.provider === 'cursor'); setMasked(c?.api_key || null); })
+      .catch(() => {});
+  }, []);
+
+  const onSave = async () => {
+    const key = input.trim();
+    if (!key) return;
+    setSaving(true); setMsg(null);
+    try {
+      const r = await api.put<{ api_key?: string }>('/api/local-agent/credentials/cursor', { api_key: key });
+      setMasked(r?.api_key || null); setInput(''); setMsg('已保存');
+    } catch (e: any) { setMsg(e?.message || '保存失败'); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Row label="Cursor API Key" sub={masked ? `当前：${masked}（headless 模式必需；cursor.com 控制台获取）` : 'headless 模式必需 —— cursor.com 控制台获取后填入'}>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <input
+          type="password"
+          className="v2-set-select"
+          style={{ minWidth: 240 }}
+          placeholder={masked ? '输入新 Key 覆盖' : 'crsr_…'}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void onSave(); }}
+        />
+        <button className="v2-set-btn primary" disabled={saving || !input.trim()} onClick={() => void onSave()}>{saving ? '保存中…' : '保存'}</button>
+        {msg && <span className="v2-pill ok">{msg}</span>}
+      </div>
+    </Row>
+  );
+};
 
 const LocalAgentPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => {
   const cur = settings.localAgentProvider ?? 'claude';
   return (
     <>
-      <Section title="Local Agents" hint="在你机器上跑本地 CLI Agent（仅桌面版）。对话与文件都留在本地，与 Chaya 服务无关。">
-        <Row label="默认 Provider" sub="侧栏徽标即显示当前选择。目前仅 Claude Code 支持实时对话，Codex / Gemini 即将接入。">
-          <div className="v2-seg v2-la-set-seg">
-            {LA_PROVIDERS.map((p) => (
-              <button
-                key={p.id}
-                className={`v2-seg-item${cur === p.id ? ' active' : ''}`}
-                onClick={() => updateSettings({ localAgentProvider: p.id })}
-                title={p.live ? '已支持实时对话' : '即将支持'}
-              >
-                <span className={`v2-la-setdot prov-${p.id}`} />{p.label}
-                {!p.live && <span className="v2-la-soon">soon</span>}
-              </button>
-            ))}
-          </div>
-        </Row>
+      <Section title="Local Agents" hint="在你机器上跑本地 CLI Agent（仅桌面版）。对话与文件都留在本地，与 Chaya 服务无关。点卡片即可设为默认；侧栏徽标随选择切换。">
+        <div className="v2-la-prov-grid">
+          {LA_PROVIDERS.map((p) => (
+            <LAProviderCard
+              key={p.id}
+              p={p}
+              isDefault={cur === p.id}
+              onSetDefault={() => p.live && updateSettings({ localAgentProvider: p.id })}
+            />
+          ))}
+        </div>
       </Section>
-      <Section title="权限模式" hint="对话框里按 Tab 键即时切换（Default / Plan / Accept Edits / Bypass）。">
-        <Row label="说明" sub="Plan = 只读规划；Accept Edits = 自动改文件；Bypass = 全自动执行。每次对话用当前选择的模式。">
+      <Section title="权限模式" hint="对话框里按 Tab 键即时切换。Claude：Default / Plan / Accept Edits / Bypass；Cursor：Plan / Ask / Force。">
+        <Row label="说明" sub="Plan = 只读规划；Ask = 只读问答；Accept Edits = 自动改文件；Bypass / Force = 全自动执行。每次对话用当前选择的模式。">
           <div className="v2-set-val">在对话输入框右下角查看与切换</div>
         </Row>
       </Section>
@@ -425,83 +510,231 @@ const LocalAgentPane: React.FC<{ settings: ClientSettings; updateSettings: (p: P
   );
 };
 
-const RagPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => {
+/** 单个 provider 卡片：头（dot + 名 + 厂商 + 状态 pill + 「默认」徽标）+ 配置体。
+ *  Live provider 才能被设为默认；soon 卡片置灰、不可点击但展示安装链接。 */
+const LAProviderCard: React.FC<{
+  p: LAProvider;
+  isDefault: boolean;
+  onSetDefault: () => void;
+}> = ({ p, isDefault, onSetDefault }) => {
+  return (
+    <div className={`v2-la-prov${isDefault ? ' is-default' : ''}${!p.live ? ' is-soon' : ''}`}>
+      <div className="v2-la-prov-hd"
+        role={p.live ? 'button' : undefined}
+        tabIndex={p.live ? 0 : -1}
+        onClick={p.live ? onSetDefault : undefined}
+        onKeyDown={p.live ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSetDefault(); } } : undefined}
+        title={p.live ? '点击设为默认' : '即将接入'}
+      >
+        <span className={`v2-la-setdot prov-${p.id}`} />
+        <div className="v2-la-prov-meta">
+          <div className="nm">{p.label}{isDefault && <span className="v2-la-prov-def">默认</span>}</div>
+          <div className="sub">{p.vendor} · <code>{p.cli}</code></div>
+        </div>
+        <span className={`v2-pill ${p.live ? 'ok' : 'mute'}`}>{p.live ? '已就绪' : 'soon'}</span>
+      </div>
+      <div className="v2-la-prov-body">
+        {p.id === 'claude' && (
+          <Row label="CLI" sub="安装后 chaya 自动探测；首次使用按提示登录 Anthropic 账号">
+            <a className="v2-set-btn" href={p.installUrl} target="_blank" rel="noreferrer">安装指南</a>
+          </Row>
+        )}
+        {p.id === 'cursor' && <CursorKeyRow />}
+        {p.id === 'codex' && (
+          <Row label="状态" sub="OpenAI Codex CLI 接入中；目前可先安装观望">
+            <a className="v2-set-btn" href={p.installUrl} target="_blank" rel="noreferrer">了解</a>
+          </Row>
+        )}
+        {p.id === 'gemini' && (
+          <Row label="状态" sub="Google Gemini CLI 接入中；目前可先安装观望">
+            <a className="v2-set-btn" href={p.installUrl} target="_blank" rel="noreferrer">了解</a>
+          </Row>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/** 外部 · 服务 —— Chaya 主后端 + Smartnote 云知识。两个独立后端集中一页，
+ *  各自一行式凭据 + 探测 + 保存；Smartnote 下方紧跟检索行为开关。
+ *  描述压到副标题级别（11.5px ink-4），不让段落 hint 抢走焦点。 */
+const ServicesPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => {
+  // ── Chaya 主后端 ────────────────────────────────────────────
+  const savedChaya = (typeof window !== 'undefined' && localStorage.getItem('chatee_backend_url')) || '';
+  const [chayaUrl, setChayaUrl] = useState(savedChaya);
+  const [chayaProbe, setChayaProbe] = useState<{ ok: boolean; text: string } | null>(null);
+  const [chayaProbing, setChayaProbing] = useState(false);
+  const effectiveChaya = getBackendUrl();
+  const trimmedChaya = chayaUrl.trim();
+  const chayaDirty = trimmedChaya !== savedChaya;
+  const onProbeChaya = async () => {
+    const base = (trimmedChaya || effectiveChaya).replace(/\/+$/, '');
+    setChayaProbing(true); setChayaProbe(null);
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5000);
+      const r = await fetch(`${base}/health`, { signal: ctrl.signal });
+      clearTimeout(t);
+      setChayaProbe(r.ok ? { ok: true, text: `通了 · ${r.status}` } : { ok: false, text: `响应 ${r.status}` });
+    } catch (e: any) {
+      setChayaProbe({ ok: false, text: e?.name === 'AbortError' ? '超时' : '连不上' });
+    } finally { setChayaProbing(false); }
+  };
+  const onSaveChaya = () => {
+    if (trimmedChaya) localStorage.setItem('chatee_backend_url', trimmedChaya);
+    else localStorage.removeItem('chatee_backend_url');
+    (window as any).__cachedBackendUrl = trimmedChaya;
+    if (window.confirm('已保存，需要刷新页面才能生效。现在刷新？')) window.location.reload();
+  };
+
+  // ── Smartnote 云知识 ─────────────────────────────────────────
   const [snKey, setSnKey] = useState(getSmartnoteApiKey());
   const [snBase, setSnBase] = useState(getSmartnoteBaseUrl());
-  const [probing, setProbing] = useState(false);
-  const [probeMsg, setProbeMsg] = useState<{ ok: boolean; text: string } | null>(null);
-
+  const [snProbing, setSnProbing] = useState(false);
+  const [snProbe, setSnProbe] = useState<{ ok: boolean; text: string } | null>(null);
   const onSaveSn = () => {
     setSmartnoteBaseUrl(snBase.trim());
     setSmartnoteApiKey(snKey.trim());
-    setProbeMsg(null);
+    setSnProbe(null);
   };
   const onProbeSn = async () => {
     setSmartnoteBaseUrl(snBase.trim());
     setSmartnoteApiKey(snKey.trim());
-    setProbing(true);
-    setProbeMsg(null);
+    setSnProbing(true); setSnProbe(null);
     try {
       const r = await smartnoteProbe();
-      setProbeMsg(r.ok ? { ok: true, text: '通了' } : { ok: false, text: r.error || '失败' });
+      setSnProbe(r.ok ? { ok: true, text: '通了' } : { ok: false, text: r.error || '失败' });
     } catch (e: any) {
-      setProbeMsg({ ok: false, text: e?.message || '失败' });
-    } finally { setProbing(false); }
+      setSnProbe({ ok: false, text: e?.message || '失败' });
+    } finally { setSnProbing(false); }
   };
 
   return (
-    <>
-      <Section title="Smartnote 凭据" hint="知识库 / 记忆 / RAG 的后端，输入这里之后整个 v2 都能用">
-        <Row label="Smartnote API Key" sub="登录 Smartnote Cloud 后台 → API Keys 创建">
+    <div className="v2-acc">
+      {/* ── Chaya 服务器 ── */}
+      <div className="v2-acc-block">
+        <div className="v2-acc-block-hd"><AccIconServer /><span>Chaya 服务器</span></div>
+        <div className="v2-acc-endpoint">
           <input
-            className="v2-set-select"
-            style={{ minWidth: 260 }}
+            className="v2-set-select v2-acc-input"
+            value={chayaUrl}
+            onChange={(e) => { setChayaUrl(e.target.value); setChayaProbe(null); }}
+            placeholder="http://localhost:3002"
+            aria-label="Chaya 后端地址"
+          />
+          <button
+            className="v2-set-btn v2-acc-btn"
+            onClick={() => void onProbeChaya()}
+            disabled={chayaProbing}
+            title="探测连接"
+          >
+            <AccIconRadar /><span>{chayaProbing ? '探测中' : '探测'}</span>
+          </button>
+          <button
+            className="v2-set-btn primary v2-acc-btn"
+            onClick={onSaveChaya}
+            disabled={!chayaDirty}
+            title="保存并刷新"
+          >
+            <AccIconSave /><span>保存</span>
+          </button>
+        </div>
+        <div className="v2-acc-endpoint-meta">
+          {chayaProbe && (
+            <span className={`v2-pill ${chayaProbe.ok ? 'ok' : 'mute'}`} style={!chayaProbe.ok ? { background: '#fff7ed', color: '#c2410c' } : undefined}>
+              {chayaProbe.text}
+            </span>
+          )}
+          <span className="v2-acc-endpoint-current" title={effectiveChaya}>当前 · {effectiveChaya}</span>
+        </div>
+      </div>
+
+      {/* ── Smartnote 云知识 ── */}
+      <div className="v2-acc-block">
+        <div className="v2-acc-block-hd"><AccIconCloud /><span>Smartnote 云知识</span></div>
+        <div className="v2-acc-endpoint">
+          <input
+            className="v2-set-select v2-acc-input"
             type="password"
             value={snKey}
-            onChange={(e) => setSnKey(e.target.value)}
-            placeholder="sn_…"
+            onChange={(e) => { setSnKey(e.target.value); setSnProbe(null); }}
+            placeholder="API Key (sn_…)"
+            aria-label="Smartnote API Key"
           />
-        </Row>
-        <Row label="Smartnote Base URL" sub="留空使用默认服务">
+          <button
+            className="v2-set-btn v2-acc-btn"
+            onClick={() => void onProbeSn()}
+            disabled={snProbing || !snKey.trim()}
+            title="探测连接"
+          >
+            <AccIconRadar /><span>{snProbing ? '探测中' : '探测'}</span>
+          </button>
+          <button
+            className="v2-set-btn primary v2-acc-btn"
+            onClick={onSaveSn}
+            disabled={!snKey.trim()}
+            title="保存凭据"
+          >
+            <AccIconSave /><span>保存</span>
+          </button>
+        </div>
+        <div className="v2-acc-endpoint">
           <input
-            className="v2-set-select"
-            style={{ minWidth: 260 }}
+            className="v2-set-select v2-acc-input"
             value={snBase}
-            onChange={(e) => setSnBase(e.target.value)}
-            placeholder="https://api.smartnote.cloud"
+            onChange={(e) => { setSnBase(e.target.value); setSnProbe(null); }}
+            placeholder="Base URL · 留空使用默认 https://api.smartnote.cloud"
+            aria-label="Smartnote Base URL"
           />
-        </Row>
-        <Row label="">
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            {probeMsg && (
-              <span className={`v2-pill ${probeMsg.ok ? 'ok' : 'mute'}`} style={!probeMsg.ok ? { background: '#fff7ed', color: '#c2410c' } : undefined}>
-                {probeMsg.text}
-              </span>
-            )}
-            <button className="v2-set-btn" onClick={() => void onProbeSn()} disabled={probing || !snKey.trim()}>
-              {probing ? '探测中…' : '探测连接'}
-            </button>
-            <button className="v2-set-btn primary" onClick={onSaveSn}>保存</button>
+        </div>
+        {snProbe && (
+          <div className="v2-acc-endpoint-meta">
+            <span className={`v2-pill ${snProbe.ok ? 'ok' : 'mute'}`} style={!snProbe.ok ? { background: '#fff7ed', color: '#c2410c' } : undefined}>
+              {snProbe.text}
+            </span>
           </div>
-        </Row>
-      </Section>
+        )}
 
-      <Section title="RAG / 知识检索" hint="发送前先到记忆库里捞相关上下文，拼到消息顶部">
-        <Row label="启用 RAG"><Switch checked={!!settings.ragEnabled} onChange={(v) => updateSettings({ ragEnabled: v })} /></Row>
-        <Row label="召回数量 topK" sub="一次取多少条最相关的">
-          <select className="v2-set-select" value={settings.ragTopK ?? 5} onChange={(e) => updateSettings({ ragTopK: Number(e.target.value) })}>
-            {[3, 5, 8, 12, 20].map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
-        </Row>
-        <Row label="检索范围" sub="auto 让 AI 自己挑；agent 仅本 agent；workspace 整个 workspace">
-          <select className="v2-set-select" value={settings.ragScope ?? 'auto'} onChange={(e) => updateSettings({ ragScope: e.target.value as ClientSettings['ragScope'] })}>
-            <option value="auto">auto</option>
-            <option value="agent">agent</option>
-            <option value="workspace">workspace</option>
-          </select>
-        </Row>
-      </Section>
-    </>
+        {/* RAG 行为 —— 仅在 key 输入后展示，没配凭据这些开关也没意义。 */}
+        {snKey.trim() && (
+          <div className="v2-acc-rag">
+            <div className="v2-acc-rag-row">
+              <span className="v2-acc-rag-lab">检索</span>
+              <Switch checked={!!settings.ragEnabled} onChange={(v) => updateSettings({ ragEnabled: v })} />
+              <span className="v2-acc-rag-sub">发送前自动捞相关上下文拼到消息顶</span>
+            </div>
+            {!!settings.ragEnabled && (
+              <>
+                <div className="v2-acc-rag-row">
+                  <span className="v2-acc-rag-lab">topK</span>
+                  <select
+                    className="v2-set-select v2-acc-rag-sel"
+                    value={settings.ragTopK ?? 5}
+                    onChange={(e) => updateSettings({ ragTopK: Number(e.target.value) })}
+                  >
+                    {[3, 5, 8, 12, 20].map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                  <span className="v2-acc-rag-sub">一次召回多少条</span>
+                </div>
+                <div className="v2-acc-rag-row">
+                  <span className="v2-acc-rag-lab">范围</span>
+                  <select
+                    className="v2-set-select v2-acc-rag-sel"
+                    value={settings.ragScope ?? 'auto'}
+                    onChange={(e) => updateSettings({ ragScope: e.target.value as ClientSettings['ragScope'] })}
+                  >
+                    <option value="auto">auto</option>
+                    <option value="agent">agent</option>
+                    <option value="workspace">workspace</option>
+                  </select>
+                  <span className="v2-acc-rag-sub">auto · 让 AI 选 · agent · 仅本 agent · workspace · 整库</span>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 };
 
@@ -706,7 +939,11 @@ const CredentialModal: React.FC<{
     finally { setBusy(false); }
   };
 
-  const provTypes = (providers && providers.length > 0 ? providers.map((p) => p.provider_type) : ['openai', 'deepseek', 'anthropic', 'gemini', 'ollama', 'custom']);
+  // 后端 providers 列表是 LLM 配置数（同一 provider_type 可能有多条 —— 不同 key），
+  // 这里只用来填 <select>，要 dedupe 一下，否则 React 会抱怨重复 key。
+  const provTypes = providers && providers.length > 0
+    ? Array.from(new Set(providers.map((p) => p.provider_type)))
+    : ['openai', 'deepseek', 'anthropic', 'gemini', 'ollama', 'custom'];
 
   return (
     <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }} style={{ zIndex: 110 }}>

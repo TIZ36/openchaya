@@ -1,7 +1,7 @@
 import { api } from '../utils/apiClient';
 import { buildStoredUser, type CurrentUser, type TenantInfo, type TenantPlan, type PlanLimits, type PlanUsage } from '../utils/themeAccess';
 
-export interface MeResponse {
+interface MeResponse {
   user: CurrentUser;
   tenant: TenantInfo;
   is_founder: boolean;

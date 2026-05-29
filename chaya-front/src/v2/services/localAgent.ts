@@ -6,17 +6,31 @@
  * UI 据 `isLocalAgentAvailable()` 隐藏入口。
  */
 
-export type ProviderId = 'claude' | 'codex' | 'gemini';
+export type ProviderId = 'claude' | 'cursor' | 'codex' | 'gemini';
 
-/** Claude Code 权限模式（对应 CLI --permission-mode）。 */
-export type PermMode = 'default' | 'plan' | 'acceptEdits' | 'bypassPermissions';
-export const PERM_MODES: PermMode[] = ['default', 'plan', 'acceptEdits', 'bypassPermissions'];
+/** 权限模式：claude 用 default/plan/acceptEdits/bypassPermissions（CLI --permission-mode）；
+ *  cursor 用 plan/ask/force（cursor-agent 没有逐工具暂停，只有档位）。 */
+export type PermMode = 'default' | 'plan' | 'acceptEdits' | 'bypassPermissions' | 'ask' | 'force';
 export const PERM_META: Record<PermMode, { label: string; tone: string; hint: string }> = {
   default: { label: 'Default', tone: 'default', hint: '默认：需要时询问权限' },
   plan: { label: 'Plan', tone: 'plan', hint: '计划：只读规划，不改文件不执行' },
   acceptEdits: { label: 'Accept Edits', tone: 'edit', hint: '接受编辑：自动接受文件改动' },
   bypassPermissions: { label: 'Bypass', tone: 'bypass', hint: '跳过权限：全自动执行（原 YOLO）' },
+  ask: { label: 'Ask', tone: 'plan', hint: '询问：只读问答，不改文件' },
+  force: { label: 'Force', tone: 'bypass', hint: '强制：自动放行全部工具（含写/执行）' },
 };
+/** 每个 provider 可循环切换的权限档（Tab 键）。 */
+const PERM_MODES_BY_PROVIDER: Partial<Record<ProviderId, PermMode[]>> = {
+  claude: ['default', 'plan', 'acceptEdits', 'bypassPermissions'],
+  cursor: ['plan', 'ask', 'force'],
+};
+export function permModesFor(provider: ProviderId): PermMode[] {
+  return PERM_MODES_BY_PROVIDER[provider] || PERM_MODES_BY_PROVIDER.claude!;
+}
+/** provider 的默认权限档（新会话用）。cursor 默认 force（无逐工具暂停，与 claude bypass 体感一致）。 */
+export function defaultPermMode(provider: ProviderId): PermMode {
+  return provider === 'cursor' ? 'force' : 'default';
+}
 
 /** CC 斜杠命令（权威名单来自 system/init.slash_commands，描述从 .claude/commands 补）。 */
 export interface SlashCommand {
@@ -82,12 +96,23 @@ export interface LocalAgentEvent {
   ev: any;
 }
 
+/** 可选模型（来自 SDK supportedModels()）：value 用于 API 调用，displayName 给 UI。 */
+export interface ModelInfo { value: string; displayName: string; description?: string }
+
+/** 可用的 MCP server（来自 ~/.claude.json，不含密钥）。 */
+export interface McpAvailable { name: string; scope: 'global' | 'project'; type: string }
+/** MCP 连接状态（来自 SDK mcpServerStatus / system.init.mcp_servers）。 */
+export interface McpStatus { name: string; status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled' }
+
 interface SendPayload {
   provider: ProviderId;
   cwd: string;
   sessionId?: string | null;
   prompt: string;
   permMode?: PermMode;
+  model?: string;
+  mcp?: string[];
+  apiKey?: string | null;   // cursor headless 必需（从后端凭据拉到、由 useLocalAgent 注入）
 }
 type WarmPayload = Omit<SendPayload, 'prompt'>;
 
@@ -104,6 +129,11 @@ interface LocalAgentBridge {
   interrupt(cwd: string): Promise<{ ok: boolean }>;
   sessionClose(cwd: string): Promise<{ ok: boolean }>;
   setPermMode(cwd: string, permMode: PermMode): Promise<{ ok: boolean }>;
+  setModel(cwd: string, model: string): Promise<{ ok: boolean }>;
+  listMcp(cwd: string): Promise<McpAvailable[]>;
+  setMcp(cwd: string, mcp: string[]): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
+  mcpStatus(cwd: string): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
+  reconnectMcp(cwd: string, name: string): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
   onEvent(cb: (data: LocalAgentEvent) => void): () => void;
 }
 
@@ -135,6 +165,11 @@ export const localAgent = {
   interrupt: (cwd: string) => bridge()?.interrupt(cwd) ?? Promise.resolve({ ok: false }),
   sessionClose: (cwd: string) => bridge()?.sessionClose(cwd) ?? Promise.resolve({ ok: false }),
   setPermMode: (cwd: string, permMode: PermMode) => bridge()?.setPermMode(cwd, permMode) ?? Promise.resolve({ ok: false }),
+  setModel: (cwd: string, model: string) => bridge()?.setModel(cwd, model) ?? Promise.resolve({ ok: false }),
+  listMcp: (cwd: string) => bridge()?.listMcp(cwd) ?? Promise.resolve([] as McpAvailable[]),
+  setMcp: (cwd: string, mcp: string[]) => bridge()?.setMcp(cwd, mcp) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),
+  mcpStatus: (cwd: string) => bridge()?.mcpStatus(cwd) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),
+  reconnectMcp: (cwd: string, name: string) => bridge()?.reconnectMcp(cwd, name) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),
   onEvent: (cb: (data: LocalAgentEvent) => void) => bridge()?.onEvent(cb) ?? (() => {}),
 };
 
@@ -241,4 +276,24 @@ export function loadPermBySession(): Record<string, PermMode> {
 }
 export function savePermBySession(map: Record<string, PermMode>): void {
   try { localStorage.setItem(PERM_BY_SESSION_KEY, JSON.stringify(map)); } catch { /* quota */ }
+}
+
+/* 每个会话「选用的模型」记忆（按 sessionId）。重开历史会话时默认切回。 */
+const MODEL_BY_SESSION_KEY = 'chaya.localAgent.modelBySession';
+export function loadModelBySession(): Record<string, string> {
+  try { const raw = localStorage.getItem(MODEL_BY_SESSION_KEY); const o = raw ? JSON.parse(raw) : null; return (o && typeof o === 'object') ? o : {}; }
+  catch { return {}; }
+}
+export function saveModelBySession(map: Record<string, string>): void {
+  try { localStorage.setItem(MODEL_BY_SESSION_KEY, JSON.stringify(map)); } catch { /* quota */ }
+}
+
+/* 每个会话「启用的 MCP server 名字」记忆（按 sessionId）。 */
+const MCP_BY_SESSION_KEY = 'chaya.localAgent.mcpBySession';
+export function loadMcpBySession(): Record<string, string[]> {
+  try { const raw = localStorage.getItem(MCP_BY_SESSION_KEY); const o = raw ? JSON.parse(raw) : null; return (o && typeof o === 'object') ? o : {}; }
+  catch { return {}; }
+}
+export function saveMcpBySession(map: Record<string, string[]>): void {
+  try { localStorage.setItem(MCP_BY_SESSION_KEY, JSON.stringify(map)); } catch { /* quota */ }
 }

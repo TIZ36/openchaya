@@ -8,7 +8,7 @@
 import { api } from '../../utils/apiClient';
 import type { Session } from '../../services/chat';
 
-export interface TeahouseConv {
+interface TeahouseConv {
   id: string;
   title?: string;
   user_id: string;

@@ -44,10 +44,6 @@ export interface Session {
 }
 
 /** 主 Agent（Primag）：音色 / 自驱思考 / 行为拓扑与记忆锚点等仅对其开放 */
-export function isPrimaryAgentSession(s: Session | null | undefined): boolean {
-  return s?.is_primary === true;
-}
-
 /** 调用 /api/agents/{id}/… 时使用：优先 agid（Session.id），否则回退 session_id（非 usersession） */
 export function agentApiId(s: Session): string {
   const raw = s as any;
@@ -112,17 +108,6 @@ export interface MessageExt {
   /** 思考链（DeepSeek-Reasoner / o1 / Qwen-Thinking 等模型在正文前的推理流） */
   reasoning?: string;
 }
-
-export interface Summary {
-  summary_id: string;
-  session_id: string;
-  summary_content: string;
-  last_message_id?: string;
-  token_count_before?: number;
-  token_count_after?: number;
-  created_at?: string;
-}
-
 
 import { getBackendUrl } from '../utils/backendUrl';
 import { ensureDataUrlFromMaybeBase64 } from '../utils/dataUrl';
@@ -253,24 +238,6 @@ export async function deleteAgent(agent_id: string): Promise<void> {
 }
 
 /**
- * 获取记忆体（话题）列表
- */
-export async function getMemories(): Promise<Session[]> {
-  try {
-    const response = await authFetch(`${API_BASE}/conversations?type=memory`);
-    if (!response.ok) {
-      console.warn(`Failed to fetch memories: ${response.statusText}`);
-      return [];
-    }
-    const data = await response.json();
-    return normalizeSessionList(data || []);
-  } catch (error) {
-    console.warn('Error fetching memories:', error);
-    return [];
-  }
-}
-
-/**
  * 创建新会话
  */
 
@@ -361,52 +328,6 @@ export async function getSessionMessages(
  */
 
 /**
- * 获取单个消息（基于message_id），用于增量加载
- */
-export async function getMessage(message_id: string): Promise<Message | null> {
-  try {
-    const response = await authFetch(`${API_BASE}/messages/${message_id}`);
-    if (!response.ok) {
-      if (response.status === 404) {
-        return null;
-      }
-      console.warn(`Failed to fetch message: ${response.statusText}`);
-      return null;
-    }
-    return await response.json();
-  } catch (error) {
-    console.warn('Error fetching message:', error);
-    return null;
-  }
-}
-
-/**
- * 保存消息到会话
- */
-
-/**
- * 总结会话内容
- */
-
-/**
- * 获取会话的所有总结
- */
-export async function getSessionSummaries(session_id: string): Promise<Summary[]> {
-  try {
-    const response = await authFetch(`${API_BASE}/sessions/${session_id}/summaries`);
-    if (!response.ok) {
-      console.warn(`Failed to fetch summaries: ${response.statusText}`);
-      return [];
-    }
-    const data = await response.json();
-    return data || [];
-  } catch (error) {
-    console.warn('Error fetching summaries:', error);
-    return [];
-  }
-}
-
-/**
  * 删除会话
  */
 export async function deleteSession(session_id: string): Promise<void> {
@@ -419,21 +340,6 @@ export async function deleteSession(session_id: string): Promise<void> {
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ error: response.statusText }));
     throw new Error(errorData.error || `Failed to delete session: ${response.statusText}`);
-  }
-}
-
-/**
- * 清除会话的总结缓存
- */
-export async function clearSummarizeCache(session_id: string): Promise<void> {
-  const response = await authFetch(`${API_BASE}/sessions/${session_id}/summaries/cache`, {
-    method: 'DELETE',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to clear summarize cache: ${response.statusText}`);
   }
 }
 
@@ -483,27 +389,6 @@ export async function truncateMessagesFrom(session_id: string, message_id: strin
  */
 
 /**
- * 更新会话的机器人头像
- */
-export async function updateSessionAvatar(session_id: string, avatar: string): Promise<void> {
-  const response = await authFetch(`${API_BASE}/sessions/${session_id}/avatar`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ avatar }),
-  });
-  if (!response.ok) {
-    // 兼容后端仅支持 PUT /sessions/{id}
-    if (response.status === 404) {
-      await updateSession(session_id, { avatar });
-      return;
-    }
-    throw new Error(`Failed to update avatar: ${response.statusText}`);
-  }
-}
-
-/**
  * 通用会话更新函数
  */
 export async function updateSession(session_id: string, data: Partial<Session>): Promise<Session> {
@@ -538,55 +423,6 @@ export async function updateSessionName(session_id: string, name: string): Promi
       return;
     }
     throw new Error(`Failed to update session name: ${response.statusText}`);
-  }
-}
-
-/**
- * 更新会话类型（用于切换积极模式）
- */
-export async function updateSessionType(session_id: string, session_type: 'topic_general' | 'agent'): Promise<void> {
-  const response = await authFetch(`${API_BASE}/sessions/${session_id}/session-type`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ session_type }),
-  });
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({ error: response.statusText }));
-    throw new Error(errorData.error || `Failed to update session type: ${response.statusText}`);
-  }
-}
-
-/**
- * 更新会话的系统提示词（人设）
- */
-export async function updateSessionSystemPrompt(session_id: string, system_prompt: string | null): Promise<void> {
-  const response = await authFetch(`${API_BASE}/sessions/${session_id}/system-prompt`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ system_prompt }),
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to update system prompt: ${response.statusText}`);
-  }
-}
-
-/**
- * 更新会话/智能体的媒体输出路径
- */
-export async function updateSessionMediaOutputPath(session_id: string, media_output_path: string | null): Promise<void> {
-  const response = await authFetch(`${API_BASE}/sessions/${session_id}/media-output-path`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ media_output_path }),
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to update media output path: ${response.statusText}`);
   }
 }
 

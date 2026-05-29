@@ -43,6 +43,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&Message{},
 		&MessagePart{},
 		&LLMConfig{},
+		&LocalAgentCredential{},
 		&LLMProvider{},
 		&MCPServer{},
 		&Skill{},

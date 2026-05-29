@@ -24,9 +24,9 @@ export type FontId = 'default' | 'pixel' | 'terminal' | 'rounded' | 'dotgothic' 
 export type { TypeSpeed };
 
 export type AppearanceMode = 'light' | 'dark' | 'system';
-export type ColorTheme = 'default' | 'anthropic' | 'cursor' | 'warm' | 'linear';
+export type ColorTheme = 'default' | 'anthropic' | 'cursor';
 /** 可单独开启毛玻璃的界面区域。 */
-export type GlassZone = 'composer' | 'sidebar' | 'topbar' | 'menu' | 'modal' | 'bubble';
+export type GlassZone = 'composer' | 'sidebar' | 'topbar' | 'menu' | 'modal' | 'bubble' | 'main';
 /** 毛玻璃整体强度（模糊+透明度）：subtle 轻 · standard 标准 · strong 强。 */
 export type GlassIntensity = 'subtle' | 'standard' | 'strong';
 
@@ -49,7 +49,7 @@ export interface ClientSettings {
   ragScope?: 'auto' | 'agent' | 'workspace';
   defaultLLMConfigId?: string;
   /** Local Agents 默认 provider（本地功能，桌面版）。 */
-  localAgentProvider?: 'claude' | 'codex' | 'gemini';
+  localAgentProvider?: 'claude' | 'cursor' | 'codex' | 'gemini';
   /** 对话(闲聊 + agent) 出字平滑：开关 + 速度档。默认开 / 适中。 */
   chatStreamSmooth?: boolean;
   chatStreamSpeed?: TypeSpeed;
