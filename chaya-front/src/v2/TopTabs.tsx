@@ -38,9 +38,6 @@ export const TopTabs: React.FC<Props> = React.memo(({ la, tabs, activeId, onActi
   // CLI tabs 全被固定走光后，内联段就没东西可显 —— 用于决定是否还渲染该段。
   const hasLocal = la.tabs.some((t) => !pinnedLocalCwds?.has(t.cwd));
   const [menu, setMenu] = useState<MenuState | null>(null);
-  if (!hasLocal && nonLocal.length === 0) {
-    return <span className="v2-la-tabs-empty">{tr('tabs.empty')}</span>;
-  }
   // 点击 local tab 时同时通知壳层切换 activeNav 到 'local'（不然主区还停在 chat/gallery 上）。
   const onLocalActivate = (cwd: string) => {
     const id = `local:${cwd}`;
@@ -67,6 +64,11 @@ export const TopTabs: React.FC<Props> = React.memo(({ la, tabs, activeId, onActi
     return () => el.removeEventListener('wheel', onWheel);
   }, []);
   const openMenu = (e: React.MouseEvent, t: TopTab) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, tab: t }); };
+  // 空 tab 条的早退必须在所有 hooks 之后 —— 否则 tab 条从「空 → 有」时 hook 数量变化，
+  // 触发 React #310「Rendered more hooks than during the previous render」（白屏崩溃）。
+  if (!hasLocal && nonLocal.length === 0) {
+    return <span className="v2-la-tabs-empty">{tr('tabs.empty')}</span>;
+  }
   return (
     <div className="v2-la-tabs v2-toptabs" role="tablist" ref={scrollerRef}>
       {hasLocal && <LocalAgentTabs la={la} inline onTabActivate={onLocalActivate} activeCwd={activeLocalCwd} pinnedCwds={pinnedLocalCwds} onTogglePin={onLocalTogglePin} />}
