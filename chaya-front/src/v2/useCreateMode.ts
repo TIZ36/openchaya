@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { mediaApi } from '../services/mediaApi';
 import { getMediaModelCaps } from './mediaModelCaps';
+import { useI18n } from '../i18n';
 
 export interface RefImage {
   id: string;
@@ -36,6 +37,7 @@ const ASPECT_CYCLE = ['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', '21:9']
 const COUNT_CYCLE = [1, 2, 4, 6, 8];
 
 export function useCreateMode(initial?: Partial<CreateConfig>) {
+  const { t: tr } = useI18n();
   const [cfg, setCfg] = useState<CreateConfig>({
     style: initial?.style ?? '',
     aspect: initial?.aspect ?? '1:1',
@@ -205,18 +207,13 @@ export function useCreateMode(initial?: Partial<CreateConfig>) {
           } else {
             await mediaApi.openaiImageGenerationsStream(streamBody, handler);
           }
-          if (!finalUri && !errored) { onSlot(idx, null, '流结束但无终稿'); return; }
+          if (!finalUri && !errored) { onSlot(idx, null, tr('settings.create.noFinalImage')); return; }
           if (!finalUri) return; // error already reported
           onSlot(idx, finalUri);
-          void mediaApi.saveOutput({
-            data: finalUri,
-            media_type: 'image',
-            mime_type: finalMime,
-            prompt: finalPrompt,
-            provider: 'openai',
-            model: effCfg.model,
-            source: 'create-mode',
-          }).catch(() => { /* ignore */ });
+          // NB: 不在这里 saveOutput —— OpenAI 流式后端在 `.completed` 事件里已把
+          // 终稿落进 media_outputs（safety-net，source=…-stream-safety），见
+          // media_openai.go。前端再存一次会让同一张图在画廊里出现两条。
+          // Gemini 走请求/响应、后端不落库，仍由下方分支显式 saveOutput。
           return;
         }
 
@@ -235,7 +232,7 @@ export function useCreateMode(initial?: Partial<CreateConfig>) {
         const first = media[0] as any;
         const data: string | undefined = first?.data;
         const mime: string = first?.mimeType || first?.mime_type || 'image/png';
-        if (!data) { onSlot(idx, null, '空结果'); return; }
+        if (!data) { onSlot(idx, null, tr('settings.create.emptyResult')); return; }
         const dataUri = data.startsWith('data:') ? data : `data:${mime};base64,${data}`;
         onSlot(idx, dataUri);
 
@@ -255,7 +252,7 @@ export function useCreateMode(initial?: Partial<CreateConfig>) {
     };
 
     await Promise.all(Array.from({ length: effCfg.count }).map((_, i) => oneCall(i)));
-  }, [cfg, refs, composePrompt]);
+  }, [cfg, refs, composePrompt, tr]);
 
   return {
     cfg, refs, caps,

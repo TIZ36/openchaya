@@ -1,4 +1,5 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
+import { t } from '../i18n';
 
 interface Props { children: ReactNode; }
 interface State { hasError: boolean; error?: Error; }
@@ -22,8 +23,8 @@ class ErrorBoundary extends Component<Props, State> {
     return (
       <div style={wrap}>
         <div style={card}>
-          <h1 style={title}>出现错误</h1>
-          <p style={msg}>{this.state.error?.message || '未知错误'}</p>
+          <h1 style={title}>{t('error.title')}</h1>
+          <p style={msg}>{this.state.error?.message || t('error.unknown')}</p>
           <button
             type="button"
             style={btn}
@@ -32,7 +33,7 @@ class ErrorBoundary extends Component<Props, State> {
               window.location.reload();
             }}
           >
-            重新加载
+            {t('error.reload')}
           </button>
         </div>
       </div>

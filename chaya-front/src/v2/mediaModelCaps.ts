@@ -3,6 +3,7 @@
  * model-specific UI in create mode. Source of truth: OpenAI image-generation
  * guide (2026-05) + Gemini nano-banana imageConfig docs.
  */
+import { t } from '../i18n';
 
 export interface ModelCaps {
   /** Aspect labels exposed in the picker, in display order. */
@@ -32,10 +33,10 @@ export function getMediaModelCaps(provider?: string, model?: string): ModelCaps 
   const m = (model || '').toLowerCase();
 
   if (/gpt-image-2/.test(m)) {
-    return { aspects: GPT_IMAGE_2_ASPECTS, defaultAspect: '1:1', hint: '任意比例 (≤3:1)', maxCount: 8 };
+    return { aspects: GPT_IMAGE_2_ASPECTS, defaultAspect: '1:1', hint: t('misc.caps.anyRatio'), maxCount: 8 };
   }
   if (/gpt-image-1/.test(m) || (p === 'openai' && /gpt-image/.test(m))) {
-    return { aspects: GPT_IMAGE_1_ASPECTS, defaultAspect: '1:1', hint: '三种固定尺寸', maxCount: 4 };
+    return { aspects: GPT_IMAGE_1_ASPECTS, defaultAspect: '1:1', hint: t('misc.caps.threeFixedSizes'), maxCount: 4 };
   }
   if (/dall-?e-3/.test(m)) {
     return { aspects: DALL_E_3_ASPECTS, defaultAspect: '1:1', hint: '1024² / 1792×1024', maxCount: 1 };

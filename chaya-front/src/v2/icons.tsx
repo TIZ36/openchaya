@@ -158,6 +158,23 @@ export const IconEdit = () => (
   </svg>
 );
 
+// Eye — 预览
+export const IconEye = () => (
+  <svg viewBox="0 0 24 24" {...stroke}>
+    <path d="M2.8 12s3.4-6.3 9.2-6.3S21.2 12 21.2 12 17.8 18.3 12 18.3 2.8 12 2.8 12z" />
+    <circle cx="12" cy="12" r="2.6" />
+  </svg>
+);
+
+// Sync — 同步到云（云 + 上行箭头，区别于刷新的环形箭头）
+export const IconSync = () => (
+  <svg viewBox="0 0 24 24" {...stroke}>
+    <path d="M7.5 19h9a3.8 3.8 0 0 0 .7-7.5 5.6 5.6 0 0 0-10.8-1A3.8 3.8 0 0 0 7.5 19z" />
+    <path d="M12 16.5v-6" />
+    <path d="M9.6 12.4 12 10l2.4 2.4" />
+  </svg>
+);
+
 export const IconTrash = () => (
   <svg viewBox="0 0 24 24" {...stroke}>
     <path d="M4 7h16" />
@@ -253,5 +270,21 @@ export const IconTerminal = () => (
     <rect x="3" y="4.5" width="18" height="15" rx="3" />
     <path d="M7.5 9.5l3 2.5-3 2.5" />
     <path d="M13 14.5h4" strokeWidth={1.5} />
+  </svg>
+);
+
+/* ============================================================
+   Brand mark —— Chaya 的 logo。四角光苒(aperture spark),略带
+   6° 偏斜 + 一颗小光点,潮、轻盈、AI 质感。填充 currentColor,
+   随主题取墨色/强调色;login wordmark、topbar、收起态都复用它。
+   ============================================================ */
+export const IconLogo = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+    <g transform="rotate(6 12 12)">
+      {/* 主光苒：四角凹边星 */}
+      <path d="M12 2 C12 8.4 15.6 12 22 12 C15.6 12 12 15.6 12 22 C12 15.6 8.4 12 2 12 C8.4 12 12 8.4 12 2 Z" />
+      {/* 伴生小光点 */}
+      <path d="M18.8 2.8 C18.8 4.3 19.7 5.2 21.2 5.2 C19.7 5.2 18.8 6.1 18.8 7.6 C18.8 6.1 17.9 5.2 16.4 5.2 C17.9 5.2 18.8 4.3 18.8 2.8 Z" opacity="0.55" />
+    </g>
   </svg>
 );

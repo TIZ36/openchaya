@@ -6,10 +6,12 @@
  * 激活与状态同步由 ClientShell 负责（见 useTopTabs 注释）。
  */
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { LocalAgentTabs } from './LocalAgentView';
 import type { LocalAgentState } from './useLocalAgent';
 import type { TopTab } from './useTopTabs';
 import { IconChat, IconGallery, IconKB, IconAgentPrimary } from './icons';
+import { useI18n } from '../i18n';
 
 interface Props {
   la: LocalAgentState;
@@ -23,13 +25,14 @@ interface Props {
 interface MenuState { x: number; y: number; tab: TopTab }
 
 export const TopTabs: React.FC<Props> = React.memo(({ la, tabs, activeId, onActivate, onClose, onTogglePin }) => {
+  const { t: tr } = useI18n();
   const nonLocal = tabs.filter((t) => t.kind !== 'local');
   const pinned = nonLocal.filter((t) => t.pinned);
   const unpinned = nonLocal.filter((t) => !t.pinned);
   const hasLocal = la.tabs.length > 0;
   const [menu, setMenu] = useState<MenuState | null>(null);
   if (!hasLocal && nonLocal.length === 0) {
-    return <span className="v2-la-tabs-empty">无打开会话</span>;
+    return <span className="v2-la-tabs-empty">{tr('tabs.empty')}</span>;
   }
   // 点击 local tab 时同时通知壳层切换 activeNav 到 'local'（不然主区还停在 chat/gallery 上）。
   const onLocalActivate = (cwd: string) => {
@@ -94,6 +97,7 @@ TopTabs.displayName = 'TopTabs';
 /** 单条非 local tab。chat / gallery / kb 共用同一壳，只换图标。
  *  pinned：缩略（仅图标、无标题、无关闭），钉在最左。右键唤出菜单。 */
 const ChatChip: React.FC<{ t: TopTab; active: boolean; pinned?: boolean; onActivate: () => void; onClose: () => void; onMenu: (e: React.MouseEvent) => void }> = ({ t, active, pinned, onActivate, onClose, onMenu }) => {
+  const { t: tr } = useI18n();
   return (
     <div
       role="tab"
@@ -107,18 +111,18 @@ const ChatChip: React.FC<{ t: TopTab; active: boolean; pinned?: boolean; onActiv
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onActivate(); }
         if (!pinned && (e.key === 'Delete' || (e.key === 'w' && (e.metaKey || e.ctrlKey)))) { e.preventDefault(); onClose(); }
       }}
-      title={pinned ? `${t.label}（已固定 · 右键取消）` : t.label}
+      title={pinned ? tr('tabs.pinnedTitle', { label: t.label }) : t.label}
     >
       <span className="ico" aria-hidden><IconFor t={t} /></span>
       {!pinned && <span className="sess">{t.label}</span>}
-      {t.unread && !active && <span className="unread" aria-label="未读" />}
-      {t.attn && <span className="attn-mark" aria-label="需要批准">!</span>}
+      {t.unread && !active && <span className="unread" aria-label={tr('tabs.unread')} />}
+      {t.attn && <span className="attn-mark" aria-label={tr('tabs.needApproval')}>!</span>}
       {!pinned && (
         <button
           className="x"
           onClick={(e) => { e.stopPropagation(); onClose(); }}
-          title="关闭 (⌘W)"
-          aria-label="关闭"
+          title={tr('tabs.closeHint')}
+          aria-label={tr('tabs.close')}
           tabIndex={-1}
         >×</button>
       )}
@@ -128,6 +132,7 @@ const ChatChip: React.FC<{ t: TopTab; active: boolean; pinned?: boolean; onActiv
 
 /** Tab 右键菜单：固定/取消固定 · 关闭。 */
 const TabMenu: React.FC<{ menu: MenuState; onClose: () => void; onPin: () => void; onCloseTab: () => void }> = ({ menu, onClose, onPin, onCloseTab }) => {
+  const { t: tr } = useI18n();
   useEffect(() => {
     const onDoc = () => onClose();
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -135,12 +140,20 @@ const TabMenu: React.FC<{ menu: MenuState; onClose: () => void; onPin: () => voi
     window.addEventListener('keydown', onKey);
     return () => { window.removeEventListener('mousedown', onDoc); window.removeEventListener('keydown', onKey); };
   }, [onClose]);
-  const style: React.CSSProperties = { left: Math.min(menu.x, window.innerWidth - 180), top: menu.y };
-  return (
+  const style: React.CSSProperties = {
+    left: Math.min(menu.x, window.innerWidth - 180),
+    top: Math.min(menu.y, window.innerHeight - 96),
+  };
+  // Portal 到 .chaya-v2 根：菜单用 position:fixed + clientX/Y 定位，必须脱离 topbar
+  // （带 backdrop-filter / transform 的祖先会让 fixed 相对它而非视口，导致错位）。
+  // 落在根而非 body，既逃出 topbar 的合成层，又保留 .chaya-v2 主题/玻璃样式作用域。
+  const host = (typeof document !== 'undefined' && document.querySelector('.chaya-v2')) || document.body;
+  return createPortal(
     <div className="v2-rowmenu v2-toptab-menu" style={style} onMouseDown={(e) => e.stopPropagation()}>
-      <button onClick={onPin}>{menu.tab.pinned ? '取消固定' : '固定到最左'}</button>
-      <button onClick={onCloseTab}>关闭标签</button>
-    </div>
+      <button onClick={onPin}>{menu.tab.pinned ? tr('tabs.unpin') : tr('tabs.pin')}</button>
+      <button onClick={onCloseTab}>{tr('tabs.closeTab')}</button>
+    </div>,
+    host,
   );
 };
 

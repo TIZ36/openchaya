@@ -17,7 +17,9 @@ import SettingsModal from './SettingsModal';
 const LS_SETTINGS = 'settings';
 const DEFAULT_SETTINGS: ClientSettings = {
   font: 'default',
-  glassZones: ['composer', 'menu', 'modal'],
+  // 简化后 glassZones 只承载「侧栏」这一可调项（空 = 侧栏不开玻璃）。输入框/菜单/
+  // 抽屉/用户气泡的磨砂是 CSS 无条件常开，不再走 zone 开关。
+  glassZones: [],
   glassIntensity: 'standard',
   enableToolCalling: true,
   handRule: true,
@@ -40,9 +42,10 @@ import {
   getHiddenBuiltinIds, setHiddenBuiltinIds,
 } from './stylePresets';
 import LoginPage from './LoginPage';
+import { useI18n, t } from '../i18n';
 import {
   IconAgentCode, IconAgentDoc, IconAgentPainter, IconAgentPrimary,
-  IconAttach, IconChat, IconGallery, IconGear, IconKB,
+  IconAttach, IconChat, IconGallery, IconGear, IconKB, IconTerminal,
   IconPlus, IconSend, IconSidebar,
   IconChevron, IconAspect, IconModel,
   IconEdit, IconRevert, IconQuote,
@@ -97,13 +100,12 @@ interface Batch {
   startedAt?: number;
 }
 
-const ClientShell: React.FC = () => {
-  const [authed, setAuthed] = useState<boolean>(() => api.isLoggedIn());
-  if (!authed) return <LoginPage onLogin={() => setAuthed(true)} />;
-  return <ShellInner />;
-};
+// 登录不再是进入 app 的前置门禁：直接进主界面。本地功能（Local CLI 等）免登录可用，
+// 访问云端功能时再「按需」提示登录（见 ShellInner 的 authed / requireLogin）。
+const ClientShell: React.FC = () => <ShellInner />;
 
 const ShellInner: React.FC = () => {
+  const { t: tr } = useI18n();
   // Settings are read before useChatBackend so the chat typewriter config can be
   // passed in. Persisted to localStorage by the effect further down.
   const [settings, setSettings] = useState<ClientSettings>(() => {
@@ -113,6 +115,11 @@ const ShellInner: React.FC = () => {
     } catch { /* ignore */ }
     return DEFAULT_SETTINGS;
   });
+
+  // 登录是「按需」的：本地功能免登录可用；访问云端功能（聊天/画廊/知识库、发消息/生图）时才提示。
+  const [authed, setAuthed] = useState<boolean>(() => api.isLoggedIn());
+  const [loginOpen, setLoginOpen] = useState(false);
+  const requireLogin = useCallback(() => setLoginOpen(true), []);
 
   const {
     loadingMeta, agents, recents, teahouses, activeSessionId, messages, stream, thinking,
@@ -124,12 +131,16 @@ const ShellInner: React.FC = () => {
   } = useChatBackend({
     enabled: settings.chatStreamSmooth ?? true,
     speed: settings.chatStreamSpeed ?? 'normal',
-  });
+  }, authed);
 
   /* ---- teahouse picker (choose llm_config + optional model) ---- */
   const [teahousePickerOpen, setTeahousePickerOpen] = useState(false);
 
-  const [activeNav, setActiveNav] = useState<NavKey>('chat');
+  // 未登录且本地 CLI 可用 → 默认落到本地视图（免登录即可用）；否则默认聊天。
+  const [activeNav, setActiveNav] = useState<NavKey>(() =>
+    (!api.isLoggedIn() && isLocalAgentAvailable()) ? 'local' : 'chat');
+  // 进入主界面后若未登录，温和提示一次登录（可关闭，不挡本地功能）。
+  useEffect(() => { if (!api.isLoggedIn()) setLoginOpen(true); }, []);
   const [mode, setMode] = useState<Mode>('chat');
   const [draft, setDraft] = useState<string>('');
   const [batches, setBatches] = useState<Batch[]>([]);
@@ -251,7 +262,7 @@ const ShellInner: React.FC = () => {
     const id = chatTabId(s.session_id);
     topTabs.add({
       id, kind: 'chat',
-      label: s.name || s.title || s.preview_text || '新对话',
+      label: s.name || s.title || s.preview_text || tr('shell.newChat'),
       sessionId: s.session_id,
       sessionType: s.session_type,
       isPrimary: s.is_primary,
@@ -263,16 +274,16 @@ const ShellInner: React.FC = () => {
   }, [topTabs, setActiveSessionId]);
 
   const openGalleryTab = useCallback(() => {
-    topTabs.add({ id: GALLERY_TAB_ID, kind: 'gallery', label: '画廊' });
+    topTabs.add({ id: GALLERY_TAB_ID, kind: 'gallery', label: tr('shell.nav.gallery') });
     topTabs.setActiveId(GALLERY_TAB_ID);
     setActiveNav('gallery');
-  }, [topTabs]);
+  }, [topTabs, tr]);
 
   const openKBTab = useCallback(() => {
-    topTabs.add({ id: KB_TAB_ID, kind: 'kb', label: '知识库' });
+    topTabs.add({ id: KB_TAB_ID, kind: 'kb', label: tr('shell.nav.kb') });
     topTabs.setActiveId(KB_TAB_ID);
     setActiveNav('kb');
-  }, [topTabs]);
+  }, [topTabs, tr]);
 
   const activateTopTab = useCallback((t: TopTab) => {
     topTabs.setActiveId(t.id);
@@ -331,7 +342,7 @@ const ShellInner: React.FC = () => {
     topTabs.add({
       id: chatTabId(activeSessionId),
       kind: 'chat',
-      label: s?.name || s?.title || s?.preview_text || '新对话',
+      label: s?.name || s?.title || s?.preview_text || tr('shell.newChat'),
       sessionId: activeSessionId,
       sessionType: s?.session_type,
       isPrimary: s?.is_primary,
@@ -350,7 +361,7 @@ const ShellInner: React.FC = () => {
       if (!s) return;
       topTabs.add({
         id: t.id, kind: 'chat',
-        label: s.name || s.title || s.preview_text || '新对话',
+        label: s.name || s.title || s.preview_text || tr('shell.newChat'),
         sessionId: t.sessionId,
         sessionType: s.session_type,
         isPrimary: s.is_primary,
@@ -557,7 +568,7 @@ const ShellInner: React.FC = () => {
     return agents.find((x) => x.session_id === activeSessionId)
       || mergedRecents.find((x) => x.session_id === activeSessionId);
   }, [agents, mergedRecents, activeSessionId]);
-  const activeTitle = activeRecord?.name || activeRecord?.title || (activeSessionId ? '会话' : '');
+  const activeTitle = activeRecord?.name || activeRecord?.title || (activeSessionId ? tr('shell.session') : '');
 
   /* ---- clipboard / drop → ref image (create) or chat attachment ---- */
   useEffect(() => {
@@ -593,6 +604,7 @@ const ShellInner: React.FC = () => {
   const onSend = useCallback(async () => {
     const text = draft.trim();
     if (!text) return;
+    if (!authed) { requireLogin(); return; }   // 聊天/生图走后端 —— 未登录先提示登录
     if (mode === 'chat') {
       if (sending) return;
       const agentId = (activeRecord as any)?.id || activeRecord?.session_id;
@@ -667,7 +679,7 @@ const ShellInner: React.FC = () => {
     setCbarOpen(false);
     await runCreationBatchRef.current(text, specSnapshot, activeSessionId);
     return;
-  }, [draft, mode, sending, generating, activeRecord, sendMessage, create, activeSessionId, quoted, clearQuote, pickedDomains]);
+  }, [draft, mode, sending, generating, activeRecord, sendMessage, create, activeSessionId, quoted, clearQuote, pickedDomains, authed, requireLogin]);
 
   // Hoisted creation-batch runner. Both the initial send (above) and 重新生成
   // (below) drive their state through this so the behaviour stays identical —
@@ -1046,15 +1058,16 @@ const ShellInner: React.FC = () => {
   const toggleChip = (k: Exclude<ChipKey, null>) => setOpenChip((p) => (p === k ? null : k));
   const styleLabel = useMemo(() => {
     const t = create.cfg.style.trim();
-    if (!t) return '未设置';
+    if (!t) return tr('shell.create.unset');
     const preset = findPresetBySuffix(t);
-    return preset?.zh || (t.length > 14 ? t.slice(0, 14) + '…' : t);
-  }, [create.cfg.style]);
+    if (preset) return preset.custom ? preset.zh : tr('misc.style.' + preset.id);
+    return t.length > 14 ? t.slice(0, 14) + '…' : t;
+  }, [create.cfg.style, tr]);
   const negativeLabel = useMemo(() => {
     const t = create.cfg.negative.trim();
-    if (!t) return '无';
+    if (!t) return tr('shell.create.none');
     return t.length > 18 ? t.slice(0, 18) + '…' : t;
-  }, [create.cfg.negative]);
+  }, [create.cfg.negative, tr]);
 
   return (
     <div className="chaya-v2" data-mode={resolvedMode} data-theme={theme} data-glass={glassAttr} data-glass-i={glassIntensity} onDragOver={swallowDragOver} onDrop={onDrop}>
@@ -1064,7 +1077,7 @@ const ShellInner: React.FC = () => {
        *  lights, regardless of sidebar state. Click toggles collapse. */}
       <button
         className="v2-shell-toggle"
-        title={collapsed ? '展开侧栏' : '折叠侧栏'}
+        title={collapsed ? tr('shell.expandSidebar') : tr('shell.collapseSidebar')}
         onClick={() => setCollapsed((v) => !v)}
         aria-label="toggle sidebar"
       >
@@ -1072,80 +1085,89 @@ const ShellInner: React.FC = () => {
       </button>
 
       <div className={`v2-app${collapsed ? ' collapsed' : ''}`}>
-        {/* ===== sidebar ===== */}
-        <aside className="v2-side">
-          <nav className="v2-nav">
-            {([
-              { k: 'chat',    label: '聊天',   ic: <IconChat /> },
-              { k: 'gallery', label: '画廊',   ic: <IconGallery /> },
-              { k: 'kb',      label: '知识库', ic: <IconKB /> },
-              // Local Agents 不再占导航位——入口在常驻的项目树（点 badge / 项目 / 会话进入）。
-            ] as { k: NavKey; label: string; ic: React.ReactElement }[]).map((it) => (
-              <div
-                key={it.k}
-                className={`v2-row${activeNav === it.k ? ' active' : ''}`}
-                onClick={() => {
-                  if (it.k === 'gallery') { openGalleryTab(); return; }
-                  if (it.k === 'kb') { openKBTab(); return; }
-                  // chat: 不直接建 tab（要等用户选一个具体会话或 teahouse picker 落地）
-                  setActiveNav('chat');
-                  setMode('chat');
-                  setTeahousePickerOpen(true);
-                }}
-              >
-                <div className="v2-ic">{it.ic}</div>
-                <div>{it.label}</div>
-              </div>
-            ))}
+        {/* ===== 功能轨（图标+文字）：唯一一层全局导航。点一个功能 → 右侧是该功能自己的
+             「列表 + 内容」（见 view-frame 里的 v2-feat），不再出现两层侧栏。 ===== */}
+        {/* ===== 统一侧栏：icon+文字横排导航 + 当前功能列表 + 底部账号，单栏同底色；
+             白卡片只裹右侧内容（对话 / 画廊 / 知识库）。 ===== */}
+        <aside className="v2-side v2-sidebar">
+          <nav className="v2-rail-nav">
+            <button
+              className={`v2-railbtn${activeNav === 'chat' ? ' active' : ''}`}
+              onClick={() => { if (!authed) { requireLogin(); return; } setActiveNav('chat'); setMode('chat'); }}
+              title={tr('shell.nav.chat')}
+            ><span className="ic"><IconChat /></span><span className="lb">{tr('shell.nav.chat')}</span></button>
+
+            {isLocalAgentAvailable() && (
+              <button
+                className={`v2-railbtn${activeNav === 'local' ? ' active' : ''}`}
+                onClick={enterLocal}
+                title={tr('shell.nav.localCli')}
+              ><span className="ic"><IconTerminal /></span><span className="lb">CLI</span></button>
+            )}
+
+            <button
+              className={`v2-railbtn${activeNav === 'kb' ? ' active' : ''}`}
+              onClick={() => { if (!authed) { requireLogin(); return; } openKBTab(); }}
+              title={tr('shell.nav.kb')}
+            ><span className="ic"><IconKB /></span><span className="lb">{tr('shell.nav.kb')}</span></button>
+
+            <button
+              className={`v2-railbtn${activeNav === 'gallery' ? ' active' : ''}`}
+              onClick={() => { if (!authed) { requireLogin(); return; } openGalleryTab(); }}
+              title={tr('shell.nav.gallery')}
+            ><span className="ic"><IconGallery /></span><span className="lb">{tr('shell.nav.gallery')}</span></button>
           </nav>
 
-          {/* Local Agents 项目树：常驻侧栏，不必进入该 nav 才显示；未配置则只剩空标题。 */}
-          {isLocalAgentAvailable() && (
-            <LocalAgentTree la={la} onEnter={enterLocal} onCycleProvider={cycleLocalAgentProvider} />
+          {/* 当前功能自己的列表，并入同一条侧栏（导航之下）。白卡片只裹右侧内容。 */}
+          <div className="v2-side-list">
+            {activeNav === 'chat' && (
+              authed ? (
+                <>
+                  <div className="v2-sec">
+                    <span>Agents</span>
+                    <button className="v2-add" title={tr('shell.new')}><IconPlus /></button>
+                  </div>
+                  <div className="v2-agents">
+                    {loadingMeta && agents.length === 0 && <SkeletonRows n={2} />}
+                    {agents.map((a) => (
+                      <AgentRow key={a.session_id} a={a} active={activeSessionId === a.session_id} onOpen={openChatTab} onMore={onSidebarMore} />
+                    ))}
+                    {!loadingMeta && agents.length === 0 && (
+                      <div className="v2-side-hint">{tr('shell.noAgents')}</div>
+                    )}
+                  </div>
+                  <div className="v2-sec"><span>Chats</span></div>
+                  <div className="v2-recents">
+                    {loadingMeta && mergedRecents.length === 0 && <SkeletonRows n={6} />}
+                    {mergedRecents.map((r) => (
+                      <ChatRow key={r.session_id} r={r} active={activeSessionId === r.session_id} onOpen={openChatTab} onMore={onSidebarMore} />
+                    ))}
+                    {!loadingMeta && mergedRecents.length === 0 && (
+                      <div className="v2-side-hint">{tr('shell.noChats')}</div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="v2-feat-empty">{tr('shell.signInToSeeAgents')}</div>
+              )
+            )}
+            {activeNav === 'local' && isLocalAgentAvailable() && (
+              <LocalAgentTree la={la} onEnter={enterLocal} onCycleProvider={cycleLocalAgentProvider} />
+            )}
+          </div>
+
+          {authed ? (
+            <button className="v2-railme" onClick={() => setSettingsOpen(true)} title={`${userName()} · WS ${wsState} · ${tr('shell.settings')}`}>
+              <span className="v2-av">{userInitials()}</span>
+              <span className="v2-railme-nm">{userName()}</span>
+              <span className="lb"><IconGear /></span>
+            </button>
+          ) : (
+            <button className="v2-railme guest" onClick={requireLogin} title={tr('shell.guestLoginHint')}>
+              <span className="v2-av">·</span>
+              <span className="v2-railme-nm">{tr('shell.login')}</span>
+            </button>
           )}
-
-          <div className="v2-sec">
-            <span>Agents</span>
-            <button className="v2-add" title="新建"><IconPlus /></button>
-          </div>
-          <div className="v2-agents">
-            {loadingMeta && agents.length === 0 && <SkeletonRows n={2} />}
-            {agents.map((a) => (
-              <AgentRow
-                key={a.session_id}
-                a={a}
-                active={activeSessionId === a.session_id}
-                onOpen={openChatTab}
-                onMore={onSidebarMore}
-              />
-            ))}
-            {!loadingMeta && agents.length === 0 && (
-              <div style={{ padding: '8px 12px', fontSize: 12, color: 'var(--c-ink-4)' }}>还没有 agent</div>
-            )}
-          </div>
-
-          <div className="v2-sec"><span>Chats</span></div>
-          <div className="v2-recents">
-            {loadingMeta && mergedRecents.length === 0 && <SkeletonRows n={6} />}
-            {mergedRecents.map((r) => (
-              <ChatRow
-                key={r.session_id}
-                r={r}
-                active={activeSessionId === r.session_id}
-                onOpen={openChatTab}
-                onMore={onSidebarMore}
-              />
-            ))}
-            {!loadingMeta && mergedRecents.length === 0 && (
-              <div style={{ padding: '8px 12px', fontSize: 12, color: 'var(--c-ink-4)' }}>暂无会话</div>
-            )}
-          </div>
-
-          <div className="v2-me" onClick={() => setSettingsOpen(true)} title={`WS ${wsState} · 点击打开设置`}>
-            <div className="v2-av">{userInitials()}</div>
-            <div className="v2-nm">{userName()}</div>
-            <div className="v2-gear"><IconGear /></div>
-          </div>
         </aside>
 
         {/* ===== main ===== */}
@@ -1153,7 +1175,10 @@ const ShellInner: React.FC = () => {
           <div className="v2-topbar v2-topbar-tabs">
             <TopTabs
               la={la}
-              tabs={topTabs.tabs}
+              // 未登录：顶栏只保留本地（CLI）tab，隐藏云端 tab（聊天/画廊/知识库）——
+              // 它们持久化在 localStorage，登出 reload 后会被恢复，故在渲染层按 authed 过滤；
+              // 重新登录后自然再现（不销毁持久化状态）。
+              tabs={authed ? topTabs.tabs : topTabs.tabs.filter((t) => t.kind === 'local')}
               activeId={topTabs.activeId}
               onActivate={activateTopTab}
               onClose={closeTopTab}
@@ -1167,9 +1192,15 @@ const ShellInner: React.FC = () => {
           <div className="v2-view-frame" key={activeNav}>
           {activeNav === 'gallery' && <GalleryView />}
           {activeNav === 'kb' && <KnowledgeView />}
-          {activeNav === 'local' && <LocalAgentConversation la={la} />}
+          {activeNav === 'local' && (
+            <div className="v2-feat">
+              <div className="v2-feat-main"><LocalAgentConversation la={la} /></div>
+            </div>
+          )}
 
-          {activeNav === 'chat' && <>
+          {activeNav === 'chat' && (
+          <div className="v2-feat">
+            <div className="v2-feat-main">
           <section className="v2-stream" ref={streamRef}>
             <div className="v2-msgs">
               {messages.length === 0 && activeBatches.length === 0 && !stream && !thinking && (
@@ -1208,46 +1239,46 @@ const ShellInner: React.FC = () => {
               <div className="v2-cbar">
                 <div className="v2-cbar-inner">
                   <div className="v2-hd">
-                    <span className="v2-t">创作</span>
-                    <span className="v2-h">— 下方即正向提示词 · 拖入 / 粘贴图作参考</span>
-                    <span className="v2-h-warn" title="创作请求不会携带 agent 的人设 / system prompt，避免污染生图。如需特定画风请用「风格」">⚠ 不带 agent 人设</span>
+                    <span className="v2-t">{tr('shell.create.title')}</span>
+                    <span className="v2-h">{tr('shell.create.hint')}</span>
+                    <span className="v2-h-warn" title={tr('shell.create.noPersonaTip')}>{tr('shell.create.noPersona')}</span>
                     {/* Collapsed strip mirrors the sent CreateSpecCard chips so config stays visible. */}
                     {!cbarOpen && (
                       <span className="v2-cbar-summary">
                         <span className="v2-spec-chip"><IconAspect />{create.cfg.aspect}</span>
                         <span className="v2-spec-chip">× {create.cfg.count}</span>
                         {create.cfg.style.trim() && (
-                          <span className="v2-spec-chip" title={create.cfg.style}>风格 · {styleLabel}</span>
+                          <span className="v2-spec-chip" title={create.cfg.style}>{tr('shell.create.styleChip')} · {styleLabel}</span>
                         )}
                         {create.cfg.negative.trim() && (
-                          <span className="v2-spec-chip" title={create.cfg.negative}>负面 · {negativeLabel}</span>
+                          <span className="v2-spec-chip" title={create.cfg.negative}>{tr('shell.create.negativeChip')} · {negativeLabel}</span>
                         )}
                         {create.refs.length > 0 && (
-                          <span className="v2-spec-chip">参考 × {create.refs.length}</span>
+                          <span className="v2-spec-chip">{tr('shell.create.refChip')} × {create.refs.length}</span>
                         )}
                       </span>
                     )}
                     <button
                       className={`v2-cbar-toggle${cbarOpen ? ' open' : ''}`}
-                      title={cbarOpen ? '收起' : '展开'}
-                      aria-label={cbarOpen ? '收起创作面板' : '展开创作面板'}
+                      title={cbarOpen ? tr('shell.collapse') : tr('shell.expand')}
+                      aria-label={cbarOpen ? tr('shell.create.collapsePanel') : tr('shell.create.expandPanel')}
                       aria-expanded={cbarOpen}
                       onClick={() => setCbarOpen((v) => !v)}
                     ><IconChevron /></button>
-                    <button className="v2-x" title="退出创作" aria-label="退出创作" onClick={() => setMode('chat')}>✕</button>
+                    <button className="v2-x" title={tr('shell.create.exit')} aria-label={tr('shell.create.exit')} onClick={() => setMode('chat')}>✕</button>
                   </div>
                   <div className="v2-chips">
                     <button className={`v2-chip${openChip === 'style' ? ' active' : ''}`} onClick={() => toggleChip('style')}>
-                      <span className="v2-k">风格</span><span>{styleLabel}</span>
+                      <span className="v2-k">{tr('shell.create.style')}</span><span>{styleLabel}</span>
                     </button>
                     <button className={`v2-chip${openChip === 'aspect' ? ' active' : ''}`} onClick={() => toggleChip('aspect')}>
-                      <span className="v2-k">比例</span><span>{create.cfg.aspect}</span>
+                      <span className="v2-k">{tr('shell.create.aspect')}</span><span>{create.cfg.aspect}</span>
                     </button>
                     <button className={`v2-chip${openChip === 'count' ? ' active' : ''}`} onClick={() => toggleChip('count')}>
-                      <span className="v2-k">数量</span><span>{create.cfg.count}</span>
+                      <span className="v2-k">{tr('shell.create.count')}</span><span>{create.cfg.count}</span>
                     </button>
                     <button className={`v2-chip${openChip === 'negative' ? ' active' : ''}`} onClick={() => toggleChip('negative')}>
-                      <span className="v2-k">负面</span><span>{negativeLabel}</span>
+                      <span className="v2-k">{tr('shell.create.negative')}</span><span>{negativeLabel}</span>
                     </button>
                   </div>
 
@@ -1276,7 +1307,7 @@ const ShellInner: React.FC = () => {
                         onRemove={() => create.removeRef(r.id)}
                       />
                     ))}
-                    <div className="v2-ref add" onClick={onPickFiles}>＋ 添加 / 粘贴 / 拖入</div>
+                    <div className="v2-ref add" onClick={onPickFiles}>{tr('shell.create.addRef')}</div>
                   </div>
                 </div>
               </div>
@@ -1284,9 +1315,9 @@ const ShellInner: React.FC = () => {
               <div className="v2-box">
                 {mode === 'chat' && quoted && (
                   <div className="v2-quote-bar">
-                    <span className="v2-quote-tag">{quoted.role === 'assistant' ? '引用 · 回复' : '引用 · 你'}</span>
-                    <span className="v2-quote-text">{truncate(quoted.content || '（空消息）', 90)}</span>
-                    <button className="v2-quote-x" title="取消引用" onClick={clearQuote}>✕</button>
+                    <span className="v2-quote-tag">{quoted.role === 'assistant' ? tr('shell.quote.reply') : tr('shell.quote.you')}</span>
+                    <span className="v2-quote-text">{truncate(quoted.content || tr('shell.emptyMessage'), 90)}</span>
+                    <button className="v2-quote-x" title={tr('shell.quote.cancel')} onClick={clearQuote}>✕</button>
                   </div>
                 )}
                 {mode === 'chat' && pickedDomains.length > 0 && (
@@ -1294,9 +1325,9 @@ const ShellInner: React.FC = () => {
                     {pickedDomains.map((name) => {
                       const d = domains.find((x) => x.name === name);
                       return (
-                        <span key={name} className="v2-dom-chip" title="本条消息会调用该知识域">
+                        <span key={name} className="v2-dom-chip" title={tr('shell.domain.chipTip')}>
                           <span className="dot" style={{ background: domainColor(d) }} />@{name}
-                          <button className="x" title="移除" onClick={() => removePickedDomain(name)}>✕</button>
+                          <button className="x" title={tr('shell.domain.remove')} onClick={() => removePickedDomain(name)}>✕</button>
                         </span>
                       );
                     })}
@@ -1304,7 +1335,7 @@ const ShellInner: React.FC = () => {
                 )}
                 {mention && (
                   <div className="v2-dom-pop">
-                    <div className="v2-dom-pop-hd">知识域 · 选中后本条消息会带上该领域知识</div>
+                    <div className="v2-dom-pop-hd">{tr('shell.domain.popHead')}</div>
                     {mentionMatches.length > 0 ? (
                       mentionMatches.map((d, i) => (
                         <button
@@ -1321,12 +1352,12 @@ const ShellInner: React.FC = () => {
                     ) : (
                       <div className="v2-dom-pop-empty">
                         {domainsLoading
-                          ? '加载中…'
+                          ? tr('shell.domain.loading')
                           : domains.length === 0
-                            ? '还没有知识域，去「知识库」新建'
+                            ? tr('shell.domain.empty')
                             : pickedDomains.length > 0 && domains.every((d) => pickedDomains.includes(d.name))
-                              ? '已全部选中'
-                              : '没有匹配的知识域'}
+                              ? tr('shell.domain.allSelected')
+                              : tr('shell.domain.noMatch')}
                       </div>
                     )}
                   </div>
@@ -1343,7 +1374,7 @@ const ShellInner: React.FC = () => {
                 )}
                 <textarea
                   ref={taRef}
-                  placeholder={mode === 'create' ? '描述你想要的画面…' : 'Ask anything（@ 调用知识域）'}
+                  placeholder={mode === 'create' ? tr('shell.composer.createPlaceholder') : tr('shell.composer.chatPlaceholder')}
                   value={draft}
                   onChange={onComposerChange}
                   onKeyDown={onKeyDown}
@@ -1351,7 +1382,7 @@ const ShellInner: React.FC = () => {
                 />
                 <div className="v2-row">
                   <div className="v2-l">
-                    <button className="v2-ib" title="附件" onClick={onPickFiles}><IconAttach /></button>
+                    <button className="v2-ib" title={tr('shell.composer.attach')} onClick={onPickFiles}><IconAttach /></button>
                     <button
                       ref={contextBtnRef}
                       className={`v2-ib${contextPopOpen ? ' on' : ''}`}
@@ -1360,8 +1391,8 @@ const ShellInner: React.FC = () => {
                         // agent's own surface. Everywhere else it's the model /
                         // context picker.
                         mode === 'chat' && isAgentSession
-                          ? 'Agent 设置'
-                          : mode === 'create' ? '创作模型' : '对话模型'
+                          ? tr('shell.agentSettings')
+                          : mode === 'create' ? tr('shell.createModel') : tr('shell.chatModel')
                       }
                       onClick={() => {
                         if (mode === 'chat' && isAgentSession && activeRecord) {
@@ -1375,8 +1406,8 @@ const ShellInner: React.FC = () => {
                     </button>
                     <div className="v2-modepills" ref={pillsRef}>
                       <span className="v2-indicator" ref={indicatorRef} />
-                      <button ref={chatBtnRef}   className={mode === 'chat'   ? 'on' : ''} onClick={() => setMode('chat')}>对话</button>
-                      <button ref={createBtnRef} className={mode === 'create' ? 'on' : ''} onClick={() => setMode('create')}>创作</button>
+                      <button ref={chatBtnRef}   className={mode === 'chat'   ? 'on' : ''} onClick={() => setMode('chat')}>{tr('shell.modeChat')}</button>
+                      <button ref={createBtnRef} className={mode === 'create' ? 'on' : ''} onClick={() => setMode('create')}>{tr('shell.modeCreate')}</button>
                     </div>
                   </div>
                   <ModelBadge
@@ -1389,7 +1420,7 @@ const ShellInner: React.FC = () => {
                   />
                   <button
                     className="v2-send"
-                    title="发送 (Enter)"
+                    title={tr('shell.composer.send')}
                     onClick={onSend}
                     disabled={!draft.trim() || (mode === 'chat' ? sending : generating)}
                   >
@@ -1399,7 +1430,9 @@ const ShellInner: React.FC = () => {
               </div>
             </div>
           </div>
-          </>}
+            </div>
+          </div>
+          )}
           </div>{/* /.v2-view-frame */}
         </main>
       </div>
@@ -1431,7 +1464,7 @@ const ShellInner: React.FC = () => {
         return (
           <ConfirmRewind
             kind={confirmRewind.kind}
-            preview={truncate(confirmRewind.m.content || '（空消息）', 60)}
+            preview={truncate(confirmRewind.m.content || tr('shell.emptyMessage'), 60)}
             historicalModel={historicalModel}
             liveModel={create.cfg.model}
             onCancel={() => setConfirmRewind(null)}
@@ -1476,6 +1509,15 @@ const ShellInner: React.FC = () => {
           updateSettings={updateSettings}
           onLogout={handleLogout}
           onClose={() => setSettingsOpen(false)}
+        />
+      )}
+
+      {/* 按需登录：可关闭的浮层（不挡本地功能）。登录成功 → authed 翻 true，
+          useChatBackend 重新拉 meta + 连 WS，云端功能即可用。 */}
+      {loginOpen && (
+        <LoginPage
+          onLogin={() => { setAuthed(true); setLoginOpen(false); }}
+          onClose={() => setLoginOpen(false)}
         />
       )}
 
@@ -1555,6 +1597,7 @@ const TeahousePicker: React.FC<{
   onClose: () => void;
   onPick: (cfg: LLMConfigFromDB, modelOverride: string) => void;
 }> = ({ configs, onClose, onPick }) => {
+  const { t: tr } = useI18n();
   // 「发起聊天」与对话模型选择保持一致：创作专用模型（media_visible）不出现。
   // 创作模型有自己专属的选择入口（创作模式的 ▲），混进来会让用户用 SDXL/Flux
   // 起一个聊天会话却聊不出东西。
@@ -1577,17 +1620,17 @@ const TeahousePicker: React.FC<{
     <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="v2-modal v2-pickmodal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="v2-modal-hd">
-          <h3>发起聊天</h3>
-          <button className="x" onClick={onClose} aria-label="关闭">✕</button>
+          <h3>{tr('shell.teahouse.title')}</h3>
+          <button className="x" onClick={onClose} aria-label={tr('common.close')}>✕</button>
         </div>
         {enabled.length === 0 ? (
           <div className="v2-pickmodal-empty">
-            还没有可用的模型 — 去 设置 · 模型 添加。
+            {tr('shell.teahouse.noModels')}
           </div>
         ) : (
           <div className="v2-pickmodal-split">
             {/* 左：provider 厂商列表 */}
-            <aside className="v2-pickmodal-providers" role="listbox" aria-label="厂商">
+            <aside className="v2-pickmodal-providers" role="listbox" aria-label={tr('shell.provider')}>
               {grouped.map(([provider, items]) => (
                 <button
                   key={provider}
@@ -1605,7 +1648,7 @@ const TeahousePicker: React.FC<{
             {/* 右：该 provider 在「设置 · 模型」里录入的模型列表 */}
             <div className="v2-pickmodal-models">
               {activeConfigs.length === 0 ? (
-                <div className="v2-pickmodal-empty">该厂商下还没有可用模型。</div>
+                <div className="v2-pickmodal-empty">{tr('shell.noModelsForProvider')}</div>
               ) : (
                 <div className="v2-pickmodal-modellist">
                   {activeConfigs.map((c) => (
@@ -1616,13 +1659,13 @@ const TeahousePicker: React.FC<{
                       onClick={() => setPicked(c)}
                     >
                       <div className="v2-pick-nm">{c.shortname || c.name}</div>
-                      <div className="v2-pick-ds">{c.model || '默认模型'}</div>
+                      <div className="v2-pick-ds">{c.model || tr('shell.defaultModelName')}</div>
                     </button>
                   ))}
                 </div>
               )}
               <div className="v2-pickmodal-override">
-                <label>模型覆盖（可选）</label>
+                <label>{tr('shell.teahouse.modelOverride')}</label>
                 <input
                   type="text"
                   value={modelOverride}
@@ -1634,14 +1677,14 @@ const TeahousePicker: React.FC<{
           </div>
         )}
         <div className="v2-modal-foot">
-          <button type="button" onClick={onClose} className="v2-mbtn">取消</button>
+          <button type="button" onClick={onClose} className="v2-mbtn">{tr('common.cancel')}</button>
           <button
             type="button"
             className="v2-mbtn primary"
             disabled={!picked}
             onClick={() => picked && onPick(picked, modelOverride.trim())}
           >
-            开聊
+            {tr('shell.teahouse.start')}
           </button>
         </div>
       </div>
@@ -1658,6 +1701,7 @@ const RowMenu: React.FC<{
   onDelete: () => Promise<void>;
   onSettings: () => void;
 }> = ({ session, isAgent, x, y, onClose, onRename, onDelete, onSettings }) => {
+  const { t: tr } = useI18n();
   const ref = useRef<HTMLDivElement | null>(null);
   // Electron disables window.prompt/confirm, so rename has to use an inline
   // input. Keep the editing UI inside the menu itself for minimal layout work.
@@ -1702,18 +1746,18 @@ const RowMenu: React.FC<{
               if (e.key === 'Enter') { e.preventDefault(); commit(); }
               if (e.key === 'Escape') { e.preventDefault(); setEditing(false); }
             }}
-            placeholder="输入名称"
+            placeholder={tr('shell.rowMenu.namePlaceholder')}
           />
           <div className="v2-rowmenu-edit-foot">
-            <button className="v2-btn ghost" onClick={() => setEditing(false)}>取消</button>
-            <button className="v2-btn primary" onClick={commit} disabled={!name.trim()}>确定</button>
+            <button className="v2-btn ghost" onClick={() => setEditing(false)}>{tr('common.cancel')}</button>
+            <button className="v2-btn primary" onClick={commit} disabled={!name.trim()}>{tr('common.confirm')}</button>
           </div>
         </div>
       ) : (
         <>
-          {isAgent && <button onClick={onSettings}>Agent 设置…</button>}
-          <button onClick={() => setEditing(true)}>改名</button>
-          {!session.is_primary && <button className="danger" onClick={del}>删除</button>}
+          {isAgent && <button onClick={onSettings}>{tr('shell.rowMenu.agentSettings')}</button>}
+          <button onClick={() => setEditing(true)}>{tr('shell.rowMenu.rename')}</button>
+          {!session.is_primary && <button className="danger" onClick={del}>{tr('common.delete')}</button>}
         </>
       )}
     </div>
@@ -1796,6 +1840,7 @@ interface MessageViewProps {
   onOpenSpec?: (m: Message) => void;
 }
 const MessageViewImpl: React.FC<MessageViewProps> = ({ m, showTokens, onPreviewImage, onRevert, onEdit, onQuote, onRerunCreation, onOpenSpec }) => {
+  const { t: tr } = useI18n();
   const role = m.role === 'user' ? 'user' : 'assistant';
   // Defensive: some backends (or older persisted rows) hand ext back as a
   // JSON-stringified blob rather than an object. Normalise once so the
@@ -1826,7 +1871,7 @@ const MessageViewImpl: React.FC<MessageViewProps> = ({ m, showTokens, onPreviewI
   const quoteChip = quote ? (
     <div className="v2-quote-cite" title={quote.content || ''}>
       <IconQuote />
-      <span className="v2-quote-cite-tag">{quote.role === 'assistant' ? '引用回复' : '引用'}</span>
+      <span className="v2-quote-cite-tag">{quote.role === 'assistant' ? tr('shell.quote.citeReply') : tr('shell.quote.cite')}</span>
       <span className="v2-quote-cite-text">{truncate(quote.content || '', 60)}</span>
     </div>
   ) : null;
@@ -1836,8 +1881,8 @@ const MessageViewImpl: React.FC<MessageViewProps> = ({ m, showTokens, onPreviewI
     ? ext.knowledge_domains.filter((x: unknown): x is string => typeof x === 'string' && !!x)
     : [];
   const domainCite = refDomains.length > 0 ? (
-    <div className="v2-domain-cite" title={`引用知识域：${refDomains.join('、')}`}>
-      <span className="v2-domain-cite-tag">引用了</span>
+    <div className="v2-domain-cite" title={tr('shell.domain.citeTip', { domains: refDomains.join('、') })}>
+      <span className="v2-domain-cite-tag">{tr('shell.domain.cited')}</span>
       {refDomains.map((name) => (
         <span key={name} className="v2-domain-cite-pill">
           <span className="dot" />
@@ -1853,15 +1898,15 @@ const MessageViewImpl: React.FC<MessageViewProps> = ({ m, showTokens, onPreviewI
   const actions = (
     <div className="v2-msg-actions">
       {m.role === 'user' && onRevert && (
-        <button className="v2-msg-act" title="回退到这条（删除这条及其之后）" onClick={() => onRevert(m)}><IconRevert /></button>
+        <button className="v2-msg-act" title={tr('shell.msg.revert')} onClick={() => onRevert(m)}><IconRevert /></button>
       )}
       {m.role === 'user' && !spec && onEdit && (
-        <button className="v2-msg-act" title="回退并编辑这条" onClick={() => onEdit(m)}><IconEdit /></button>
+        <button className="v2-msg-act" title={tr('shell.msg.edit')} onClick={() => onEdit(m)}><IconEdit /></button>
       )}
       {canRerun && onRerunCreation && (
         <button
           className="v2-msg-act"
-          title="按相同设置重新生成（删除此消息之后的所有内容）"
+          title={tr('shell.msg.rerun')}
           onClick={() => onRerunCreation(m)}
         >
           {/* Inline so we don't have to wire a new icon export. */}
@@ -1872,7 +1917,7 @@ const MessageViewImpl: React.FC<MessageViewProps> = ({ m, showTokens, onPreviewI
         </button>
       )}
       {onQuote && (
-        <button className="v2-msg-act" title="引用这条作为下条上下文" onClick={() => onQuote(m)}><IconQuote /></button>
+        <button className="v2-msg-act" title={tr('shell.msg.quote')} onClick={() => onQuote(m)}><IconQuote /></button>
       )}
     </div>
   );
@@ -1890,16 +1935,16 @@ const MessageViewImpl: React.FC<MessageViewProps> = ({ m, showTokens, onPreviewI
             className={`v2-bubble v2-spec${onOpenSpec ? ' v2-spec-clickable' : ''}`}
             role={onOpenSpec ? 'button' : undefined}
             tabIndex={onOpenSpec ? 0 : undefined}
-            aria-label={onOpenSpec ? '查看创作配方详情' : undefined}
-            title={onOpenSpec ? '查看创作配方' : undefined}
+            aria-label={onOpenSpec ? tr('shell.spec.viewDetailAria') : undefined}
+            title={onOpenSpec ? tr('shell.spec.viewTitle') : undefined}
             onClick={onOpenSpec ? openDetail : undefined}
             onKeyDown={onOpenSpec ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(); } } : undefined}
           >
             <div className="v2-spec-chips">
               <span className="v2-spec-chip"><IconAspect />{spec.aspect}</span>
               <span className="v2-spec-chip">× {spec.count}</span>
-              {spec.style?.trim() && <span className="v2-spec-chip" title={spec.style}>风格 · {truncate(spec.style, 20)}</span>}
-              {spec.negative?.trim() && <span className="v2-spec-chip" title={spec.negative}>负面 · {truncate(spec.negative, 16)}</span>}
+              {spec.style?.trim() && <span className="v2-spec-chip" title={spec.style}>{tr('shell.create.styleChip')} · {truncate(spec.style, 20)}</span>}
+              {spec.negative?.trim() && <span className="v2-spec-chip" title={spec.negative}>{tr('shell.create.negativeChip')} · {truncate(spec.negative, 16)}</span>}
             </div>
             {m.content?.trim() && <p style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{m.content}</p>}
             {media.length > 0 && (
@@ -1985,6 +2030,7 @@ const ConfirmRewind: React.FC<{
   onConfirm: (opts?: { useLiveModel?: boolean }) => void;
   onCancel: () => void;
 }> = ({ kind, preview, historicalModel, liveModel, onConfirm, onCancel }) => {
+  const { t: tr } = useI18n();
   // Default to the frozen historical model — "记住当时" is the documented
   // semantic. The user can flip to the live picker per-rerun when they need
   // to escape a snapshot whose model is broken (e.g. Gemini geo-blocked).
@@ -1999,10 +2045,10 @@ const ConfirmRewind: React.FC<{
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onConfirm, onCancel, kind, useLive]);
-  const title = kind === 'rerun' ? '按相同设置重新生成？'
-    : kind === 'edit' ? '回退并编辑这条消息？'
-    : '回退到这条消息？';
-  const cta = kind === 'rerun' ? '重新生成' : kind === 'edit' ? '回退并编辑' : '回退';
+  const title = kind === 'rerun' ? tr('shell.rewind.titleRerun')
+    : kind === 'edit' ? tr('shell.rewind.titleEdit')
+    : tr('shell.rewind.titleRevert');
+  const cta = kind === 'rerun' ? tr('shell.rewind.ctaRerun') : kind === 'edit' ? tr('shell.rewind.ctaEdit') : tr('shell.rewind.ctaRevert');
   return (
     <div className="v2-confirm-backdrop" onClick={onCancel}>
       <div className="v2-confirm" onClick={(e) => e.stopPropagation()}>
@@ -2010,19 +2056,19 @@ const ConfirmRewind: React.FC<{
         <div className="v2-confirm-quote">“{preview}”</div>
         <div className="v2-confirm-body">
           {kind === 'rerun' ? (
-            <>会删除这条消息<strong>之后的所有消息</strong>（含 AI 生成的图片），并按相同的提示词、比例、参考图重新出图。不可恢复。</>
+            <>{tr('shell.rewind.bodyRerunA')}<strong>{tr('shell.rewind.bodyRerunStrong')}</strong>{tr('shell.rewind.bodyRerunB')}</>
           ) : (
-            <>这会删除这条消息<strong>以及它之后的所有消息</strong>（含 AI 回复），不可恢复。</>
+            <>{tr('shell.rewind.bodyA')}<strong>{tr('shell.rewind.bodyStrong')}</strong>{tr('shell.rewind.bodyB')}</>
           )}
-          {kind === 'edit' && ' 原文会回填到输入框，供你修改后重新发送。'}
+          {kind === 'edit' && tr('shell.rewind.editExtra')}
         </div>
         {kind === 'rerun' && historicalModel && (
           <div className="v2-confirm-body" style={{ marginTop: 8, padding: 10, borderRadius: 8, background: 'var(--c-paper-2, rgba(0,0,0,0.04))' }}>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>将使用模型</div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>{tr('shell.rewind.willUseModel')}</div>
             <div style={{ marginTop: 4, fontWeight: 600 }}>
-              {useLive ? (liveModel || '当前选择') : historicalModel}
+              {useLive ? (liveModel || tr('shell.rewind.currentChoice')) : historicalModel}
               <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, opacity: 0.6 }}>
-                {useLive ? '（当前 picker）' : '（原消息）'}
+                {useLive ? tr('shell.rewind.fromPicker') : tr('shell.rewind.fromOriginal')}
               </span>
             </div>
             {canOverride && (
@@ -2032,13 +2078,13 @@ const ConfirmRewind: React.FC<{
                   checked={useLive}
                   onChange={(e) => setUseLive(e.target.checked)}
                 />
-                <span>改用当前选择的模型 <code style={{ padding: '0 4px', borderRadius: 4, background: 'rgba(0,0,0,0.08)' }}>{liveModel}</code></span>
+                <span>{tr('shell.rewind.useCurrentModel')} <code style={{ padding: '0 4px', borderRadius: 4, background: 'rgba(0,0,0,0.08)' }}>{liveModel}</code></span>
               </label>
             )}
           </div>
         )}
         <div className="v2-confirm-actions">
-          <button className="v2-btn ghost" onClick={onCancel}>取消</button>
+          <button className="v2-btn ghost" onClick={onCancel}>{tr('common.cancel')}</button>
           <button
             className="v2-btn danger"
             onClick={() => onConfirm(kind === 'rerun' ? { useLiveModel: useLive } : undefined)}
@@ -2055,6 +2101,7 @@ const ConfirmRewind: React.FC<{
 const ThinkBlock: React.FC<{ reasoning: string; streaming: boolean; hasContent: boolean }> = ({
   reasoning, streaming, hasContent,
 }) => {
+  const { t: tr } = useI18n();
   const [open, setOpen] = useState(streaming && !hasContent);
   useEffect(() => {
     if (streaming && hasContent) setOpen(false);
@@ -2063,8 +2110,8 @@ const ThinkBlock: React.FC<{ reasoning: string; streaming: boolean; hasContent: 
     <details className="v2-think" open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
       <summary>
         <span className="v2-think-ic">💭</span>
-        <span>{streaming && !hasContent ? '思考中…' : '思考过程'}</span>
-        <span className="v2-think-len">{reasoning.length.toLocaleString()} 字</span>
+        <span>{streaming && !hasContent ? tr('shell.think.thinking') : tr('shell.think.process')}</span>
+        <span className="v2-think-len">{tr('shell.think.chars', { n: reasoning.length.toLocaleString() })}</span>
       </summary>
       <div className="v2-think-body">{reasoning}</div>
     </details>
@@ -2073,6 +2120,7 @@ const ThinkBlock: React.FC<{ reasoning: string; streaming: boolean; hasContent: 
 
 /** Fullscreen image preview with a download action. Esc / backdrop close. */
 const ImagePreview: React.FC<{ src: string; onClose: () => void }> = ({ src, onClose }) => {
+  const { t: tr } = useI18n();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -2089,12 +2137,12 @@ const ImagePreview: React.FC<{ src: string; onClose: () => void }> = ({ src, onC
   };
   return (
     <div className="v2-imgpreview" onClick={onClose}>
-      <button className="v2-imgpreview-close" title="关闭 (Esc)" onClick={onClose}>✕</button>
+      <button className="v2-imgpreview-close" title={tr('shell.preview.close')} onClick={onClose}>✕</button>
       <button
         className="v2-imgpreview-dl"
-        title="下载"
+        title={tr('shell.preview.download')}
         onClick={(e) => { e.stopPropagation(); download(); }}
-      >下载</button>
+      >{tr('shell.preview.download')}</button>
       <img src={src} alt="" onClick={(e) => e.stopPropagation()} />
     </div>
   );
@@ -2125,10 +2173,11 @@ function specModelLabel(spec: Batch['spec']): { label: string; muted: boolean } 
   for (const [re, name] of friendly) if (re.test(m)) return { label: name, muted: false };
   if (m) return { label: m, muted: false };
   if (p && PICK_PROVIDER_LABELS[p]) return { label: PICK_PROVIDER_LABELS[p], muted: false };
-  return { label: '未知模型', muted: true };
+  return { label: t('shell.unknownModel'), muted: true };
 }
 
 const CreateSpecCard: React.FC<{ b: Batch; onOpenDetail: () => void }> = ({ b, onOpenDetail }) => {
+  const { t: tr } = useI18n();
   const { aspect, count, style, negative, refs } = b.spec;
   const { label: modelLabel, muted: modelMuted } = specModelLabel(b.spec);
   return (
@@ -2138,16 +2187,16 @@ const CreateSpecCard: React.FC<{ b: Batch; onOpenDetail: () => void }> = ({ b, o
           className="v2-bubble v2-spec v2-spec-clickable"
           role="button"
           tabIndex={0}
-          aria-label="查看创作配方详情"
-          title="查看创作配方"
+          aria-label={tr('shell.spec.viewDetailAria')}
+          title={tr('shell.spec.viewTitle')}
           onClick={onOpenDetail}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenDetail(); } }}
         >
           <div className="v2-spec-chips">
             <span className="v2-spec-chip"><IconAspect />{aspect}</span>
             <span className="v2-spec-chip">× {count}</span>
-            {style.trim() && <span className="v2-spec-chip" title={style}>风格 · {truncate(style, 20)}</span>}
-            {negative.trim() && <span className="v2-spec-chip" title={negative}>负面 · {truncate(negative, 16)}</span>}
+            {style.trim() && <span className="v2-spec-chip" title={style}>{tr('shell.create.styleChip')} · {truncate(style, 20)}</span>}
+            {negative.trim() && <span className="v2-spec-chip" title={negative}>{tr('shell.create.negativeChip')} · {truncate(negative, 16)}</span>}
           </div>
           {b.promptDisplay.trim() && (
             <p style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{b.promptDisplay}</p>
@@ -2177,6 +2226,7 @@ const CreateSpecDetailModal: React.FC<{
   onClose: () => void;
   onPreviewImage: (src: string) => void;
 }> = ({ b, onClose, onPreviewImage }) => {
+  const { t: tr } = useI18n();
   const { aspect, count, style, negative, refs, model, provider } = b.spec;
   const { label: modelLabel } = specModelLabel(b.spec);
   const prompt = b.promptDisplay.trim();
@@ -2189,21 +2239,21 @@ const CreateSpecDetailModal: React.FC<{
   };
   return (
     <Modal
-      title="创作配方"
+      title={tr('shell.spec.recipe')}
       subtitle={modelLabel}
       wide
       onClose={onClose}
     >
       <div className="v2-modal-sec">
-        <div className="lab">配置</div>
+        <div className="lab">{tr('shell.spec.config')}</div>
         <div className="v2-spec-chips">
           <span className="v2-spec-chip"><IconAspect />{aspect}</span>
-          <span className="v2-spec-chip">× {count} 张</span>
-          {style.trim() && <span className="v2-spec-chip" title={style}>风格 · {truncate(style, 28)}</span>}
-          {negative.trim() && <span className="v2-spec-chip" title={negative}>负面 · {truncate(negative, 22)}</span>}
+          <span className="v2-spec-chip">× {tr('shell.spec.countN', { n: count })}</span>
+          {style.trim() && <span className="v2-spec-chip" title={style}>{tr('shell.create.styleChip')} · {truncate(style, 28)}</span>}
+          {negative.trim() && <span className="v2-spec-chip" title={negative}>{tr('shell.create.negativeChip')} · {truncate(negative, 22)}</span>}
           {(model || provider) && (
             <span className="v2-spec-chip" title={`${provider || ''}${model ? ` · ${model}` : ''}`}>
-              模型 · {model || PICK_PROVIDER_LABELS[(provider || '').toLowerCase()] || provider}
+              {tr('shell.spec.modelChip')} · {model || PICK_PROVIDER_LABELS[(provider || '').toLowerCase()] || provider}
             </span>
           )}
         </div>
@@ -2211,37 +2261,37 @@ const CreateSpecDetailModal: React.FC<{
 
       <div className="v2-modal-sec">
         <div className="lab" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span>提示词</span>
+          <span>{tr('shell.spec.prompt')}</span>
           {prompt && (
             <button
               type="button"
               className="v2-mini-copy"
               onClick={onCopyPrompt}
-              title={copied ? '已复制' : '复制提示词'}
-              aria-label="复制提示词"
+              title={copied ? tr('shell.spec.copied') : tr('shell.spec.copyPrompt')}
+              aria-label={tr('shell.spec.copyPrompt')}
             >
               {copied ? <IconCheck /> : <IconCopy />}
-              <span>{copied ? '已复制' : '复制'}</span>
+              <span>{copied ? tr('shell.spec.copied') : tr('shell.spec.copy')}</span>
             </button>
           )}
         </div>
         {prompt ? (
           <pre className="v2-spec-prompt">{prompt}</pre>
         ) : (
-          <div className="v2-modal-note">（仅用参考图，未写提示词）</div>
+          <div className="v2-modal-note">{tr('shell.spec.refsOnly')}</div>
         )}
       </div>
 
       {negative.trim() && (
         <div className="v2-modal-sec">
-          <div className="lab">负面提示</div>
+          <div className="lab">{tr('shell.spec.negativePrompt')}</div>
           <pre className="v2-spec-prompt v2-spec-prompt-neg">{negative.trim()}</pre>
         </div>
       )}
 
       {refs.length > 0 && (
         <div className="v2-modal-sec">
-          <div className="lab">参考图 · {refs.length}</div>
+          <div className="lab">{tr('shell.spec.refImages')} · {refs.length}</div>
           <div className="v2-spec-refs v2-spec-refs-lg">
             {refs.map((r, i) => (
               <button
@@ -2251,7 +2301,7 @@ const CreateSpecDetailModal: React.FC<{
                 title={r.directive || `#${i + 1}`}
                 onClick={() => onPreviewImage(`data:${r.mimeType};base64,${r.data}`)}
               >
-                <img src={`data:${r.mimeType};base64,${r.data}`} alt={r.directive || `参考 ${i + 1}`} />
+                <img src={`data:${r.mimeType};base64,${r.data}`} alt={r.directive || tr('shell.spec.refN', { n: i + 1 })} />
                 {r.directive && <span className="v2-spec-ref-directive">{truncate(r.directive, 22)}</span>}
               </button>
             ))}
@@ -2350,10 +2400,10 @@ async function persistCreationAssistantImages(sid: string, b: Batch): Promise<vo
  *  (e.g. Gemini's "User location is not supported for the API use" geo-block). */
 async function persistCreationError(sid: string, errors: string[]): Promise<void> {
   const uniq = Array.from(new Set(errors.map((e) => (e || '').trim()).filter(Boolean)));
-  const detail = uniq.length ? uniq.join('\n\n') : '未知错误';
+  const detail = uniq.length ? uniq.join('\n\n') : t('shell.create.unknownError');
   await api.post(`/api/sessions/${sid}/messages`, {
     role: 'assistant',
-    content: `⚠️ 生图失败\n\n${detail}`,
+    content: `${t('shell.create.genFailed')}\n\n${detail}`,
     source: 'create',
     ext: { creation_error: true },
   });
@@ -2361,12 +2411,13 @@ async function persistCreationError(sid: string, errors: string[]): Promise<void
 
 /** Human caption for a finished creation batch, e.g. "生成完成 · 4 张 · 耗时 12.3s". */
 function creationDoneCaption(n: number, elapsedMs?: number): string {
-  let s = `生成完成 · ${n} 张`;
-  if (elapsedMs && elapsedMs > 0) s += ` · 耗时 ${(elapsedMs / 1000).toFixed(1)}s`;
+  let s = t('shell.create.doneCaption', { n });
+  if (elapsedMs && elapsedMs > 0) s += t('shell.create.doneElapsed', { sec: (elapsedMs / 1000).toFixed(1) });
   return s;
 }
 
 const BatchView: React.FC<{ b: Batch; onPreviewImage?: (src: string) => void }> = React.memo(({ b, onPreviewImage }) => {
+  const { t: tr } = useI18n();
   // Live elapsed counter for pending batches. gpt-image-2 takes 30-60s end to
   // end; without a visible timer the shimmer-only state feels broken. We tick
   // every 500ms (cheap enough; only one batch is pending at a time) and stop
@@ -2386,14 +2437,14 @@ const BatchView: React.FC<{ b: Batch; onPreviewImage?: (src: string) => void }> 
       <div className="v2-body">
         <p style={{ color: 'var(--c-ink-3)', fontSize: 13 }}>
           {b.pending
-            ? `正在画 ${b.slots.length} 张 · ${elapsedSec}s`
+            ? tr('shell.batch.drawing', { n: b.slots.length, sec: elapsedSec })
             : creationDoneCaption(b.slots.filter(Boolean).length, b.elapsedMs)}
         </p>
         <div className="v2-imgs">
           {b.slots.map((s, i) => (
             <div key={i} className={`v2-ph${s ? ' clickable' : ''}`} onClick={s ? () => onPreviewImage?.(s) : undefined}>
               {s ? <img src={s} alt={`#${i + 1}`} /> :
-                b.errors[i] ? <span style={{ fontSize: 11, color: 'var(--c-ink-4)' }} title={b.errors[i] || ''}>失败</span> :
+                b.errors[i] ? <span style={{ fontSize: 11, color: 'var(--c-ink-4)' }} title={b.errors[i] || ''}>{tr('shell.batch.failed')}</span> :
                 <span className="v2-shimmer-tile" />}
             </div>
           ))}
@@ -2404,20 +2455,24 @@ const BatchView: React.FC<{ b: Batch; onPreviewImage?: (src: string) => void }> 
 });
 BatchView.displayName = 'BatchView';
 
-const RefPill: React.FC<{ idx: number; r: RefImage; onChange: (v: string) => void; onRemove: () => void }> = ({ idx, r, onChange, onRemove }) => (
+const RefPill: React.FC<{ idx: number; r: RefImage; onChange: (v: string) => void; onRemove: () => void }> = ({ idx, r, onChange, onRemove }) => {
+  const { t: tr } = useI18n();
+  return (
   <div className="v2-ref">
     <div className="v2-th"><img src={`data:${r.mimeType};base64,${r.data}`} alt={`#${idx}`} /></div>
     <input
       className="v2-dir"
-      placeholder={`#${idx}: 怎么用这张？`}
+      placeholder={tr('shell.refPill.placeholder', { idx })}
       value={r.directive}
       onChange={(e) => onChange(e.target.value)}
     />
     <span className="v2-x" onClick={onRemove}>✕</span>
   </div>
-);
+  );
+};
 
 const GalleryView: React.FC = () => {
+  const { t: tr } = useI18n();
   const [items, setItems] = useState<MediaOutputItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState<MediaOutputItem | null>(null);
@@ -2456,12 +2511,12 @@ const GalleryView: React.FC = () => {
   const groups = useMemo(() => {
     const byDay = new Map<string, MediaOutputItem[]>();
     for (const it of items) {
-      const key = (it.created_at || '').slice(0, 10) || '未知日期';
+      const key = (it.created_at || '').slice(0, 10) || tr('shell.gallery.unknownDate');
       if (!byDay.has(key)) byDay.set(key, []);
       byDay.get(key)!.push(it);
     }
     return Array.from(byDay.entries()).sort((a, b) => b[0].localeCompare(a[0]));
-  }, [items]);
+  }, [items, tr]);
 
   // Stable callbacks so the memoized GalleryGroup / GalleryTile don't re-mount
   // every selection toggle. Without useCallback the prop identity flips on
@@ -2511,14 +2566,14 @@ const GalleryView: React.FC = () => {
   };
 
   if (loading && items.length === 0) {
-    return <div className="v2-view"><div className="v2-view-head"><h2>画廊</h2></div></div>;
+    return <div className="v2-view"><div className="v2-view-head"><h2>{tr('shell.nav.gallery')}</h2></div></div>;
   }
   if (items.length === 0) {
     return (
       <div className="v2-view">
-        <div className="v2-view-head"><h2>画廊</h2></div>
+        <div className="v2-view-head"><h2>{tr('shell.nav.gallery')}</h2></div>
         <div className="v2-gallery-empty">
-          <div className="h">还没有作品</div>
+          <div className="h">{tr('shell.gallery.empty')}</div>
         </div>
       </div>
     );
@@ -2527,20 +2582,20 @@ const GalleryView: React.FC = () => {
   const headerActions = (
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginLeft: 'auto' }}>
       {!selectMode && (
-        <button className="v2-btn ghost" onClick={() => setSelectMode(true)}>选择</button>
+        <button className="v2-btn ghost" onClick={() => setSelectMode(true)}>{tr('shell.gallery.select')}</button>
       )}
       {selectMode && (
         <>
-          <span style={{ fontSize: 12, opacity: 0.7 }}>已选 {selected.size} / {items.length}</span>
+          <span style={{ fontSize: 12, opacity: 0.7 }}>{tr('shell.gallery.selectedCount', { n: selected.size, total: items.length })}</span>
           <button className="v2-btn ghost" onClick={selected.size === items.length ? clearSel : selectAll}>
-            {selected.size === items.length ? '清空' : '全选'}
+            {selected.size === items.length ? tr('shell.gallery.clear') : tr('shell.gallery.selectAll')}
           </button>
           <button
             className="v2-btn danger"
             disabled={selected.size === 0 || deleting}
             onClick={() => setConfirmDel(true)}
-          >删除选中</button>
-          <button className="v2-btn ghost" onClick={exitSelect}>退出选择</button>
+          >{tr('shell.gallery.deleteSelected')}</button>
+          <button className="v2-btn ghost" onClick={exitSelect}>{tr('shell.gallery.exitSelect')}</button>
         </>
       )}
     </div>
@@ -2549,7 +2604,7 @@ const GalleryView: React.FC = () => {
   return (
     <div className="v2-view">
       <div className="v2-view-head">
-        <h2>画廊</h2>
+        <h2>{tr('shell.nav.gallery')}</h2>
         <span className="v2-view-count">{items.length}</span>
         {headerActions}
       </div>
@@ -2576,14 +2631,14 @@ const GalleryView: React.FC = () => {
       {confirmDel && (
         <div className="v2-confirm-backdrop" onClick={() => !deleting && setConfirmDel(false)}>
           <div className="v2-confirm" onClick={(e) => e.stopPropagation()}>
-            <div className="v2-confirm-title">删除选中的 {selected.size} 件作品？</div>
+            <div className="v2-confirm-title">{tr('shell.gallery.deleteConfirmTitle', { n: selected.size })}</div>
             <div className="v2-confirm-body">
-              将从数据库永久删除（含源文件），<strong>不可恢复</strong>。已分享或保存到 Google Drive 的副本不受影响。
+              {tr('shell.gallery.deleteConfirmBodyA')}<strong>{tr('shell.gallery.deleteConfirmStrong')}</strong>{tr('shell.gallery.deleteConfirmBodyB')}
             </div>
             <div className="v2-confirm-actions">
-              <button className="v2-btn ghost" disabled={deleting} onClick={() => setConfirmDel(false)}>取消</button>
+              <button className="v2-btn ghost" disabled={deleting} onClick={() => setConfirmDel(false)}>{tr('common.cancel')}</button>
               <button className="v2-btn danger" disabled={deleting} onClick={() => void runBatchDelete()}>
-                {deleting ? '删除中…' : '删除'}
+                {deleting ? tr('shell.gallery.deleting') : tr('common.delete')}
               </button>
             </div>
           </div>
@@ -2630,6 +2685,7 @@ interface GalleryTileProps {
   onPreview: (it: MediaOutputItem) => void;
 }
 const GalleryTile = React.memo<GalleryTileProps>(({ it, isSel, selectMode, onToggleOne, onPreview }) => {
+  const { t: tr } = useI18n();
   const url = mediaApi.getOutputFileUrl(it.output_id);
   const title = (it.prompt || '').split(/[.。\n]/)[0].slice(0, 40);
   return (
@@ -2647,7 +2703,7 @@ const GalleryTile = React.memo<GalleryTileProps>(({ it, isSel, selectMode, onTog
       {it.media_type === 'video'
         ? <video src={url} muted />
         : <img src={url} alt={title} loading="lazy" />}
-      <div className="v2-meta">{title || '无名'}</div>
+      <div className="v2-meta">{title || tr('shell.gallery.untitled')}</div>
     </div>
   );
 });
@@ -2665,6 +2721,7 @@ interface GalleryGroupProps {
 const GalleryGroup = React.memo<GalleryGroupProps>(({
   day, list, selected, selectMode, onToggleGroup, onToggleOne, onPreview,
 }) => {
+  const { t: tr } = useI18n();
   // ids + count computed in a single pass instead of map() + filter() over
   // the same list — keeps the hot path tight when selection toggles.
   const ids = useMemo(() => list.map((x) => x.output_id), [list]);
@@ -2677,14 +2734,14 @@ const GalleryGroup = React.memo<GalleryGroupProps>(({
     <div style={GALLERY_GROUP_STYLE}>
       <div style={GALLERY_DAY_HEAD_STYLE}>
         <div style={GALLERY_DAY_TITLE_STYLE}>{dayLabel(day)}</div>
-        <div style={GALLERY_DAY_COUNT_STYLE}>{list.length} 件</div>
+        <div style={GALLERY_DAY_COUNT_STYLE}>{tr('shell.gallery.itemsCount', { n: list.length })}</div>
         {selectMode && (
           <button
             className="v2-btn ghost"
             style={GALLERY_DAY_TOGGLE_STYLE}
             onClick={() => onToggleGroup(ids)}
           >
-            {allInDay ? '取消选该天' : `选中该天 (${list.length})`}
+            {allInDay ? tr('shell.gallery.unselectDay') : tr('shell.gallery.selectDay', { n: list.length })}
           </button>
         )}
       </div>
@@ -2710,11 +2767,14 @@ function dayLabel(ymdKey: string): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(ymdKey)) return ymdKey;
   const today = new Date();
   const todayKey = isoYMD(today);
-  if (ymdKey === todayKey) return `今天 · ${ymdKey}`;
+  if (ymdKey === todayKey) return `${t('shell.gallery.today')} · ${ymdKey}`;
   const yd = new Date(today); yd.setDate(yd.getDate() - 1);
-  if (ymdKey === isoYMD(yd)) return `昨天 · ${ymdKey}`;
+  if (ymdKey === isoYMD(yd)) return `${t('shell.gallery.yesterday')} · ${ymdKey}`;
   const d = new Date(ymdKey + 'T00:00:00');
-  const wd = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()] || '';
+  const wd = [
+    t('shell.weekday.sun'), t('shell.weekday.mon'), t('shell.weekday.tue'),
+    t('shell.weekday.wed'), t('shell.weekday.thu'), t('shell.weekday.fri'), t('shell.weekday.sat'),
+  ][d.getDay()] || '';
   return `${wd} · ${ymdKey}`;
 }
 function isoYMD(d: Date): string {
@@ -2732,20 +2792,21 @@ const ModelBadge: React.FC<{
   settingsDefault?: string;
   onClick: () => void;
 }> = ({ mode, configs, activeRecord, createConfig, settingsDefault, onClick }) => {
+  const { t: tr } = useI18n();
   let label: string; let sub: string;
   if (mode === 'create') {
     const id = createConfig.configId;
     const cfg = id ? configs.find((c) => c.config_id === id) : undefined;
-    label = cfg ? (cfg.shortname || cfg.name) : '默认创作';
+    label = cfg ? (cfg.shortname || cfg.name) : tr('shell.defaultCreate');
     sub = cfg?.model || createConfig.model || 'gemini-2.5-flash-image';
   } else {
     const id = activeRecord?.llm_config_id || settingsDefault;
     const cfg = id ? configs.find((c) => c.config_id === id) : undefined;
-    label = cfg ? (cfg.shortname || cfg.name) : '默认模型';
+    label = cfg ? (cfg.shortname || cfg.name) : tr('shell.defaultModel');
     sub = cfg?.model || cfg?.provider || '';
   }
   return (
-    <button className="v2-modelbadge" onClick={onClick} title="切换模型">
+    <button className="v2-modelbadge" onClick={onClick} title={tr('shell.switchModel')}>
       <span className="nm">{label}</span>
       {sub && <span className="sub">{sub}</span>}
     </button>
@@ -2760,11 +2821,12 @@ const ContextPopover: React.FC<{
   onClose: () => void;
   onPickModel: (cfg: LLMConfigFromDB) => void;
 }> = ({ mode, activeRecord, createConfigId, onClose, onPickModel }) => {
+  const { t: tr } = useI18n();
   // ▲ in composer always picks a model now (chat or media depending on mode).
   // Agent-level config moved to the sidebar agent row's ⋯ menu.
   return (
     <Modal
-      title={mode === 'create' ? '创作模型' : '对话模型'}
+      title={mode === 'create' ? tr('shell.createModel') : tr('shell.chatModel')}
       onClose={onClose}
       modalClass="v2-pickmodal"
       bodyless
@@ -2814,6 +2876,7 @@ const ModelPicker: React.FC<{
   currentConfigId?: string;
   onPick: (cfg: LLMConfigFromDB) => void;
 }> = ({ wantMedia, currentConfigId, onPick }) => {
+  const { t: tr } = useI18n();
   const [configs, setConfigs] = useState<LLMConfigFromDB[] | null>(null);
   useEffect(() => {
     getLLMConfigs()
@@ -2841,17 +2904,17 @@ const ModelPicker: React.FC<{
     [grouped, activeProvider],
   );
 
-  if (!list) return <div className="v2-pickmodal-empty">加载中…</div>;
+  if (!list) return <div className="v2-pickmodal-empty">{tr('common.loading')}</div>;
   if (list.length === 0) {
     return (
       <div className="v2-pickmodal-empty">
-        {wantMedia ? '没有创作模型。去 设置 · 模型 添加。' : '没有对话模型。去 设置 · 模型 添加。'}
+        {wantMedia ? tr('shell.picker.noCreateModels') : tr('shell.picker.noChatModels')}
       </div>
     );
   }
   return (
     <div className="v2-pickmodal-split">
-      <aside className="v2-pickmodal-providers" role="listbox" aria-label="厂商">
+      <aside className="v2-pickmodal-providers" role="listbox" aria-label={tr('shell.provider')}>
         {grouped.map(([provider, items]) => {
           const hasCurrent = !!currentConfigId && items.some((c) => c.config_id === currentConfigId);
           return (
@@ -2871,7 +2934,7 @@ const ModelPicker: React.FC<{
       </aside>
       <div className="v2-pickmodal-models">
         {activeConfigs.length === 0 ? (
-          <div className="v2-pickmodal-empty">该厂商下还没有可用模型。</div>
+          <div className="v2-pickmodal-empty">{tr('shell.noModelsForProvider')}</div>
         ) : (
           <div className="v2-pickmodal-modellist">
             {activeConfigs.map((c) => {
@@ -2886,9 +2949,9 @@ const ModelPicker: React.FC<{
                 >
                   <div className="v2-pick-main">
                     <div className="v2-pick-nm">{c.shortname || c.name}</div>
-                    <div className="v2-pick-ds">{c.model || '默认模型'}</div>
+                    <div className="v2-pick-ds">{c.model || tr('shell.defaultModelName')}</div>
                   </div>
-                  {isCurrent && <span className="v2-pick-check" aria-label="当前">✓</span>}
+                  {isCurrent && <span className="v2-pick-check" aria-label={tr('shell.current')}>✓</span>}
                 </button>
               );
             })}
@@ -2900,6 +2963,7 @@ const ModelPicker: React.FC<{
 };
 
 const AgentSettingsDrawer: React.FC<{ agent: Session; onClose: () => void }> = ({ agent, onClose }) => {
+  const { t: tr } = useI18n();
   const agentApiId = (agent as any).id || agent.session_id;
   const [name, setName] = useState(agent.name || agent.title || '');
   const [prompt, setPrompt] = useState(agent.system_prompt || '');
@@ -2970,25 +3034,25 @@ const AgentSettingsDrawer: React.FC<{ agent: Session; onClose: () => void }> = (
 
   return (
     <Modal
-      title="Agent 设置"
+      title={tr('shell.agentSettings')}
       subtitle={agent.name || agent.title}
       wide
       onClose={onClose}
       footer={<>
-        <button className="v2-mbtn" onClick={onClose} disabled={busy}>取消</button>
-        <button className="v2-mbtn primary" onClick={save} disabled={busy}>{busy ? '保存中…' : '保存'}</button>
+        <button className="v2-mbtn" onClick={onClose} disabled={busy}>{tr('common.cancel')}</button>
+        <button className="v2-mbtn primary" onClick={save} disabled={busy}>{busy ? tr('shell.saving') : tr('common.save')}</button>
       </>}
     >
       <div className="v2-modal-sec">
         <div className="v2-avatar-row">
-          <div className="v2-avatar-lg" onClick={() => fileRef.current?.click()} title="点击换头像">
+          <div className="v2-avatar-lg" onClick={() => fileRef.current?.click()} title={tr('shell.agent.changeAvatar')}>
             {avatar
               ? <img src={avatar.startsWith('data:') ? avatar : `data:image/png;base64,${avatar}`} alt="" />
               : <span>{(agent.name || agent.title || '?').charAt(0)}</span>}
           </div>
           <div style={{ flex: 1 }}>
-            <div className="lab">名字</div>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="给这个 agent 起个名" />
+            <div className="lab">{tr('shell.agent.name')}</div>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder={tr('shell.agent.namePlaceholder')} />
           </div>
           <input
             ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }}
@@ -2998,18 +3062,18 @@ const AgentSettingsDrawer: React.FC<{ agent: Session; onClose: () => void }> = (
       </div>
 
       <div className="v2-modal-sec">
-        <div className="lab">人设 / System Prompt</div>
-        <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="它的语气、知识范围、行为偏好…" rows={6} />
-        <div className="v2-modal-note">作为 system message 进所有对话的开头。</div>
+        <div className="lab">{tr('shell.agent.persona')}</div>
+        <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={tr('shell.agent.personaPlaceholder')} rows={6} />
+        <div className="v2-modal-note">{tr('shell.agent.personaNote')}</div>
       </div>
 
       <div className="v2-modal-sec">
-        <div className="lab">模型</div>
-        {!llms && <div className="v2-modal-note">加载中…</div>}
+        <div className="lab">{tr('shell.agent.model')}</div>
+        {!llms && <div className="v2-modal-note">{tr('common.loading')}</div>}
         {llms && (
           <div className="v2-ctxpop-list">
             <div className={`v2-ctxpop-item${!llmId ? ' active' : ''}`} onClick={() => setLlmId(undefined)}>
-              <div className="nm">跟随默认<small>未指定</small></div>
+              <div className="nm">{tr('shell.agent.followDefault')}<small>{tr('shell.agent.unspecified')}</small></div>
             </div>
             {llms.map((c) => (
               <div
@@ -3026,10 +3090,10 @@ const AgentSettingsDrawer: React.FC<{ agent: Session; onClose: () => void }> = (
       </div>
 
       <div className="v2-modal-sec">
-        <div className="lab">MCP 工具</div>
-        {!allMcps && <div className="v2-modal-note">加载中…</div>}
+        <div className="lab">{tr('shell.agent.mcpTools')}</div>
+        {!allMcps && <div className="v2-modal-note">{tr('common.loading')}</div>}
         {allMcps && allMcps.length === 0 && (
-          <div className="v2-modal-note">还没有 MCP 服务器。去 设置 · MCP · 技能 添加。</div>
+          <div className="v2-modal-note">{tr('shell.agent.noMcp')}</div>
         )}
         {allMcps && allMcps.length > 0 && (
           <div className="v2-ctxpop-list">
@@ -3042,7 +3106,7 @@ const AgentSettingsDrawer: React.FC<{ agent: Session; onClose: () => void }> = (
                   onClick={() => void toggleMcp(m)}
                 >
                   <div className="nm">{m.name}<small>{m.type}</small></div>
-                  <div className="tag">{bound ? '已绑' : '点击绑定'}</div>
+                  <div className="tag">{bound ? tr('shell.agent.bound') : tr('shell.agent.bind')}</div>
                 </div>
               );
             })}
@@ -3065,6 +3129,7 @@ const ChipPanel: React.FC<{
   countMax?: number;
   aspectHint?: string;
 }> = ({ which, cfg, setStyle, setAspect, setCount, setNegative, close, aspectOptions, countMax, aspectHint }) => {
+  const { t: tr } = useI18n();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
     window.addEventListener('keydown', onKey);
@@ -3079,7 +3144,7 @@ const ChipPanel: React.FC<{
     return (
       <div className="v2-panel">
         <div className="v2-panel-hd">
-          比例
+          {tr('shell.create.aspect')}
           {aspectHint ? <span className="v2-panel-hint" style={{ marginLeft: 8, opacity: 0.6, fontSize: 12 }}>{aspectHint}</span> : null}
         </div>
         <div className="v2-options">
@@ -3097,11 +3162,11 @@ const ChipPanel: React.FC<{
     const opts = COUNT_OPTIONS.filter((n) => n <= max);
     return (
       <div className="v2-panel">
-        <div className="v2-panel-hd">一次画几张</div>
+        <div className="v2-panel-hd">{tr('shell.create.countHead')}</div>
         <div className="v2-options">
           {opts.map((n) => (
             <div key={n} className={`v2-opt${cfg.count === n ? ' active' : ''}`} onClick={() => { setCount(n); }}>
-              <span>{n} 张</span>
+              <span>{tr('shell.spec.countN', { n })}</span>
             </div>
           ))}
         </div>
@@ -3111,9 +3176,9 @@ const ChipPanel: React.FC<{
   // negative
   return (
     <div className="v2-panel">
-      <div className="v2-panel-hd">想避免的元素 — 用逗号分隔</div>
+      <div className="v2-panel-hd">{tr('shell.create.negativeHead')}</div>
       <FreeTextRow
-        placeholder="如：霓虹、过曝、塑料感"
+        placeholder={tr('shell.create.negativePlaceholder')}
         initial={cfg.negative}
         onApply={(v) => { setNegative(v); close(); }}
         multiline
@@ -3127,6 +3192,7 @@ const StylePanel: React.FC<{
   setStyle: (v: string) => void;
   close: () => void;
 }> = ({ cfg, setStyle, close }) => {
+  const { t: tr } = useI18n();
   const [custom, setCustom] = useState<StylePreset[]>(() => loadCustomStyles());
   // Hidden built-in style IDs (user-deleted). Persisted on the primary
   // agent's ext.style_presets_hidden so the choice carries across sessions.
@@ -3199,12 +3265,12 @@ const StylePanel: React.FC<{
   return (
     <div className="v2-panel">
       <div className="v2-panel-hd">
-        <span>风格 — 选预设或在下方自定义</span>
-        {custom.length > 0 && <span style={{ color: 'var(--c-ink-4)' }}>· 已存 {custom.length}</span>}
+        <span>{tr('shell.style.head')}</span>
+        {custom.length > 0 && <span style={{ color: 'var(--c-ink-4)' }}>{tr('shell.style.savedCount', { n: custom.length })}</span>}
       </div>
       <div className="v2-options">
         <div className={`v2-opt${!activeId && !trimmed ? ' active' : ''}`} onClick={() => setStyle('')}>
-          <span>无</span><small>NONE</small>
+          <span>{tr('shell.create.none')}</span><small>NONE</small>
         </div>
         {all.map((s) => (
           <div
@@ -3213,9 +3279,9 @@ const StylePanel: React.FC<{
             onClick={() => setStyle(s.suffix)}
             title={s.suffix}
           >
-            <span>{s.zh}</span>
-            {s.custom ? <span className="v2-opt-custom">自定</span> : (s.en && <small>{s.en}</small>)}
-            <span className="v2-opt-del" title="删除" onClick={(e) => onDelete(s.id, !!s.custom, e)}>✕</span>
+            <span>{s.custom ? s.zh : tr('misc.style.' + s.id)}</span>
+            {s.custom ? <span className="v2-opt-custom">{tr('shell.style.customTag')}</span> : (s.en && <small>{s.en}</small>)}
+            <span className="v2-opt-del" title={tr('common.delete')} onClick={(e) => onDelete(s.id, !!s.custom, e)}>✕</span>
           </div>
         ))}
       </div>
@@ -3233,6 +3299,7 @@ const CustomStyleEditor: React.FC<{
   onSave: (name: string, suffix: string) => void | Promise<void>;
   onApply: (name: string, suffix: string) => void | Promise<void>;
 }> = ({ initialSuffix, onSave, onApply }) => {
+  const { t: tr } = useI18n();
   const [name, setName] = useState('');
   const [suffix, setSuffix] = useState(initialSuffix);
   // Re-seed once when the parent's "current style" changes (e.g. user clicks
@@ -3242,13 +3309,13 @@ const CustomStyleEditor: React.FC<{
   return (
     <div className="v2-row-input" style={{ flexWrap: 'wrap', gap: 8 }}>
       <input
-        placeholder="短名字（chip 上显示，可留空自动取首段）"
+        placeholder={tr('shell.style.namePlaceholder')}
         value={name}
         onChange={(e) => setName(e.target.value)}
         style={{ flex: '0 0 220px' }}
       />
       <textarea
-        placeholder="自定义风格描述，例如：watercolor, soft edges, pastel palette…"
+        placeholder={tr('shell.style.suffixPlaceholder')}
         value={suffix}
         onChange={(e) => setSuffix(e.target.value)}
         style={{ flex: '1 1 240px', minHeight: 60 }}
@@ -3259,14 +3326,14 @@ const CustomStyleEditor: React.FC<{
           type="button"
           disabled={disabled}
           onClick={() => onSave(name, suffix)}
-          title="只入库（之后可点击 chip 应用），不改变当前选中风格"
-        >保存为预设</button>
+          title={tr('shell.style.saveTip')}
+        >{tr('shell.style.saveAsPreset')}</button>
         <button
           type="button"
           disabled={disabled}
           onClick={() => onApply(name, suffix)}
-          title="设为本次的风格（如果是新输入也会入库）"
-        >应用本次</button>
+          title={tr('shell.style.applyTip')}
+        >{tr('shell.style.applyNow')}</button>
       </div>
     </div>
   );
@@ -3279,6 +3346,7 @@ const FreeTextRow: React.FC<{
   multiline?: boolean;
   extra?: React.ReactNode;
 }> = ({ placeholder, initial, onApply, multiline, extra }) => {
+  const { t: tr } = useI18n();
   const [v, setV] = useState(initial);
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onApply(v.trim()); }
@@ -3290,13 +3358,15 @@ const FreeTextRow: React.FC<{
         : <input autoFocus placeholder={placeholder} value={v} onChange={(e) => setV(e.target.value)} onKeyDown={onKeyDown} />
       }
       {extra}
-      {initial && <button className="ghost" onClick={() => { setV(''); onApply(''); }}>清空</button>}
-      <button onClick={() => onApply(v.trim())}>应用</button>
+      {initial && <button className="ghost" onClick={() => { setV(''); onApply(''); }}>{tr('shell.clear')}</button>}
+      <button onClick={() => onApply(v.trim())}>{tr('shell.apply')}</button>
     </div>
   );
 };
 
-const StreamView: React.FC<{ content: string; reasoning: string }> = ({ content, reasoning }) => (
+const StreamView: React.FC<{ content: string; reasoning: string }> = ({ content, reasoning }) => {
+  const { t: tr } = useI18n();
+  return (
   <div className="v2-msg assistant streaming">
     <div className="v2-body">
       {reasoning && <ThinkBlock reasoning={reasoning} streaming={true} hasContent={!!content} />}
@@ -3308,36 +3378,38 @@ const StreamView: React.FC<{ content: string; reasoning: string }> = ({ content,
           <MD text={content} live />
           <span className="v2-caret">▍</span>
         </div>
-      ) : !reasoning && <p className="v2-pending">等候首字…</p>}
+      ) : !reasoning && <p className="v2-pending">{tr('shell.waitingFirstToken')}</p>}
     </div>
   </div>
-);
+  );
+};
 
-const ThinkingDots: React.FC = () => (
+const ThinkingDots: React.FC = () => {
+  const { t: tr } = useI18n();
+  return (
   <div className="v2-msg assistant">
     <div className="v2-body">
-      <p style={{ color: 'var(--c-ink-3)', fontStyle: 'italic' }}>正在思考…</p>
+      <p style={{ color: 'var(--c-ink-3)', fontStyle: 'italic' }}>{tr('shell.thinkingDots')}</p>
     </div>
   </div>
-);
+  );
+};
 
-const EmptyState: React.FC<{ title: string }> = React.memo(({ title }) => (
+const EmptyState: React.FC<{ title: string }> = React.memo(({ title }) => {
+  const { t: tr } = useI18n();
+  return (
   <div className="v2-empty">
-    <div className="v2-empty-title">{title || '新会话'}</div>
-    <div className="v2-empty-sub">从下面开始聊 · Enter 发送 · Shift+Enter 换行 · 切到「创作」可以拖入参考图</div>
+    <div className="v2-empty-title">{title || tr('shell.newSession')}</div>
+    <div className="v2-empty-sub">{tr('shell.emptyHint')}</div>
   </div>
-));
+  );
+});
 EmptyState.displayName = 'EmptyState';
 
 const SkeletonRows: React.FC<{ n: number }> = ({ n }) => (
   <>
     {Array.from({ length: n }).map((_, i) => (
-      <div key={i} style={{
-        height: 30, margin: '1px 2px', borderRadius: 10,
-        background: 'linear-gradient(90deg, #f0f0f0, #f7f7f7, #f0f0f0)',
-        backgroundSize: '200% 100%',
-        animation: 'v2-shimmer 1.4s linear infinite',
-      }} />
+      <div key={i} className="v2-skel-row" />
     ))}
   </>
 );
@@ -3347,7 +3419,7 @@ const SkeletonRows: React.FC<{ n: number }> = ({ n }) => (
 function userName(): string {
   try {
     const u = api.getUser();
-    return (u?.name || u?.email || '未登入').toString();
+    return (u?.name || u?.email || t('shell.notSignedIn')).toString();
   } catch { return ''; }
 }
 function userInitials(): string {
@@ -3375,7 +3447,9 @@ const AgentRow = React.memo<{
   a: Session; active: boolean;
   onOpen: (s: Session) => void;
   onMore: (s: Session, e: React.MouseEvent) => void;
-}>(({ a, active, onOpen, onMore }) => (
+}>(({ a, active, onOpen, onMore }) => {
+  const { t: tr } = useI18n();
+  return (
   <div
     className={`v2-a${active ? ' active' : ''}`}
     onClick={() => onOpen(a)}
@@ -3387,12 +3461,13 @@ const AgentRow = React.memo<{
         : <AgentIcon a={a} />}
     </div>
     <div className="v2-nm">
-      {a.name || a.title || '未命名'}
+      {a.name || a.title || tr('shell.unnamed')}
       {a.is_primary && <span className="v2-pri">primary</span>}
     </div>
     <div className="v2-more" onClick={(e) => onMore(a, e)}>⋯</div>
   </div>
-));
+  );
+});
 AgentRow.displayName = 'AgentRow';
 
 /** Sidebar Chat 行：同 AgentRow，单独走是因为 markup 不同（无头像、teahouse 标记）。 */
@@ -3401,6 +3476,7 @@ const ChatRow = React.memo<{
   onOpen: (s: Session) => void;
   onMore: (s: Session, e: React.MouseEvent) => void;
 }>(({ r, active, onOpen, onMore }) => {
+  const { t: tr } = useI18n();
   const tea = (r as any).ext?.teahouse === true;
   return (
     <div
@@ -3408,7 +3484,7 @@ const ChatRow = React.memo<{
       onClick={() => onOpen(r)}
       title={r.name || r.title}
     >
-      <span className="v2-t">{r.name || r.title || r.preview_text || (tea ? '新聊天' : '空会话')}</span>
+      <span className="v2-t">{r.name || r.title || r.preview_text || (tea ? tr('shell.newTeahouse') : tr('shell.emptySession'))}</span>
       <span className="v2-more" onClick={(e) => onMore(r, e)}>⋯</span>
     </div>
   );

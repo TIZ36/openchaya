@@ -18,9 +18,10 @@ import {
   noteTitle, syncedDocId, mapSync, syncedDocIds,
   type LocalNoteFile,
 } from './services/localNotes';
-import { IconPin, IconEdit, IconTrash, IconDoc, IconPlus, IconSearch, IconModel, IconChevron, IconKB, IconCloud } from './icons';
+import { IconPin, IconEdit, IconTrash, IconDoc, IconPlus, IconSearch, IconModel, IconChevron, IconKB, IconCloud, IconEye, IconSync } from './icons';
 import { NoteEditor, type NoteEditorHandle } from './kb/NoteEditor';
 import { CodeBlock, PreBlock, mdRehypePlugins } from './codeBlock';
+import { useI18n } from '../i18n';
 
 /** Shared markdown surface for note preview + AI answer. */
 const MD_COMPONENTS = {
@@ -89,6 +90,7 @@ type Selection =
   | { kind: 'doc'; id: string };
 
 const KnowledgeView: React.FC = () => {
+  const { t: tr } = useI18n();
   const [conn, setConn] = useState<ConnState>('probing');
   const [connErr, setConnErr] = useState<string | null>(null);
   const llmConfigId = useMemo(() => readDefaultLLMConfigId(), []);
@@ -101,6 +103,7 @@ const KnowledgeView: React.FC = () => {
   const [domainModal, setDomainModal] = useState<Tag | 'new' | null>(null);
   const [createUnder, setCreateUnder] = useState<string | null | undefined>(undefined); // doc-upload modal; value = preset domain
   const [searchOpen, setSearchOpen] = useState(false);
+  const [treeCollapsed, setTreeCollapsed] = useState(false);   // 左侧栏折叠 → 右侧画布全宽
   const localOk = isLocalNotesAvailable();
 
   const probe = useCallback(async () => {
@@ -109,9 +112,9 @@ const KnowledgeView: React.FC = () => {
     try {
       const r = await smartnoteProbe();
       if (r.ok) setConn('ok');
-      else { setConn('down'); setConnErr(r.error || '探测失败'); }
-    } catch (e: any) { setConn('down'); setConnErr(e?.message || '探测失败'); }
-  }, []);
+      else { setConn('down'); setConnErr(r.error || tr('kb.probeFailed')); }
+    } catch (e: any) { setConn('down'); setConnErr(e?.message || tr('kb.probeFailed')); }
+  }, [tr]);
   const loadDomains = useCallback(async () => {
     try {
       let list = await smartnoteTags.list() || [];
@@ -160,27 +163,27 @@ const KnowledgeView: React.FC = () => {
 
   // 新建笔记 = 保存对话框选位置（任意目录）→ 建空 .md → 平铺登记 → 打开。
   const addNote = useCallback(async () => {
-    if (!localOk) { window.alert('本地笔记仅桌面版可用。'); return; }
+    if (!localOk) { window.alert(tr('kb.localOnlyDesktop')); return; }
     try {
-      const p = await newNoteFile('未命名笔记.md');
+      const p = await newNoteFile(tr('kb.untitledNoteFile'));
       if (!p) return;
       setExpanded((s) => new Set(s).add(NOTES_DOMAIN));
       await loadNotes();
       setSel({ kind: 'note', path: p });
-    } catch (e: any) { window.alert(e?.message || '创建失败'); }
-  }, [localOk, loadNotes]);
+    } catch (e: any) { window.alert(e?.message || tr('kb.createFailed')); }
+  }, [localOk, loadNotes, tr]);
 
   // 导入：从任意目录挑选已有的 .md/.txt 文件，平铺加入。
   const importNote = useCallback(async () => {
-    if (!localOk) { window.alert('本地笔记仅桌面版可用。'); return; }
+    if (!localOk) { window.alert(tr('kb.localOnlyDesktop')); return; }
     try {
       const added = await importNotes();
       if (!added.length) return;
       setExpanded((s) => new Set(s).add(NOTES_DOMAIN));
       await loadNotes();
       setSel({ kind: 'note', path: added[0] });
-    } catch (e: any) { window.alert(e?.message || '导入失败'); }
-  }, [localOk, loadNotes]);
+    } catch (e: any) { window.alert(e?.message || tr('kb.importFailed')); }
+  }, [localOk, loadNotes, tr]);
 
   // 哪些云端文档其实是「笔记」：本地同步的镜像 + 云端 kind:note —— 供搜索分组用。
   const noteDocIds = useMemo(() => {
@@ -201,20 +204,14 @@ const KnowledgeView: React.FC = () => {
 
   return (
     <div className="v2-view v2-kb-view">
-      {/* ── 顶栏：全局搜索（占主） + 连接状态 ── */}
-      <div className="v2-kb-top">
-        <button className="v2-kb-searchbtn" onClick={() => setSearchOpen(true)} title="搜索全部内容 (⌘K · 双击 Shift)">
-          <IconSearch /><span>搜索笔记、文档、记忆…</span><kbd>⌘K</kbd>
-        </button>
-        <KbConn state={conn} />
-      </div>
-
       {conn === 'no-key' && <div className="v2-kb-body"><NoKey onSaved={probe} /></div>}
       {conn === 'down' && <div className="v2-kb-body"><Down err={connErr} onRetry={probe} /></div>}
-      {conn === 'probing' && <div className="v2-kb-body"><KbEmpty title="连接中…" /></div>}
+      {conn === 'probing' && <div className="v2-kb-body"><KbEmpty title={tr('kb.connecting')} /></div>}
 
       {conn === 'ok' && (
-        <div className="v2-kb-workspace">
+        <div className={`v2-kb-workspace${treeCollapsed ? ' tree-collapsed' : ''}`}>
+          {/* 左侧栏：搜索 + sncloud 状态 + 上传 + 知识域树；折叠时滑出（参考主侧栏的
+              transform 滑出 + 网格列收拢动画），不卸载以保证进出都丝滑。 */}
           <KbTree
             domains={domains}
             docs={docs}
@@ -222,25 +219,35 @@ const KnowledgeView: React.FC = () => {
             localOk={localOk}
             sel={sel}
             expanded={expanded}
+            conn={conn}
+            onOpenSearch={() => setSearchOpen(true)}
+            onUpload={() => setCreateUnder(null)}
+            onCollapse={() => setTreeCollapsed(true)}
             onSelect={setSel}
             onToggle={toggleExpand}
             onNewDomain={() => setDomainModal('new')}
             onEditDomain={(t) => setDomainModal(t)}
-            onUpload={(dom) => setCreateUnder(dom ?? null)}
             onAddNote={addNote}
             onImportNote={importNote}
           />
-          <KbCanvas
-            sel={sel}
-            docs={docs}
-            notes={notes}
-            domains={domains}
-            llmConfigId={llmConfigId}
-            onDocsChanged={loadDocs}
-            onNotesChanged={loadNotes}
-            onSelect={setSel}
-            onAddNote={addNote}
-          />
+          <div className="v2-kb-canvaswrap">
+            {treeCollapsed && (
+              <button className="v2-kb-expandbtn" title={tr('kb.expandSidebar')} onClick={() => setTreeCollapsed(false)}>
+                <IconChevron />
+              </button>
+            )}
+            <KbCanvas
+              sel={sel}
+              docs={docs}
+              notes={notes}
+              domains={domains}
+              llmConfigId={llmConfigId}
+              onDocsChanged={loadDocs}
+              onNotesChanged={loadNotes}
+              onSelect={setSel}
+              onAddNote={addNote}
+            />
+          </div>
         </div>
       )}
 
@@ -276,14 +283,18 @@ const KbTree: React.FC<{
   localOk: boolean;
   sel: Selection;
   expanded: Set<string>;
+  conn: ConnState;
+  onOpenSearch: () => void;
+  onUpload: () => void;
+  onCollapse: () => void;
   onSelect: (s: Selection) => void;
   onToggle: (key: string) => void;
   onNewDomain: () => void;
   onEditDomain: (t: Tag) => void;
-  onUpload: (domain?: string) => void;
   onAddNote: () => void;
   onImportNote: () => void;
-}> = ({ domains, docs, notes, localOk, sel, expanded, onSelect, onToggle, onNewDomain, onEditDomain, onUpload, onAddNote, onImportNote }) => {
+}> = ({ domains, docs, notes, localOk, sel, expanded, conn, onOpenSearch, onUpload, onCollapse, onSelect, onToggle, onNewDomain, onEditDomain, onAddNote, onImportNote }) => {
+  const { t: tr } = useI18n();
   // 云端文档按域分桶。包含上传文档 + 历史云端笔记（如「东方玄学」），但排除
   // 已是本地笔记镜像的云 note（避免与「笔记」组重复）。
   const mirrorIds = useMemo(() => syncedDocIds(), [notes]);
@@ -317,11 +328,11 @@ const KbTree: React.FC<{
         <div className="v2-kb-group-row" onClick={() => onToggle(g.key)}>
           <span className={`caret${open ? ' open' : ''}`}><IconChevron /></span>
           <span className="dot" style={{ background: g.tag ? domainColor(g.tag) : 'var(--c-ink-4)' }} />
-          <span className="nm">{g.tag ? g.tag.name : '未归类'}</span>
+          <span className="nm">{g.tag ? g.tag.name : tr('kb.untagged')}</span>
           <span className="cnt">{g.items.length || ''}</span>
           {/* 未归类不可编辑；用户自建域有铅笔。 */}
           {g.tag && (
-            <button className="row-act" title="编辑域" onClick={(e) => { e.stopPropagation(); onEditDomain(g.tag!); }}><IconEdit /></button>
+            <button className="row-act" title={tr('kb.editDomain')} onClick={(e) => { e.stopPropagation(); onEditDomain(g.tag!); }}><IconEdit /></button>
           )}
         </div>
         {open && g.items.map((d) => (
@@ -332,16 +343,27 @@ const KbTree: React.FC<{
             title={d.name}
           >
             <span className="ic"><IconDoc /></span>
-            <span className="nm">{d.name || '未命名'}</span>
+            <span className="nm">{d.name || tr('kb.untitled')}</span>
           </button>
         ))}
-        {open && g.items.length === 0 && <div className="v2-kb-node-empty">空</div>}
+        {open && g.items.length === 0 && <div className="v2-kb-node-empty">{tr('kb.empty')}</div>}
       </div>
     );
   };
 
+  // 底部「上传 wiki」融合了 sn 连接状态：状态点是这控件唯一的彩色焦点（克制用色）。
+  const connTone = conn === 'ok' ? 'ok' : conn === 'probing' ? 'probing' : conn === 'no-key' ? 'nokey' : 'down';
+  const connLabel = conn === 'ok' ? tr('kb.connected') : conn === 'probing' ? tr('kb.connecting2') : conn === 'no-key' ? tr('kb.notConfigured') : tr('kb.unreachable');
+
   return (
     <aside className="v2-kb-tree">
+      {/* 左栏头：搜索（占主）+ 折叠按钮。 */}
+      <div className="v2-kb-tree-hd">
+        <button className="v2-kb-searchbtn" onClick={onOpenSearch} title={tr('kb.searchAllTip')}>
+          <IconSearch /><span>{tr('kb.searchEllipsis')}</span><kbd>⌘K</kbd>
+        </button>
+        <button className="v2-kb-collapse" onClick={onCollapse} title={tr('kb.collapseSidebar')}><IconChevron /></button>
+      </div>
       <div className="v2-kb-tree-scroll">
         {/* 笔记组置顶（在「全部」之上）—— 本地 .md 文件。导入/新建都是 icon 按钮；
             没有笔记时不可展开（无 caret、点头不展开）。 */}
@@ -353,10 +375,10 @@ const KbTree: React.FC<{
           <div className="v2-kb-group-row" onClick={() => { if (!empty) onToggle(NOTES_DOMAIN); }}>
             <span className={`caret${open ? ' open' : ''}${empty ? ' hidden' : ''}`}>{!empty && <IconChevron />}</span>
             <span className="ic-lead" style={{ color: NOTES_DOMAIN_COLOR }}><IconEdit /></span>
-            <span className="nm">笔记</span>
+            <span className="nm">{tr('kb.notes')}</span>
             <span className="cnt">{noteCount || ''}</span>
-            {localOk && <button className="row-act" title="导入已有笔记文件" onClick={(e) => { e.stopPropagation(); onImportNote(); }}><IconDoc /></button>}
-            {localOk && <button className="row-act" title="新建笔记" onClick={(e) => { e.stopPropagation(); onAddNote(); }}><IconPlus /></button>}
+            {localOk && <button className="row-act" title={tr('kb.importExistingNote')} onClick={(e) => { e.stopPropagation(); onImportNote(); }}><IconDoc /></button>}
+            {localOk && <button className="row-act" title={tr('kb.newNote')} onClick={(e) => { e.stopPropagation(); onAddNote(); }}><IconPlus /></button>}
           </div>
           {open && notes.slice().sort(byNoteName).map((f) => (
             <button
@@ -375,23 +397,38 @@ const KbTree: React.FC<{
 
         {/* 特殊入口 */}
         <button className={`v2-kb-node top${sel.kind === 'all' ? ' active' : ''}`} onClick={() => onSelect({ kind: 'all' })}>
-          <span className="ic"><IconKB /></span><span className="nm">全部</span><span className="cnt">{docCount || ''}</span>
+          <span className="ic"><IconKB /></span><span className="nm">{tr('kb.all')}</span><span className="cnt">{docCount || ''}</span>
         </button>
         <button className={`v2-kb-node top${sel.kind === 'memories' ? ' active' : ''}`} onClick={() => onSelect({ kind: 'memories' })}>
-          <span className="ic"><IconPin /></span><span className="nm">记忆</span>
+          <span className="ic"><IconPin /></span><span className="nm">{tr('kb.memory')}</span>
         </button>
 
         <div className="v2-kb-tree-sec">
-          <span>知识域</span>
-          <button className="v2-kb-tree-add" title="新建知识域" onClick={onNewDomain}><IconPlus /></button>
+          <span>{tr('kb.domains')}</span>
+          <button className="v2-kb-tree-add" title={tr('kb.newDomain')} onClick={onNewDomain}><IconPlus /></button>
         </div>
 
-        {restGroups.length === 0 && <div className="v2-kb-tree-empty">还没有其它知识域</div>}
+        {restGroups.length === 0 && <div className="v2-kb-tree-empty">{tr('kb.noOtherDomains')}</div>}
         {restGroups.map(renderGroup)}
       </div>
 
-      <div className="v2-kb-tree-foot">
-        <button className="v2-kb-tree-footbtn" onClick={() => onUpload(undefined)}><IconPlus /> 上传 wiki</button>
+      {/* 左栏底：sn 状态与上传融为一个控件 —— 云图标的状态点即连接态，sn 没连上则整条禁用。 */}
+      <div className="v2-kb-tree-ft">
+        <button
+          className={`v2-kb-snbar tone-${connTone}`}
+          onClick={onUpload}
+          disabled={conn !== 'ok'}
+          title={conn === 'ok' ? tr('kb.uploadReadyTip') : tr('kb.uploadDisabledTip', { state: connLabel })}
+          aria-label={tr('kb.uploadAria', { state: connLabel })}
+        >
+          <span className="sn" aria-hidden>
+            <IconCloud />
+            {conn === 'probing' ? <span className="spin" /> : <span className="st" />}
+          </span>
+          <span className="lb">{tr('kb.uploadWiki')}</span>
+          {/* 已连接时只留那颗 accent 状态点作唯一焦点；未连接才补一句状态词（且不可点）。 */}
+          {conn !== 'ok' && <span className="hint">{connLabel}</span>}
+        </button>
       </div>
     </aside>
   );
@@ -418,27 +455,29 @@ const KbCanvas: React.FC<{
   onSelect: (s: Selection) => void;
   onAddNote: () => void;
 }> = ({ sel, docs, notes, domains, onDocsChanged, onNotesChanged, onSelect, onAddNote }) => {
+  const { t: tr } = useI18n();
   if (sel.kind === 'memories') return <div className="v2-kb-canvas pad"><MemoriesTab domain={null} /></div>;
   if (sel.kind === 'all') return <KbAllList docs={docs} notes={notes} onSelect={onSelect} onAddNote={onAddNote} />;
   if (sel.kind === 'note') {
     const f = notes.find((n) => n.path === sel.path);
-    if (!f) return <div className="v2-kb-canvas"><KbEmpty title="未找到" hint="文件可能已被移动或删除。" /></div>;
+    if (!f) return <div className="v2-kb-canvas"><KbEmpty title={tr('kb.notFound')} hint={tr('kb.noteMaybeMoved')} /></div>;
     return <LocalNoteCanvas key={f.path} file={f} domains={domains} onChanged={onNotesChanged} onDeleted={() => onSelect({ kind: 'all' })} />;
   }
   // cloud doc
   const doc = (docs || []).find((d) => d.id === sel.id);
-  if (!doc) return <div className="v2-kb-canvas"><KbEmpty title="未找到" hint="可能已被删除。" /></div>;
+  if (!doc) return <div className="v2-kb-canvas"><KbEmpty title={tr('kb.notFound')} hint={tr('kb.maybeDeleted')} /></div>;
   return <DocCanvas key={doc.id} doc={doc} domains={domains} onChanged={onDocsChanged} onDeleted={() => onSelect({ kind: 'all' })} />;
 };
 
 /* ============ All-content flat list (默认落地页) —— 本地笔记 + 云端文档 ============ */
 
 const KbAllList: React.FC<{ docs: Document[] | null; notes: LocalNoteFile[]; onSelect: (s: Selection) => void; onAddNote: () => void }> = ({ docs, notes, onSelect, onAddNote }) => {
+  const { t: tr } = useI18n();
   type Row = { key: string; name: string; ts: number; sel: Selection };
   const rows: Row[] = [
     ...notes.map((f) => ({ key: 'n:' + f.path, name: noteTitle(f), ts: f.mtimeMs, sel: { kind: 'note', path: f.path } as Selection })),
     ...(docs || []).filter((d) => !isNote(d)).map((d) => ({
-      key: 'd:' + d.id, name: d.name || '未命名',
+      key: 'd:' + d.id, name: d.name || tr('kb.untitled'),
       ts: Date.parse(d.updated_at || d.created_at) || 0,
       sel: { kind: 'doc', id: d.id } as Selection,
     })),
@@ -448,16 +487,16 @@ const KbAllList: React.FC<{ docs: Document[] | null; notes: LocalNoteFile[]; onS
     return (
       <div className="v2-kb-canvas">
         <div className="v2-kb-welcome">
-          <h3>这里还空着</h3>
-          <p>写下第一篇笔记，或上传一份文档开始构建你的知识库。</p>
-          <button className="v2-set-btn primary" onClick={() => onAddNote()}><IconEdit /> 写第一篇笔记</button>
+          <h3>{tr('kb.welcomeEmptyTitle')}</h3>
+          <p>{tr('kb.welcomeEmptyDesc')}</p>
+          <button className="v2-set-btn primary" onClick={() => onAddNote()}><IconEdit /> {tr('kb.writeFirstNote')}</button>
         </div>
       </div>
     );
   }
   return (
     <div className="v2-kb-canvas pad">
-      {!docs ? <KbEmpty title="加载中…" /> : (
+      {!docs ? <KbEmpty title={tr('kb.loading')} /> : (
         <div className="v2-kb-ov-list">
           {rows.map((r) => (
             <button key={r.key} className="v2-kb-ov-item" onClick={() => onSelect(r.sel)}>
@@ -479,6 +518,7 @@ const DomainEditModal: React.FC<{
   onClose: () => void;
   onSaved: (name: string | null, removed?: boolean) => void | Promise<void>;
 }> = ({ tag, onClose, onSaved }) => {
+  const { t: tr } = useI18n();
   const [name, setName] = useState(tag?.name || '');
   const [desc, setDesc] = useState(tag?.description || '');
   const [color, setColor] = useState(domainColor(tag));
@@ -492,21 +532,21 @@ const DomainEditModal: React.FC<{
 
   const save = async () => {
     const nm = name.trim();
-    if (!nm) { window.alert('域名不能空'); return; }
+    if (!nm) { window.alert(tr('kb.domainNameEmpty')); return; }
     setBusy(true);
     try {
       await smartnoteTags.upsert({ name: nm, description: desc.trim(), color, sort_order: tag?.sort_order ?? 0 });
       await onSaved(nm);
-    } catch (e: any) { window.alert(e?.message || '保存失败'); }
+    } catch (e: any) { window.alert(e?.message || tr('kb.saveFailed')); }
     finally { setBusy(false); }
   };
 
   const remove = async () => {
     if (!tag) return;
-    if (!window.confirm(`删除知识域「${tag.name}」？\n\n域里的记忆/文档不会被删，只是去掉归属标签。`)) return;
+    if (!window.confirm(tr('kb.deleteDomainConfirm', { name: tag.name }))) return;
     setBusy(true);
     try { await smartnoteTags.remove(tag.name); await onSaved(tag.name, true); }
-    catch (e: any) { window.alert(e?.message || '删除失败'); }
+    catch (e: any) { window.alert(e?.message || tr('kb.deleteFailed')); }
     finally { setBusy(false); }
   };
 
@@ -514,22 +554,22 @@ const DomainEditModal: React.FC<{
     <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="v2-modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="v2-modal-hd">
-          <h3>{tag ? '编辑知识域' : '新建知识域'}</h3>
+          <h3>{tag ? tr('kb.editDomainTitle') : tr('kb.newDomainTitle')}</h3>
           <button className="x" onClick={onClose}>✕</button>
         </div>
         <div className="v2-modal-body">
           <div className="v2-modal-sec">
-            <div className="lab">别名（域名）</div>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="如：东方玄学" disabled={!!tag}
-              title={tag ? '已存在的域名不能改（它是检索标识）；要改名请新建' : ''} />
-            <div className="v2-modal-note">这个名字就是聊天里 <code>@{name.trim() || '域名'}</code> 调用时用的标识。</div>
+            <div className="lab">{tr('kb.aliasDomainName')}</div>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder={tr('kb.domainNamePlaceholder')} disabled={!!tag}
+              title={tag ? tr('kb.domainNameLocked') : ''} />
+            <div className="v2-modal-note">{tr('kb.domainMentionNotePre')} <code>@{name.trim() || tr('kb.domainNameWord')}</code> {tr('kb.domainMentionNotePost')}</div>
           </div>
           <div className="v2-modal-sec">
-            <div className="lab">说明（可选）</div>
-            <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="这个域装什么" />
+            <div className="lab">{tr('kb.descOptional')}</div>
+            <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder={tr('kb.descPlaceholder')} />
           </div>
           <div className="v2-modal-sec">
-            <div className="lab">颜色</div>
+            <div className="lab">{tr('kb.color')}</div>
             <div className="v2-kb-swatches">
               {DOMAIN_COLORS.map((c) => (
                 <button key={c} className={`v2-kb-swatch${color === c ? ' on' : ''}`} style={{ background: c }} onClick={() => setColor(c)} />
@@ -538,9 +578,9 @@ const DomainEditModal: React.FC<{
           </div>
         </div>
         <div className="v2-modal-foot">
-          {tag && <button className="v2-mbtn" style={{ color: 'var(--c-danger)', marginRight: 'auto' }} onClick={() => void remove()} disabled={busy}>删除</button>}
-          <button className="v2-mbtn" onClick={onClose} disabled={busy}>取消</button>
-          <button className="v2-mbtn primary" onClick={() => void save()} disabled={busy}>{busy ? '保存中…' : '保存'}</button>
+          {tag && <button className="v2-mbtn" style={{ color: 'var(--c-danger)', marginRight: 'auto' }} onClick={() => void remove()} disabled={busy}>{tr('common.delete')}</button>}
+          <button className="v2-mbtn" onClick={onClose} disabled={busy}>{tr('common.cancel')}</button>
+          <button className="v2-mbtn primary" onClick={() => void save()} disabled={busy}>{busy ? tr('kb.saving') : tr('common.save')}</button>
         </div>
       </div>
     </div>
@@ -550,6 +590,7 @@ const DomainEditModal: React.FC<{
 /* ============ Memories ============ */
 
 const MemoriesTab: React.FC<{ domain: string | null }> = ({ domain }) => {
+  const { t: tr } = useI18n();
   const [list, setList] = useState<Memory[] | null>(null);
   const [kindFilter, setKindFilter] = useState<MemoryKind | 'all'>('all');
   const [q, setQ] = useState('');
@@ -575,37 +616,37 @@ const MemoriesTab: React.FC<{ domain: string | null }> = ({ domain }) => {
 
   const onPin = async (m: Memory) => {
     try { await smartnoteMemories.update(m.id, { pinned: !m.pinned }); void load(); }
-    catch (e: any) { window.alert(e?.message || '失败'); }
+    catch (e: any) { window.alert(e?.message || tr('kb.failed')); }
   };
   const onDelete = async (m: Memory) => {
-    if (!window.confirm(`删除这条记忆？\n\n${m.content.slice(0, 80)}…`)) return;
+    if (!window.confirm(tr('kb.deleteMemoryConfirm', { snippet: m.content.slice(0, 80) }))) return;
     try { await smartnoteMemories.remove(m.id); void load(); }
-    catch (e: any) { window.alert(e?.message || '失败'); }
+    catch (e: any) { window.alert(e?.message || tr('kb.failed')); }
   };
 
   return (
     <>
       <div className="v2-kb-toolbar">
         <div className="v2-kb-filters">
-          <button className={`v2-kb-pill${kindFilter === 'all' ? ' on' : ''}`} onClick={() => setKindFilter('all')}>全部</button>
+          <button className={`v2-kb-pill${kindFilter === 'all' ? ' on' : ''}`} onClick={() => setKindFilter('all')}>{tr('kb.all')}</button>
           {(Object.keys(KIND_LABELS) as MemoryKind[]).map((k) => (
             <button
               key={k}
               className={`v2-kb-pill${kindFilter === k ? ' on' : ''}`}
               onClick={() => setKindFilter(k)}
             >
-              {KIND_LABELS[k]}
+              {tr('kb.kind.' + k)}
             </button>
           ))}
         </div>
         <div className="v2-kb-search">
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="过滤记忆…（按 Enter 提交）" onKeyDown={(e) => { if (e.key === 'Enter') void load(); }} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr('kb.filterMemoryPlaceholder')} onKeyDown={(e) => { if (e.key === 'Enter') void load(); }} />
         </div>
-        <button className="v2-set-btn primary" onClick={() => setEditing('new')}>＋ 新记忆</button>
+        <button className="v2-set-btn primary" onClick={() => setEditing('new')}>＋ {tr('kb.newMemory')}</button>
       </div>
 
-      {loading && !list && <KbEmpty title="加载中…" />}
-      {list && list.length === 0 && <KbEmpty title="还没有记忆" hint="点右上「＋ 新记忆」加一条，或在文档里 ingest。" />}
+      {loading && !list && <KbEmpty title={tr('kb.loading')} />}
+      {list && list.length === 0 && <KbEmpty title={tr('kb.noMemories')} hint={tr('kb.noMemoriesHint')} />}
       {list && list.length > 0 && (
         <div className="v2-kb-list">
           {list.map((m) => (
@@ -642,18 +683,20 @@ interface MemoryRowProps {
   onEdit: (m: Memory) => void;
   onDelete: (m: Memory) => void;
 }
-const MemoryRow: React.FC<MemoryRowProps> = ({ m, onPin, onEdit, onDelete }) => (
+const MemoryRow: React.FC<MemoryRowProps> = ({ m, onPin, onEdit, onDelete }) => {
+  const { t: tr } = useI18n();
+  return (
   <div className={`v2-kb-card${m.pinned ? ' pinned' : ''}`}>
     <div className="hd">
-      <span className={`v2-pill ${KIND_TONES[m.kind]}`}>{KIND_LABELS[m.kind]}</span>
+      <span className={`v2-pill ${KIND_TONES[m.kind]}`}>{tr('kb.kind.' + m.kind)}</span>
       {m.scope && m.scope !== 'workspace' && <span className="v2-pill mute">scope: {m.scope}</span>}
       {m.tags?.slice(0, 3).map((t) => <span key={t} className="v2-pill mute">#{t}</span>)}
       {m.tags && m.tags.length > 3 && <span className="v2-pill mute" title={m.tags.slice(3).map((t) => `#${t}`).join(' ')}>+{m.tags.length - 3}</span>}
       <span className="grow" />
       <div className="acts">
-        <button className={`iconbtn${m.pinned ? ' on' : ''}`} title={m.pinned ? '取消置顶' : '置顶'} onClick={() => onPin(m)}><IconPin filled={m.pinned} /></button>
-        <button className="iconbtn" title="编辑" onClick={() => onEdit(m)}><IconEdit /></button>
-        <button className="iconbtn danger" title="删除" onClick={() => onDelete(m)}><IconTrash /></button>
+        <button className={`iconbtn${m.pinned ? ' on' : ''}`} title={m.pinned ? tr('kb.unpin') : tr('kb.pin')} onClick={() => onPin(m)}><IconPin filled={m.pinned} /></button>
+        <button className="iconbtn" title={tr('kb.edit')} onClick={() => onEdit(m)}><IconEdit /></button>
+        <button className="iconbtn danger" title={tr('common.delete')} onClick={() => onDelete(m)}><IconTrash /></button>
       </div>
     </div>
     <ExpandableBody text={m.content} lines={5} />
@@ -662,7 +705,8 @@ const MemoryRow: React.FC<MemoryRowProps> = ({ m, onPin, onEdit, onDelete }) => 
       <span>by {m.author_agent || 'unknown'}</span>
     </div>
   </div>
-);
+  );
+};
 const MemoryRowMemo = React.memo(MemoryRow);
 
 const MemoryEditModal: React.FC<{
@@ -671,6 +715,7 @@ const MemoryEditModal: React.FC<{
   onClose: () => void;
   onSaved: () => void;
 }> = ({ memory, domain, onClose, onSaved }) => {
+  const { t: tr } = useI18n();
   const [kind, setKind] = useState<MemoryKind>(memory?.kind || 'fact');
   const [content, setContent] = useState(memory?.content || '');
   const [scope, setScope] = useState(memory?.scope || 'workspace');
@@ -688,7 +733,7 @@ const MemoryEditModal: React.FC<{
   }, [onClose]);
 
   const save = async () => {
-    if (!content.trim()) { window.alert('内容不能空'); return; }
+    if (!content.trim()) { window.alert(tr('kb.contentEmpty')); return; }
     setBusy(true);
     const tags = tagsStr.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean);
     try {
@@ -701,7 +746,7 @@ const MemoryEditModal: React.FC<{
       }
       onSaved();
     } catch (e: any) {
-      window.alert(e?.message || '保存失败');
+      window.alert(e?.message || tr('kb.saveFailed'));
     } finally { setBusy(false); }
   };
 
@@ -709,12 +754,12 @@ const MemoryEditModal: React.FC<{
     <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="v2-modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="v2-modal-hd">
-          <h3>{memory ? '编辑记忆' : '新记忆'}</h3>
+          <h3>{memory ? tr('kb.editMemoryTitle') : tr('kb.newMemory')}</h3>
           <button className="x" onClick={onClose}>✕</button>
         </div>
         <div className="v2-modal-body">
           <div className="v2-modal-sec">
-            <div className="lab">类型</div>
+            <div className="lab">{tr('kb.type')}</div>
             <div className="v2-options">
               {(Object.keys(KIND_LABELS) as MemoryKind[]).map((k) => (
                 <div
@@ -722,36 +767,36 @@ const MemoryEditModal: React.FC<{
                   className={`v2-opt${kind === k ? ' active' : ''}`}
                   onClick={() => !memory && setKind(k)}
                   style={memory ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
-                  title={memory ? '已存的记忆不能改类型' : ''}
+                  title={memory ? tr('kb.kindLocked') : ''}
                 >
-                  <span>{KIND_LABELS[k]}</span><small>{k.toUpperCase()}</small>
+                  <span>{tr('kb.kind.' + k)}</span><small>{k.toUpperCase()}</small>
                 </div>
               ))}
             </div>
           </div>
           <div className="v2-modal-sec">
-            <div className="lab">内容</div>
-            <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={6} placeholder="写下要记住的事实、偏好、步骤…" />
+            <div className="lab">{tr('kb.content')}</div>
+            <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={6} placeholder={tr('kb.memoryContentPlaceholder')} />
           </div>
           <div className="v2-modal-sec">
             <div className="lab">Scope</div>
             <input value={scope} onChange={(e) => setScope(e.target.value)} placeholder="workspace · agent:<id> · …" />
-            <div className="v2-modal-note">默认 workspace（所有 agent 共享）；要私有化用 <code>agent:&lt;agentId&gt;</code></div>
+            <div className="v2-modal-note">{tr('kb.scopeNotePre')} <code>agent:&lt;agentId&gt;</code></div>
           </div>
           <div className="v2-modal-sec">
-            <div className="lab">标签</div>
-            <input value={tagsStr} onChange={(e) => setTagsStr(e.target.value)} placeholder="用逗号或空格分隔" />
+            <div className="lab">{tr('kb.tags')}</div>
+            <input value={tagsStr} onChange={(e) => setTagsStr(e.target.value)} placeholder={tr('kb.tagsPlaceholder')} />
           </div>
           <div className="v2-modal-sec">
             <div className="v2-set-row" style={{ padding: 0 }}>
-              <div className="v2-set-row-l"><div className="lab">置顶</div><div className="sub">优先用于检索结果</div></div>
+              <div className="v2-set-row-l"><div className="lab">{tr('kb.pin')}</div><div className="sub">{tr('kb.pinSub')}</div></div>
               <button className={`v2-switch${pinned ? ' on' : ''}`} onClick={() => setPinned(!pinned)}><span className="thumb" /></button>
             </div>
           </div>
         </div>
         <div className="v2-modal-foot">
-          <button className="v2-mbtn" onClick={onClose} disabled={busy}>取消</button>
-          <button className="v2-mbtn primary" onClick={() => void save()} disabled={busy}>{busy ? '保存中…' : '保存'}</button>
+          <button className="v2-mbtn" onClick={onClose} disabled={busy}>{tr('common.cancel')}</button>
+          <button className="v2-mbtn primary" onClick={() => void save()} disabled={busy}>{busy ? tr('kb.saving') : tr('common.save')}</button>
         </div>
       </div>
     </div>
@@ -776,6 +821,7 @@ const DocCanvas: React.FC<{
   onChanged: () => void | Promise<void>;
   onDeleted: () => void;
 }> = ({ doc, domains, onChanged, onDeleted }) => {
+  const { t: tr } = useI18n();
   const [content, setContent] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [editDomains, setEditDomains] = useState(false);
@@ -790,15 +836,15 @@ const DocCanvas: React.FC<{
 
   const onIngest = async () => {
     setBusy(true);
-    try { const r = await smartnoteDocuments.ingest(doc.id); window.alert(`已切成 ${r.chunks} 块进库，可在搜索里检索。`); await onChanged(); }
-    catch (e: any) { window.alert(e?.message || '入库失败'); }
+    try { const r = await smartnoteDocuments.ingest(doc.id); window.alert(tr('kb.ingestedChunks', { count: r.chunks })); await onChanged(); }
+    catch (e: any) { window.alert(e?.message || tr('kb.ingestFailed')); }
     finally { setBusy(false); }
   };
   // 两步删除（Electron 禁用 window.confirm）。
   const onDelete = async () => {
     if (!confirmDel) { setConfirmDel(true); window.setTimeout(() => setConfirmDel(false), 2600); return; }
     try { await smartnoteDocuments.remove(doc.id); await onChanged(); onDeleted(); }
-    catch (e: any) { window.alert(e?.message || '删除失败'); }
+    catch (e: any) { window.alert(e?.message || tr('kb.deleteFailed')); }
   };
 
   return (
@@ -806,18 +852,18 @@ const DocCanvas: React.FC<{
       <div className="v2-note-toolbar">
         <span className="v2-note-title" title={doc.name}>{doc.name}</span>
         <span className="v2-pill mute">{formatBytes(doc.byte_size)}</span>
-        {doc.ingested_at ? <span className="v2-pill ok">已切块</span> : <span className="v2-pill warn">待切块</span>}
+        {doc.ingested_at ? <span className="v2-pill ok">{tr('kb.chunked')}</span> : <span className="v2-pill warn">{tr('kb.pendingChunk')}</span>}
         {docDomains(doc).map((dm) => <span key={dm} className="v2-pill soft">@{dm}</span>)}
         <span className="grow" />
-        <button className="v2-kb-pill" onClick={() => setEditDomains(true)}>归属域</button>
-        <button className="v2-kb-pill" disabled={busy} onClick={() => void onIngest()}>{busy ? '处理中…' : '入库'}</button>
-        <button className={`v2-note-icon danger${confirmDel ? ' confirm' : ''}`} onClick={() => void onDelete()} title={confirmDel ? '再次点击确认删除' : '删除'}>
-          {confirmDel ? '确认?' : <IconTrash />}
+        <button className="v2-kb-pill" onClick={() => setEditDomains(true)}>{tr('kb.domainsAssign')}</button>
+        <button className="v2-kb-pill" disabled={busy} onClick={() => void onIngest()}>{busy ? tr('kb.processing') : tr('kb.ingest')}</button>
+        <button className={`v2-note-icon danger${confirmDel ? ' confirm' : ''}`} onClick={() => void onDelete()} title={confirmDel ? tr('kb.clickAgainToDelete') : tr('common.delete')}>
+          {confirmDel ? tr('kb.confirmQ') : <IconTrash />}
         </button>
       </div>
       <div className="v2-note-surface">
-        {content === null ? <div className="v2-note-empty">打开中…</div> : (
-          <div className="v2-note-preview"><MD text={content || '（空文档）'} /></div>
+        {content === null ? <div className="v2-note-empty">{tr('kb.opening')}</div> : (
+          <div className="v2-note-preview"><MD text={content || tr('kb.emptyDocument')} /></div>
         )}
       </div>
       {editDomains && (
@@ -836,6 +882,7 @@ const DocumentDomainsModal: React.FC<{
   onClose: () => void;
   onSaved: () => void;
 }> = ({ doc, domains, onClose, onSaved }) => {
+  const { t: tr } = useI18n();
   const [picked, setPicked] = useState<string[]>(docDomains(doc));
   const [busy, setBusy] = useState(false);
 
@@ -857,7 +904,7 @@ const DocumentDomainsModal: React.FC<{
       delete (meta as any).domain; // collapse legacy single-domain field into domains
       await smartnoteDocuments.patch(doc.id, { metadata: meta });
       onSaved();
-    } catch (e: any) { window.alert(e?.message || '保存失败'); }
+    } catch (e: any) { window.alert(e?.message || tr('kb.saveFailed')); }
     finally { setBusy(false); }
   };
 
@@ -865,18 +912,18 @@ const DocumentDomainsModal: React.FC<{
     <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="v2-modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="v2-modal-hd">
-          <h3>配置知识域</h3>
+          <h3>{tr('kb.configDomains')}</h3>
           <button className="x" onClick={onClose}>✕</button>
         </div>
         <div className="v2-modal-body">
           <div className="v2-modal-sec">
-            <div className="lab">文档</div>
+            <div className="lab">{tr('kb.document')}</div>
             <div className="v2-modal-note" style={{ marginTop: 2 }}>{doc.name}</div>
           </div>
           <div className="v2-modal-sec">
-            <div className="lab">归属域（可多选）</div>
+            <div className="lab">{tr('kb.domainsMulti')}</div>
             {domains.length === 0 ? (
-              <div className="v2-modal-note">还没有知识域。先在上方「＋ 域」新建一个。</div>
+              <div className="v2-modal-note">{tr('kb.noDomainsYet')}</div>
             ) : (
               <div className="v2-kb-domains" style={{ padding: 0, border: 'none' }}>
                 {domains.map((d) => (
@@ -892,14 +939,14 @@ const DocumentDomainsModal: React.FC<{
             )}
             <div className="v2-modal-note">
               {doc.ingested_at
-                ? <>保存后，已切块的内容会即时重新打上所选域标签，<code>@域</code> 立即可检索到——无需重新切块。</>
-                : <>这份文档还没切块。配置好域后点「切块入库」，切出的块会带上所选域标签。</>}
+                ? <>{tr('kb.domainsNoteIngestedPre')}<code>@{tr('kb.domainNameWord')}</code>{tr('kb.domainsNoteIngestedPost')}</>
+                : <>{tr('kb.domainsNotePending')}</>}
             </div>
           </div>
         </div>
         <div className="v2-modal-foot">
-          <button className="v2-mbtn" onClick={onClose} disabled={busy}>取消</button>
-          <button className="v2-mbtn primary" onClick={() => void save()} disabled={busy}>{busy ? '保存中…' : '保存'}</button>
+          <button className="v2-mbtn" onClick={onClose} disabled={busy}>{tr('common.cancel')}</button>
+          <button className="v2-mbtn primary" onClick={() => void save()} disabled={busy}>{busy ? tr('kb.saving') : tr('common.save')}</button>
         </div>
       </div>
     </div>
@@ -907,6 +954,7 @@ const DocumentDomainsModal: React.FC<{
 };
 
 const DocumentCreateModal: React.FC<{ domain: string | null; onClose: () => void; onCreated: () => void }> = ({ domain, onClose, onCreated }) => {
+  const { t: tr } = useI18n();
   const [name, setName] = useState('');
   const [content, setContent] = useState('');
   const [busy, setBusy] = useState(false);
@@ -925,7 +973,7 @@ const DocumentCreateModal: React.FC<{ domain: string | null; onClose: () => void
   };
 
   const save = async () => {
-    if (!name.trim() || !content.trim()) { window.alert('名字和内容都要填'); return; }
+    if (!name.trim() || !content.trim()) { window.alert(tr('kb.nameAndContentRequired')); return; }
     setBusy(true);
     try {
       await smartnoteDocuments.create({
@@ -936,7 +984,7 @@ const DocumentCreateModal: React.FC<{ domain: string | null; onClose: () => void
         metadata: domain ? { domains: [domain] } : undefined,
       });
       onCreated();
-    } catch (e: any) { window.alert(e?.message || '失败'); }
+    } catch (e: any) { window.alert(e?.message || tr('kb.failed')); }
     finally { setBusy(false); }
   };
 
@@ -944,27 +992,27 @@ const DocumentCreateModal: React.FC<{ domain: string | null; onClose: () => void
     <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="v2-modal wide" onMouseDown={(e) => e.stopPropagation()}>
         <div className="v2-modal-hd">
-          <h3>上传 wiki</h3>
+          <h3>{tr('kb.uploadWiki')}</h3>
           <button className="x" onClick={onClose}>✕</button>
         </div>
         <div className="v2-modal-body">
           <div className="v2-modal-sec">
-            <div className="lab">名字</div>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="如：产品介绍.md" />
+            <div className="lab">{tr('kb.name')}</div>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder={tr('kb.docNamePlaceholder')} />
           </div>
           <div className="v2-modal-sec">
             <div className="lab" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span>正文</span>
-              <button className="v2-set-btn" style={{ marginLeft: 'auto' }} onClick={() => fileRef.current?.click()}>从文件读…</button>
+              <span>{tr('kb.body')}</span>
+              <button className="v2-set-btn" style={{ marginLeft: 'auto' }} onClick={() => fileRef.current?.click()}>{tr('kb.readFromFile')}</button>
               <input ref={fileRef} type="file" accept=".txt,.md,.markdown,.text,.rst,.org,.html" style={{ display: 'none' }}
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) void onPickFile(f); e.target.value = ''; }} />
             </div>
-            <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={14} placeholder="贴文本或从文件读…" />
+            <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={14} placeholder={tr('kb.bodyPlaceholder')} />
           </div>
         </div>
         <div className="v2-modal-foot">
-          <button className="v2-mbtn" onClick={onClose} disabled={busy}>取消</button>
-          <button className="v2-mbtn primary" onClick={() => void save()} disabled={busy}>{busy ? '保存中…' : '保存'}</button>
+          <button className="v2-mbtn" onClick={onClose} disabled={busy}>{tr('common.cancel')}</button>
+          <button className="v2-mbtn primary" onClick={() => void save()} disabled={busy}>{busy ? tr('kb.saving') : tr('common.save')}</button>
         </div>
       </div>
     </div>
@@ -991,6 +1039,7 @@ const LocalNoteCanvas: React.FC<{
   onChanged: () => void | Promise<void>;
   onDeleted: () => void;
 }> = ({ file, onChanged, onDeleted }) => {
+  const { t: tr } = useI18n();
   const [content, setContent] = useState<string>('');
   const [title, setTitle] = useState<string>(noteTitle(file));
   const [loading, setLoading] = useState(true);
@@ -1011,7 +1060,7 @@ const LocalNoteCanvas: React.FC<{
       if (!alive) return;
       setContent(c); editorRef.current?.setContent(c); setLoading(false);
       setTimeout(() => editorRef.current?.focus(), 30);
-    }).catch((e) => { if (alive) { window.alert(e?.message || '打开失败'); setLoading(false); } });
+    }).catch((e) => { if (alive) { window.alert(e?.message || tr('kb.openFailed')); setLoading(false); } });
     return () => { alive = false; };
   }, [file.path]);
 
@@ -1019,9 +1068,9 @@ const LocalNoteCanvas: React.FC<{
   const doSave = useCallback(async (body: string) => {
     setSaving(true);
     try { await writeLocalNote(file.path, body); setDirty(false); }
-    catch (e: any) { window.alert(e?.message || '保存失败'); }
+    catch (e: any) { window.alert(e?.message || tr('kb.saveFailed')); }
     finally { setSaving(false); }
-  }, [file.path]);
+  }, [file.path, tr]);
 
   // 内联改名 = 重命名文件。
   const commitRename = async (name: string) => {
@@ -1029,13 +1078,13 @@ const LocalNoteCanvas: React.FC<{
     const v = name.trim();
     if (!v || v === title) return;
     try { await renameLocalNote(file.path, v); setTitle(v); await onChanged(); }
-    catch (e: any) { window.alert(e?.message || '改名失败'); }
+    catch (e: any) { window.alert(e?.message || tr('kb.renameFailed')); }
   };
   // 两步删除（删本地文件，进回收站）。
   const onDelete = async () => {
     if (!confirmDel) { setConfirmDel(true); window.setTimeout(() => setConfirmDel(false), 2600); return; }
     try { await deleteLocalNote(file.path); await onChanged(); onDeleted(); }
-    catch (e: any) { window.alert(e?.message || '删除失败'); }
+    catch (e: any) { window.alert(e?.message || tr('kb.deleteFailed')); }
   };
 
   // 同步到 sncloud：先存盘 → create/patch 云 document(kind:note) → 切块入库 → 记映射。
@@ -1057,8 +1106,8 @@ const LocalNoteCanvas: React.FC<{
       }
       if (docId) { try { await smartnoteDocuments.ingest(docId); } catch { /* ingest 失败不阻断 */ } }
       setSynced(true);
-      window.alert('已同步到 Smartnote 云并入库，可在搜索里检索。');
-    } catch (e: any) { window.alert(e?.message || '同步失败'); }
+      window.alert(tr('kb.syncedToCloud'));
+    } catch (e: any) { window.alert(e?.message || tr('kb.syncFailed')); }
     finally { setSyncing(false); }
   };
 
@@ -1077,27 +1126,31 @@ const LocalNoteCanvas: React.FC<{
             onBlur={(e) => void commitRename(e.target.value)}
           />
         ) : (
-          <button className="v2-note-title" onClick={() => setRenaming(true)} title="点击重命名">{title || '未命名'}</button>
+          <button className="v2-note-title" onClick={() => setRenaming(true)} title={tr('kb.clickToRename')}>{title || tr('kb.untitled')}</button>
         )}
-        <span className="v2-note-status">{saving ? '保存中…' : dirty ? '● 未保存' : '已保存（本地）'}</span>
-        <span className={`v2-pill ${synced ? 'ok' : 'mute'}`}>{synced ? '已同步' : '未同步'}</span>
+        <span className="v2-note-status">{saving ? tr('kb.saving') : dirty ? tr('kb.unsaved') : tr('kb.savedLocal')}</span>
+        <span className={`v2-pill ${synced ? 'ok' : 'mute'}`}>{synced ? tr('kb.synced') : tr('kb.notSynced')}</span>
         <span className="grow" />
         <button
-          className={`v2-kb-pill${preview ? ' on' : ''}`}
+          className={`v2-note-icon${preview ? ' on' : ''}`}
           onClick={() => {
             if (!preview && editorRef.current) setContent(editorRef.current.getContent());
             setPreview((v) => !v);
           }}
-        >{preview ? '编辑' : '预览'}</button>
-        <button className="v2-kb-pill" disabled={syncing} onClick={() => void onSync()} title="同步到 Smartnote 云并入库（可搜索/@检索）">
-          {syncing ? '同步中…' : '同步'}
-        </button>
-        <button className={`v2-note-icon danger${confirmDel ? ' confirm' : ''}`} onClick={() => void onDelete()} title={confirmDel ? '再次点击确认删除' : '删除'}>
-          {confirmDel ? '确认?' : <IconTrash />}
+          title={preview ? tr('kb.backToEdit') : tr('kb.preview')}
+        >{preview ? <IconEdit /> : <IconEye />}</button>
+        <button
+          className={`v2-note-icon${syncing ? ' busy' : ''}`}
+          disabled={syncing}
+          onClick={() => void onSync()}
+          title={syncing ? tr('kb.syncing') : tr('kb.syncTip')}
+        ><IconSync /></button>
+        <button className={`v2-note-icon danger${confirmDel ? ' confirm' : ''}`} onClick={() => void onDelete()} title={confirmDel ? tr('kb.clickAgainToDelete') : tr('common.delete')}>
+          {confirmDel ? tr('kb.confirmQ') : <IconTrash />}
         </button>
       </div>
       <div className="v2-note-surface">
-        {loading ? <div className="v2-note-empty">打开中…</div> : preview ? (
+        {loading ? <div className="v2-note-empty">{tr('kb.opening')}</div> : preview ? (
           <div className="v2-note-preview"><MD text={content} /></div>
         ) : (
           <NoteEditor ref={editorRef} initial={content} onSave={(body) => void doSave(body)} onDirty={setDirty} />
@@ -1119,8 +1172,6 @@ type SearchHit =
 /** What Enter opens in the workspace behind the palette. */
 export type SearchOpenTarget = { kind: 'doc'; id: string } | { kind: 'memory' };
 
-const GROUP_LABEL: Record<SearchHit['type'], string> = { note: '笔记', doc: '文档', memory: '记忆' };
-
 /** 命令面板式知识库搜索。
  *  · 输入即搜（250ms 防抖 + 请求序号防竞态）笔记/文档/记忆三源并行
  *  · 单列结果分组 + ↑↓ 键盘选择，右侧实时预览选中项来源
@@ -1131,6 +1182,7 @@ const SearchTab: React.FC<{
   noteDocIds: Set<string>;
   onOpen: (t: SearchOpenTarget) => void;
 }> = ({ domain, llmConfigId, noteDocIds, onOpen }) => {
+  const { t: tr } = useI18n();
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1180,13 +1232,13 @@ const SearchTab: React.FC<{
         void loadHistory();
       } catch (e: any) {
         if (id !== reqRef.current) return;
-        setSearchError(e?.message || '检索失败，请稍后再试。'); setHits([]);
+        setSearchError(e?.message || tr('kb.searchFailed')); setHits([]);
       } finally {
         if (id === reqRef.current) setBusy(false);
       }
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [q, domain, noteDocIds, loadHistory]);
+  }, [q, domain, noteDocIds, loadHistory, tr]);
 
   const selected = hits && hits.length ? hits[Math.min(sel, hits.length - 1)] : null;
 
@@ -1220,9 +1272,9 @@ const SearchTab: React.FC<{
       const ans = await kbAnswer(text, top, llmConfigId);
       setAnswer({ loading: false, text: ans });
     } catch (e: any) {
-      setAnswer({ loading: false, text: '', error: e?.message || 'AI 回答失败' });
+      setAnswer({ loading: false, text: '', error: e?.message || tr('kb.aiAnswerFailed') });
     }
-  }, [q, hits, llmConfigId]);
+  }, [q, hits, llmConfigId, tr]);
 
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); if (hits?.length) setSel((i) => Math.min(hits.length - 1, i + 1)); }
@@ -1237,11 +1289,10 @@ const SearchTab: React.FC<{
   // 渲染分组：按 hits 顺序切段（笔记/文档/记忆），保留全局索引用于键盘高亮。
   const groups = useMemo(() => {
     if (!hits) return [];
-    const out: Array<{ label: string; items: Array<{ hit: SearchHit; idx: number }> }> = [];
-    let cur: { label: string; items: Array<{ hit: SearchHit; idx: number }> } | null = null;
+    const out: Array<{ type: SearchHit['type']; items: Array<{ hit: SearchHit; idx: number }> }> = [];
+    let cur: { type: SearchHit['type']; items: Array<{ hit: SearchHit; idx: number }> } | null = null;
     hits.forEach((hit, idx) => {
-      const label = GROUP_LABEL[hit.type];
-      if (!cur || cur.label !== label) { cur = { label, items: [] }; out.push(cur); }
+      if (!cur || cur.type !== hit.type) { cur = { type: hit.type, items: [] }; out.push(cur); }
       cur.items.push({ hit, idx });
     });
     return out;
@@ -1255,11 +1306,11 @@ const SearchTab: React.FC<{
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={onKey}
-          placeholder="搜索笔记、文档、记忆…"
-          aria-label="搜索知识库内容"
+          placeholder={tr('kb.searchPlaceholder')}
+          aria-label={tr('kb.searchAria')}
           autoFocus
         />
-        {busy && <span className="v2-cmdk-spin" aria-label="检索中" />}
+        {busy && <span className="v2-cmdk-spin" aria-label={tr('kb.searching')} />}
       </div>
 
       {searchError && <div className="v2-kb-warn v2-cmdk-error">{searchError}</div>}
@@ -1269,7 +1320,7 @@ const SearchTab: React.FC<{
           {!hits && !busy && (
             history.length > 0 ? (
               <div className="v2-cmdk-recent">
-                <div className="v2-cmdk-secthd">最近搜索</div>
+                <div className="v2-cmdk-secthd">{tr('kb.recentSearches')}</div>
                 {history.map((h) => (
                   <button key={h.id} className="v2-cmdk-recent-item" onClick={() => setQ(h.query_text)}>
                     <IconSearch />
@@ -1279,15 +1330,15 @@ const SearchTab: React.FC<{
                 ))}
               </div>
             ) : (
-              <KbEmpty title="搜索知识库" hint="输入即搜笔记、文档与记忆。文档需先「入库」才可被检索。" />
+              <KbEmpty title={tr('kb.searchKbTitle')} hint={tr('kb.searchKbHint')} />
             )
           )}
 
-          {hits && hits.length === 0 && !busy && <KbEmpty title="没有匹配" hint="换个词，或确认文档已入库。" />}
+          {hits && hits.length === 0 && !busy && <KbEmpty title={tr('kb.noMatches')} hint={tr('kb.noMatchesHint')} />}
 
           {groups.map((g) => (
-            <div key={g.label} className="v2-cmdk-group">
-              <div className="v2-cmdk-secthd">{g.label} <span className="cnt">{g.items.length}</span></div>
+            <div key={g.type} className="v2-cmdk-group">
+              <div className="v2-cmdk-secthd">{tr('kb.group.' + g.type)} <span className="cnt">{g.items.length}</span></div>
               {g.items.map(({ hit, idx }) => (
                 <button
                   key={hit.id}
@@ -1307,7 +1358,7 @@ const SearchTab: React.FC<{
                     </span>
                     <span className="sub">
                       {hit.type === 'memory'
-                        ? <span className="src">{hit.mem.kind || '记忆'}</span>
+                        ? <span className="src">{hit.mem.kind || tr('kb.memory')}</span>
                         : <span className="src">{hit.chunk.document_name}</span>}
                       <span className="sc">{(hit.type === 'memory' ? hit.mem.score : hit.chunk.score).toFixed(2)}</span>
                     </span>
@@ -1321,16 +1372,16 @@ const SearchTab: React.FC<{
         <aside className="v2-cmdk-preview">
           {answer ? (
             <div className="v2-cmdk-answer">
-              <div className="v2-cmdk-secthd answer-hd"><IconModel /> AI 回答
-                <button className="v2-cmdk-answer-x" onClick={() => setAnswer(null)} title="关闭">✕</button>
+              <div className="v2-cmdk-secthd answer-hd"><IconModel /> {tr('kb.aiAnswer')}
+                <button className="v2-cmdk-answer-x" onClick={() => setAnswer(null)} title={tr('common.close')}>✕</button>
               </div>
-              {answer.loading && <div className="v2-cmdk-answer-loading">生成中…</div>}
+              {answer.loading && <div className="v2-cmdk-answer-loading">{tr('kb.generating')}</div>}
               {answer.error && <div className="v2-kb-warn">{answer.error}</div>}
               {!answer.loading && answer.text && <div className="v2-cmdk-answer-body"><MD text={answer.text} /></div>}
             </div>
           ) : selected?.type === 'memory' ? (
             <div className="v2-cmdk-prev-mem">
-              <div className="v2-cmdk-prev-hd"><span className="src">{selected.mem.kind || '记忆'}</span></div>
+              <div className="v2-cmdk-prev-hd"><span className="src">{selected.mem.kind || tr('kb.memory')}</span></div>
               <div className="v2-cmdk-prev-mem-body">{selected.mem.content}</div>
               {selected.mem.tags?.length > 0 && (
                 <div className="v2-cmdk-prev-tags">{selected.mem.tags.map((t) => <span key={t}>{t}</span>)}</div>
@@ -1350,18 +1401,18 @@ const SearchTab: React.FC<{
           ) : (
             <div className="v2-cmdk-prev-empty">
               {info && info.vectorOk === false
-                ? '向量检索不可用，已回退到关键词。'
-                : hits === null ? '输入关键词开始搜索' : '选择一项查看来源'}
+                ? tr('kb.vectorFallback')
+                : hits === null ? tr('kb.enterKeywordToSearch') : tr('kb.selectToViewSource')}
             </div>
           )}
         </aside>
       </div>
 
       <div className="v2-cmdk-foot">
-        <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
-        <span><kbd>↵</kbd> 打开</span>
-        <span><kbd>⌘</kbd><kbd>↵</kbd> AI 回答</span>
-        <span><kbd>esc</kbd> 关闭</span>
+        <span><kbd>↑</kbd><kbd>↓</kbd> {tr('kb.kbdSelect')}</span>
+        <span><kbd>↵</kbd> {tr('kb.kbdOpen')}</span>
+        <span><kbd>⌘</kbd><kbd>↵</kbd> {tr('kb.aiAnswer')}</span>
+        <span><kbd>esc</kbd> {tr('common.close')}</span>
       </div>
     </div>
   );
@@ -1376,6 +1427,7 @@ const SearchOverlay: React.FC<{
   onOpen: (t: SearchOpenTarget) => void;
   onClose: () => void;
 }> = ({ domain, llmConfigId, noteDocIds, onOpen, onClose }) => {
+  const { t: tr } = useI18n();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -1384,7 +1436,7 @@ const SearchOverlay: React.FC<{
   return (
     <div className="v2-kb-search-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="v2-kb-search-panel v2-cmdk-panel" role="dialog" aria-modal="true" aria-labelledby="kb-search-title" onMouseDown={(e) => e.stopPropagation()}>
-        <h2 id="kb-search-title" className="v2-sr-only">知识库搜索</h2>
+        <h2 id="kb-search-title" className="v2-sr-only">{tr('kb.searchKbTitle')}</h2>
         <SearchTab domain={domain} llmConfigId={llmConfigId} noteDocIds={noteDocIds} onOpen={onOpen} />
       </div>
     </div>
@@ -1397,6 +1449,7 @@ const SearchOverlay: React.FC<{
  *  inline 展开/收起 only when the content actually overflows. Cards grow to fit
  *  short content, so nothing is hard-cut or pushed past the viewport. */
 const ExpandableBody: React.FC<{ text: string; lines?: number }> = ({ text, lines = 5 }) => {
+  const { t: tr } = useI18n();
   const ref = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
@@ -1422,28 +1475,10 @@ const ExpandableBody: React.FC<{ text: string; lines?: number }> = ({ text, line
       </div>
       {overflowing && (
         <button className="v2-kb-expand" onClick={() => setExpanded((e) => !e)}>
-          {expanded ? '收起' : '展开'}
+          {expanded ? tr('kb.collapse') : tr('kb.expand')}
         </button>
       )}
     </>
-  );
-};
-
-/** Smartnote Cloud 连接状态 —— cloud 图标 + 名称 + 状态文字 + 色点，一眼可读。
- *  tone 类驱动配色（ok 绿 / probing 琥珀 / down 红 / no-key 中性）。 */
-const KbConn: React.FC<{ state: ConnState }> = ({ state }) => {
-  const tone = state === 'ok' ? 'ok' : state === 'probing' ? 'probing' : state === 'no-key' ? 'nokey' : 'down';
-  const label =
-    state === 'ok' ? '已连接' :
-    state === 'probing' ? '连接中…' :
-    state === 'no-key' ? '未配置' : '不可达';
-  return (
-    <span className={`v2-kb-conn tone-${tone}`} title={`Smartnote 云 · ${label}`}>
-      <IconCloud />
-      <span className="svc">Smartnote 云</span>
-      <span className="dot" />
-      <span className="st">{label}</span>
-    </span>
   );
 };
 
@@ -1455,6 +1490,7 @@ const KbEmpty: React.FC<{ title: string; hint?: string }> = ({ title, hint }) =>
 );
 
 const NoKey: React.FC<{ onSaved: () => void | Promise<void> }> = ({ onSaved }) => {
+  const { t: tr } = useI18n();
   const [key, setKey] = useState(getSmartnoteApiKey());
   const [base, setBase] = useState(getSmartnoteBaseUrl());
   const [busy, setBusy] = useState(false);
@@ -1467,8 +1503,8 @@ const NoKey: React.FC<{ onSaved: () => void | Promise<void> }> = ({ onSaved }) =
   };
   return (
     <div className="v2-kb-empty" style={{ paddingTop: 40 }}>
-      <div className="t">配置 Smartnote 凭据</div>
-      <div className="h">把你的 API Key 填进去，知识库 / 记忆 / RAG 就都能用了。</div>
+      <div className="t">{tr('kb.configSmartnoteCreds')}</div>
+      <div className="h">{tr('kb.configSmartnoteDesc')}</div>
       <div style={{ maxWidth: 420, margin: '24px auto 0', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div>
           <div style={{ fontSize: 11.5, color: 'var(--c-ink-3)', marginBottom: 4 }}>API Key</div>
@@ -1479,7 +1515,7 @@ const NoKey: React.FC<{ onSaved: () => void | Promise<void> }> = ({ onSaved }) =
           />
         </div>
         <div>
-          <div style={{ fontSize: 11.5, color: 'var(--c-ink-3)', marginBottom: 4 }}>Base URL <span style={{ color: 'var(--c-ink-4)' }}>(留空用默认)</span></div>
+          <div style={{ fontSize: 11.5, color: 'var(--c-ink-3)', marginBottom: 4 }}>Base URL <span style={{ color: 'var(--c-ink-4)' }}>{tr('kb.blankForDefault')}</span></div>
           <input
             value={base} onChange={(e) => setBase(e.target.value)}
             placeholder="https://api.smartnote.cloud"
@@ -1491,24 +1527,27 @@ const NoKey: React.FC<{ onSaved: () => void | Promise<void> }> = ({ onSaved }) =
           onClick={() => void save()}
           disabled={busy || !key.trim()}
           style={{ marginTop: 6 }}
-        >{busy ? '验证中…' : '保存并连接'}</button>
+        >{busy ? tr('kb.verifying') : tr('kb.saveAndConnect')}</button>
         <div style={{ fontSize: 12, color: 'var(--c-ink-4)', textAlign: 'center', marginTop: 4 }}>
-          也能在 设置 · 知识/RAG 里改。
+          {tr('kb.alsoChangeInSettings')}
         </div>
       </div>
     </div>
   );
 };
 
-const Down: React.FC<{ err: string | null; onRetry: () => void | Promise<void> }> = ({ err, onRetry }) => (
+const Down: React.FC<{ err: string | null; onRetry: () => void | Promise<void> }> = ({ err, onRetry }) => {
+  const { t: tr } = useI18n();
+  return (
   <div className="v2-kb-empty">
-    <div className="t">Smartnote 不可达</div>
-    <div className="h">{err || '连不上知识库服务。'}</div>
+    <div className="t">{tr('kb.smartnoteUnreachable')}</div>
+    <div className="h">{err || tr('kb.cantReachKb')}</div>
     <div style={{ marginTop: 12 }}>
-      <button className="v2-set-btn primary" onClick={() => void onRetry()}>重试</button>
+      <button className="v2-set-btn primary" onClick={() => void onRetry()}>{tr('kb.retry')}</button>
     </div>
   </div>
-);
+  );
+};
 
 function formatBytes(n: number): string {
   if (!n || n < 1024) return `${n || 0} B`;

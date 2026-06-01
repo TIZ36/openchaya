@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Chaya app icon — master artwork (1024×1024).
+
+  Concept: aperture spark (四角光苒) — a stylish, modern agent-app mark.
+  A four-pointed concave star tilted 6° for a "hand-made / 偏潮" energy, with a
+  small companion spark. Monochrome to match the shipped neutral theme.
+
+  macOS Big Sur grid: the rounded body is INSET (824×824, 100px margin) so the
+  system drop-shadow has room; macOS does NOT auto-mask, so the rounded rect is
+  baked in here. Everything outside the body is transparent — no white plate.
+
+  Ink body (#0d0d0d, the theme ink, warm near-black, not pure #000) + warm-white spark.
+-->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Body: rounded rect (Big Sur radius ≈ 22.6% of the 824 body). -->
+  <rect x="100" y="100" width="824" height="824" rx="186" ry="186" fill="#0d0d0d"/>
+
+  <!-- Spark, centered + scaled from the 24-unit master glyph, tilted 6°. -->
+  <g transform="translate(512 512) scale(26) rotate(6)">
+    <g transform="translate(-12 -12)">
+      <path d="M12 2 C12 8.4 15.6 12 22 12 C15.6 12 12 15.6 12 22 C12 15.6 8.4 12 2 12 C8.4 12 12 8.4 12 2 Z"
+            fill="#f7f6f4"/>
+      <path d="M18.8 2.8 C18.8 4.3 19.7 5.2 21.2 5.2 C19.7 5.2 18.8 6.1 18.8 7.6 C18.8 6.1 17.9 5.2 16.4 5.2 C17.9 5.2 18.8 4.3 18.8 2.8 Z"
+            fill="#f7f6f4" opacity="0.55"/>
+    </g>
+  </g>
+</svg>

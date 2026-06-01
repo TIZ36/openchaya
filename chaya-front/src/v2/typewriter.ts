@@ -36,10 +36,6 @@ export interface TypewriterConfig {
 
 export const DEFAULT_TYPEWRITER: TypewriterConfig = { enabled: true, speed: 'normal' };
 
-export const TYPE_SPEED_LABELS: Record<TypeSpeed, string> = {
-  slow: '慢', normal: '适中', fast: '快',
-};
-
 /** Drain time used during the finalize phase (after the stream is done) — kept
  *  short across all speeds so the tail catches up promptly without a visible lag. */
 export const FINISH_DRAIN_SEC = 0.08;

@@ -15,6 +15,7 @@ import type { LocalAgentState, LayoutNode, DropSide, Tab } from './useLocalAgent
 import { TAB_COLORS } from './useLocalAgent';
 import { IconSend, IconAgentCode, IconPlus, IconChevron, IconTrash, IconSkill, IconModel } from './icons';
 import { CodeBlock, PreBlock, mdRehypePlugins } from './codeBlock';
+import { useI18n, t } from '../i18n';
 
 // 公共组件：链接新窗口打开、宽表格局部横滚。
 const MD_COMMON = {
@@ -35,6 +36,13 @@ const VENDOR_ORDER = [
   'Meta', 'Alibaba', 'Moonshot', '智谱', '零一万物', '豆包',
   'Cohere', 'Perplexity', 'Groq', '其他',
 ] as const;
+/** 只有这几个厂商名是中文显示串，需走 i18n；其余是专有名词（Anthropic/OpenAI…）原样显示。 */
+const VENDOR_I18N: Record<string, string> = {
+  '智谱': 'local.vendor.zhipu',
+  '零一万物': 'local.vendor.lingyi',
+  '豆包': 'local.vendor.doubao',
+  '其他': 'local.vendor.other',
+};
 function vendorOfModel(m: ModelInfo): string {
   const v = (m.value || '').toLowerCase();
   const d = (m.displayName || '').toLowerCase();
@@ -129,7 +137,7 @@ async function filesToAttachments(files: File[]): Promise<Omit<Attachment, 'id'>
     const ext = (f.type.split('/')[1] || 'png').replace('+xml', '');
     out.push({
       kind: dataUrl ? 'image' : 'file',
-      name: f.name || (dataUrl ? `粘贴图片.${ext}` : '文件'),
+      name: f.name || (dataUrl ? `${t('local.att.pastedImage')}.${ext}` : t('local.att.file')),
       path: p, mime: f.type || null, size: f.size, dataUrl,
     });
   }
@@ -154,6 +162,7 @@ export const LocalAgentTree: React.FC<{
   /** 单击 provider 徽标循环切换：claude → codex → gemini。 */
   onCycleProvider: () => void;
 }> = React.memo(({ la, onEnter, onCycleProvider }) => {
+  const { t: tr } = useI18n();
   const openSess = (cwd: string, sid: string, title: string) => { onEnter(); void la.openSession(cwd, sid, title); };
   const fresh = (cwd: string) => { onEnter(); la.newSession(cwd); };
   const cur = la.current;
@@ -168,7 +177,7 @@ export const LocalAgentTree: React.FC<{
         <button
           className={`v2-la-badge prov-${la.provider}${ready ? ' ready' : ''}`}
           onClick={onCycleProvider}
-          title={`当前：${PROVIDER_LABELS[la.provider]}　（单击切换 provider）`}
+          title={tr('local.tree.providerBadge', { provider: PROVIDER_LABELS[la.provider] })}
         >
           <span className="ic">
             {la.detecting ? <span className="v2-la-spinner sm" /> : ready ? <span className="ck">✓</span> : null}
@@ -180,7 +189,7 @@ export const LocalAgentTree: React.FC<{
       {/* 项目列表 */}
       <div className="v2-sec v2-la-projsec">
         <span>Projects</span>
-        <button className="v2-add" title="添加项目（选择工作目录）" onClick={la.addProject}><IconPlus /></button>
+        <button className="v2-add" title={tr('local.tree.addProject')} onClick={la.addProject}><IconPlus /></button>
       </div>
 
       <div className="v2-la-projlist">
@@ -194,21 +203,21 @@ export const LocalAgentTree: React.FC<{
                 <span className="v2-la-proj-ic"><IconFolder /></span>
                 <span className="v2-la-proj-nm" title={p.path}>{p.name}</span>
                 <span className="v2-la-proj-acts">
-                  <button title="新会话" onClick={(e) => { e.stopPropagation(); fresh(p.path); }}><IconPlus /></button>
-                  <button title="移除项目" onClick={(e) => { e.stopPropagation(); la.removeProject(p.id, p.path); }}><IconTrash /></button>
+                  <button title={tr('local.tree.newSession')} onClick={(e) => { e.stopPropagation(); fresh(p.path); }}><IconPlus /></button>
+                  <button title={tr('local.tree.removeProject')} onClick={(e) => { e.stopPropagation(); la.removeProject(p.id, p.path); }}><IconTrash /></button>
                 </span>
               </div>
               {open && (
                 <div className="v2-la-sessions">
-                  {ss === 'loading' && <Spinner label="扫描会话…" />}
-                  {Array.isArray(ss) && ss.length === 0 && <div className="v2-la-hint sub">暂无会话</div>}
+                  {ss === 'loading' && <Spinner label={tr('local.tree.scanningSessions')} />}
+                  {Array.isArray(ss) && ss.length === 0 && <div className="v2-la-hint sub">{tr('local.tree.noSessions')}</div>}
                   {Array.isArray(ss) && ss.map((s) => (
                     <SessionRow
                       key={s.sessionId}
                       s={s}
                       active={la.activeSessionId === s.sessionId && la.activeCwd === p.path}
                       open={la.tabs.some((t) => t.cwd === p.path && t.sessionId === s.sessionId)}
-                      onOpen={() => openSess(p.path, s.sessionId, s.title || s.preview || '未命名会话')}
+                      onOpen={() => openSess(p.path, s.sessionId, s.title || s.preview || tr('local.untitledSession'))}
                       onDelete={() => la.deleteSession(p.path, s.sessionId)}
                     />
                   ))}
@@ -228,6 +237,7 @@ type MenuState = { x: number; y: number; kind: 'tab' | 'group'; id: string };
 
 /** 单个标签 chip：点击切主区内容、可拖到右侧平铺、右键唤出分组菜单。 */
 const TabChip: React.FC<{ la: LocalAgentState; t: Tab; grouped?: boolean; onMenu: (e: React.MouseEvent, kind: 'tab', id: string) => void; dropProps?: React.HTMLAttributes<HTMLDivElement>; dropBefore?: boolean; onActivate?: (cwd: string) => void; activeCwd?: string | null }> = ({ la, t, grouped, onMenu, dropProps, dropBefore, onActivate, activeCwd }) => {
+  const { t: tr } = useI18n();
   const proj = la.projects.find((p) => p.path === t.cwd);
   // 高亮判断：上层（TopTabs）提供 activeCwd 覆盖时，以它为准 —— 这样当全局 activeId
   // 是一个 chat tab 时，本地 tab 不会还残留 hairline；未提供则回退到 la.activeCwd
@@ -240,20 +250,21 @@ const TabChip: React.FC<{ la: LocalAgentState; t: Tab; grouped?: boolean; onMenu
       draggable
       onDragStart={(e) => { e.dataTransfer.setData('text/cwd', t.cwd); e.dataTransfer.effectAllowed = 'copy'; }}
       onContextMenu={(e) => { e.preventDefault(); onMenu(e, 'tab', t.cwd); }}
-      title={`${t.cwd}\n右键分组 · 拖到右侧平铺`}
+      title={`${t.cwd}\n${tr('local.tab.chipHint')}`}
       {...dropProps}
     >
       <span className="proj">{proj?.name || basename(t.cwd)}</span>
       <span className="sep">/</span>
-      <span className="sess">{t.sessionId ? t.title : '新会话'}</span>
-      {t.running && <span className="rundot" title="进行中" />}
-      <button className="x" title="关闭标签" onClick={(e) => { e.stopPropagation(); la.closeTab(t.cwd); }}>✕</button>
+      <span className="sess">{t.sessionId ? t.title : tr('local.newSession')}</span>
+      {t.running && <span className="rundot" title={tr('local.running')} />}
+      <button className="x" title={tr('local.tab.close')} onClick={(e) => { e.stopPropagation(); la.closeTab(t.cwd); }}>✕</button>
     </div>
   );
 };
 
 /** 标签/分组右键菜单：新建分组、加入/移出、改色、重命名、折叠、解散。 */
 const TabMenu: React.FC<{ la: LocalAgentState; menu: MenuState; onClose: () => void; onRename: (id: string) => void }> = ({ la, menu, onClose, onRename }) => {
+  const { t: tr } = useI18n();
   useEffect(() => {
     const h = () => onClose();
     const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -268,16 +279,16 @@ const TabMenu: React.FC<{ la: LocalAgentState; menu: MenuState; onClose: () => v
     if (!t) return null;
     return (
       <div className="v2-la-menu" style={style} onMouseDown={(e) => e.stopPropagation()}>
-        {!t.groupId && <button onClick={() => { const id = la.createGroupFromTab(t.cwd); onRename(id); }}>新建分组…</button>}
-        {!t.groupId && la.groups.length > 0 && <div className="sec">加入分组</div>}
+        {!t.groupId && <button onClick={() => { const id = la.createGroupFromTab(t.cwd); onRename(id); }}>{tr('local.menu.newGroup')}</button>}
+        {!t.groupId && la.groups.length > 0 && <div className="sec">{tr('local.menu.addToGroup')}</div>}
         {!t.groupId && la.groups.map((g) => (
           <button key={g.id} onClick={() => { la.addTabToGroup(t.cwd, g.id); onClose(); }}>
             <span className="sw" style={{ background: g.color }} />{g.name}
           </button>
         ))}
-        {t.groupId && <button onClick={() => { la.removeTabFromGroup(t.cwd); onClose(); }}>移出分组</button>}
+        {t.groupId && <button onClick={() => { la.removeTabFromGroup(t.cwd); onClose(); }}>{tr('local.menu.removeFromGroup')}</button>}
         <div className="div" />
-        <button className="danger" onClick={() => { la.closeTab(t.cwd); onClose(); }}>关闭标签</button>
+        <button className="danger" onClick={() => { la.closeTab(t.cwd); onClose(); }}>{tr('local.tab.close')}</button>
       </div>
     );
   }
@@ -286,8 +297,8 @@ const TabMenu: React.FC<{ la: LocalAgentState; menu: MenuState; onClose: () => v
   if (!g) return null;
   return (
     <div className="v2-la-menu" style={style} onMouseDown={(e) => e.stopPropagation()}>
-      <button onClick={() => onRename(g.id)}>重命名</button>
-      <div className="sec">颜色</div>
+      <button onClick={() => onRename(g.id)}>{tr('local.menu.rename')}</button>
+      <div className="sec">{tr('local.menu.color')}</div>
       <div className="v2-la-swatches">
         {/* 纸色 = 无色 / opt-out。放在 leading 位上、形状与底下的色点不同
             （hairline dashed 圈 + 斜杠），视觉上"它不是另一个颜色，它是
@@ -295,8 +306,8 @@ const TabMenu: React.FC<{ la: LocalAgentState; menu: MenuState; onClose: () => v
             ≈ 主卡 bg，组本身退化为"只剩文字的纯色 chip"。 */}
         <button
           className={`sw clear${g.color === '#ffffff' ? ' on' : ''}`}
-          title="纸色 · 无色"
-          aria-label="无色"
+          title={tr('local.menu.paperColor')}
+          aria-label={tr('local.menu.noColor')}
           onClick={() => { la.setGroupColor(g.id, '#ffffff'); onClose(); }}
         />
         <span className="v2-la-swatches-div" aria-hidden />
@@ -305,13 +316,14 @@ const TabMenu: React.FC<{ la: LocalAgentState; menu: MenuState; onClose: () => v
         ))}
       </div>
       <div className="div" />
-      <button onClick={() => { la.toggleGroup(g.id); onClose(); }}>{g.collapsed ? '展开分组' : '折叠分组'}</button>
-      <button className="danger" onClick={() => { la.ungroupGroup(g.id); onClose(); }}>解散分组</button>
+      <button onClick={() => { la.toggleGroup(g.id); onClose(); }}>{g.collapsed ? tr('local.menu.expandGroup') : tr('local.menu.collapseGroup')}</button>
+      <button className="danger" onClick={() => { la.ungroupGroup(g.id); onClose(); }}>{tr('local.menu.ungroup')}</button>
     </div>
   );
 };
 
 export const LocalAgentTabs: React.FC<{ la: LocalAgentState; inline?: boolean; onTabActivate?: (cwd: string) => void; activeCwd?: string | null }> = ({ la, inline, onTabActivate, activeCwd }) => {
+  const { t: tr } = useI18n();
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [dropAt, setDropAt] = useState<string | null>(null);   // 分组重排：悬停的锚点（cwd 或 'end'）
@@ -369,7 +381,7 @@ export const LocalAgentTabs: React.FC<{ la: LocalAgentState; inline?: boolean; o
             onDragStart={(e) => { e.dataTransfer.setData('text/group', u.group.id); e.dataTransfer.effectAllowed = 'move'; }}
             onClick={() => la.toggleGroup(u.group.id)}
             onContextMenu={(e) => { e.preventDefault(); openMenu(e, 'group', u.group.id); }}
-            title="点击折叠/展开组内标签 · 拖动重排 · 右键更多"
+            title={tr('local.groupChipHint')}
           >
             <span className="gdot" />
             {renaming === u.group.id ? (
@@ -379,10 +391,10 @@ export const LocalAgentTabs: React.FC<{ la: LocalAgentState; inline?: boolean; o
                 defaultValue={u.group.name}
                 onClick={(e) => e.stopPropagation()}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') { la.renameGroup(u.group.id, (e.target as HTMLInputElement).value.trim() || '分组'); setRenaming(null); }
+                  if (e.key === 'Enter') { la.renameGroup(u.group.id, (e.target as HTMLInputElement).value.trim() || tr('local.groupFallbackName')); setRenaming(null); }
                   if (e.key === 'Escape') setRenaming(null);
                 }}
-                onBlur={(e) => { la.renameGroup(u.group.id, e.target.value.trim() || '分组'); setRenaming(null); }}
+                onBlur={(e) => { la.renameGroup(u.group.id, e.target.value.trim() || tr('local.groupFallbackName')); setRenaming(null); }}
               />
             ) : (
               <span className="gname">{u.group.name}</span>
@@ -407,6 +419,7 @@ const SessionRow: React.FC<{
   onOpen: () => void;
   onDelete: () => void;
 }> = ({ s, active, open, onOpen, onDelete }) => {
+  const { t: tr } = useI18n();
   const [confirm, setConfirm] = useState(false);
   return (
     <div
@@ -414,16 +427,16 @@ const SessionRow: React.FC<{
       onClick={() => { if (!confirm) onOpen(); }}
       title={s.preview || s.sessionId}
     >
-      <span className="t">{s.title || s.preview || '未命名会话'}</span>
+      <span className="t">{s.title || s.preview || tr('local.untitledSession')}</span>
       {confirm ? (
         <span className="v2-la-sess-confirm" onClick={(e) => e.stopPropagation()}>
-          <button className="del" title="删除（移到回收站）" onClick={() => { onDelete(); setConfirm(false); }}>删除</button>
-          <button className="cancel" title="取消" onClick={() => setConfirm(false)}>取消</button>
+          <button className="del" title={tr('local.session.deleteToTrash')} onClick={() => { onDelete(); setConfirm(false); }}>{tr('common.delete')}</button>
+          <button className="cancel" title={tr('common.cancel')} onClick={() => setConfirm(false)}>{tr('common.cancel')}</button>
         </span>
       ) : (
         <>
           <span className="m">{fmtTime(s.updatedAt)}</span>
-          <button className="v2-la-sess-del" title="删除会话" onClick={(e) => { e.stopPropagation(); setConfirm(true); }}><IconTrash /></button>
+          <button className="v2-la-sess-del" title={tr('local.session.delete')} onClick={(e) => { e.stopPropagation(); setConfirm(true); }}><IconTrash /></button>
         </>
       )}
     </div>
@@ -437,9 +450,10 @@ const PermissionPrompt: React.FC<{
   onAlways: () => void;
   onDeny: () => void;
 }> = ({ perm, onAllow, onAlways, onDeny }) => {
+  const { t: tr } = useI18n();
   const lower = (perm.toolName || '').toLowerCase();
   const input = perm.input || {};
-  const heading = perm.title || perm.displayName || `${perm.toolName} 请求权限`;
+  const heading = perm.title || perm.displayName || tr('local.perm.requests', { tool: perm.toolName });
   let detail: React.ReactNode = null;
   if (lower === 'bash') detail = <pre className="cmd">{input.command || ''}</pre>;
   else if (lower === 'edit' || lower === 'write' || lower === 'multiedit' || lower === 'notebookedit') {
@@ -452,9 +466,9 @@ const PermissionPrompt: React.FC<{
       <div className="v2-la-perm-hd"><span className="dot" /><b>{perm.toolName}</b><span className="t">{heading}</span></div>
       {detail && <div className="v2-la-perm-body">{detail}</div>}
       <div className="v2-la-perm-acts">
-        <button className="allow" onClick={onAllow}>允许</button>
-        {canAlways && <button className="always" onClick={onAlways}>始终允许</button>}
-        <button className="deny" onClick={onDeny}>拒绝</button>
+        <button className="allow" onClick={onAllow}>{tr('local.perm.allow')}</button>
+        {canAlways && <button className="always" onClick={onAlways}>{tr('local.perm.always')}</button>}
+        <button className="deny" onClick={onDeny}>{tr('local.perm.deny')}</button>
       </div>
     </div>
   );
@@ -467,6 +481,7 @@ const QuestionPrompt: React.FC<{
   onSubmit: (text: string) => void;
   onCancel: () => void;
 }> = ({ q, onSubmit, onCancel }) => {
+  const { t: tr } = useI18n();
   const questions = q.questions || [];
   const [sel, setSel] = useState<Record<number, string[]>>({});
   const [other, setOther] = useState<Record<number, string>>({});
@@ -492,9 +507,9 @@ const QuestionPrompt: React.FC<{
     const lines = questions.map((qq, qi) => {
       const parts = [...(sel[qi] || [])];
       if (other[qi]?.trim()) parts.push(other[qi].trim());
-      return `- ${qq.header || qq.question}：${parts.join('；') || '(未选)'}`;
+      return `- ${qq.header || qq.question}: ${parts.join('; ') || tr('local.question.unselected')}`;
     });
-    onSubmit(`用户已作答：\n${lines.join('\n')}`);
+    onSubmit(`${tr('local.question.answeredLead')}\n${lines.join('\n')}`);
   };
 
   const renderQuestion = (qq: typeof questions[number], qi: number) => (
@@ -516,7 +531,7 @@ const QuestionPrompt: React.FC<{
         })}
         <div className={`v2-la-q-opt other${other[qi]?.trim() ? ' on' : ''}`}>
           <span className="mk" />
-          <input placeholder="其它…（自由输入）" value={other[qi] || ''} onChange={(e) => setOther((s) => ({ ...s, [qi]: e.target.value }))} />
+          <input placeholder={tr('local.question.otherPlaceholder')} value={other[qi] || ''} onChange={(e) => setOther((s) => ({ ...s, [qi]: e.target.value }))} />
         </div>
       </div>
     </div>
@@ -534,7 +549,7 @@ const QuestionPrompt: React.FC<{
               onClick={() => setActiveQ(qi)}
             >
               <span className="i">{answered(qi) ? '✓' : qi + 1}</span>
-              {qq.header || `问题 ${qi + 1}`}
+              {qq.header || tr('local.question.questionN', { n: qi + 1 })}
             </button>
           ))}
         </div>
@@ -546,9 +561,9 @@ const QuestionPrompt: React.FC<{
 
       <div className="v2-la-q-acts">
         <button className="submit" disabled={!canSubmit} onClick={submit}>
-          提交选择{multiQ ? ` (${answeredCount}/${questions.length})` : ''}
+          {tr('local.question.submit')}{multiQ ? ` (${answeredCount}/${questions.length})` : ''}
         </button>
-        <button className="cancel" onClick={onCancel}>取消</button>
+        <button className="cancel" onClick={onCancel}>{tr('common.cancel')}</button>
       </div>
     </div>
   );
@@ -563,6 +578,7 @@ const NO_ATTS: Attachment[] = [];
 /** 一个独立会话窗格：自带时间线 + 输入框 + 斜杠/权限/选择，全部按 cwd 寻址。 */
 type PaneProps = { la: LocalAgentState; cwd: string; inGrid?: boolean };
 const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
+  const { t: tr } = useI18n();
   const tab = la.tabs.find((t) => t.cwd === cwd);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
@@ -781,28 +797,28 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
       onDrop={onDrop}
     >
       {dropSide && <div className={`v2-la-drop ${dropSide}`} aria-hidden />}
-      {fileOver && <div className="v2-la-filedrop" aria-hidden><span><IconPaperclip />松开以添加参考文件 / 图片</span></div>}
+      {fileOver && <div className="v2-la-filedrop" aria-hidden><span><IconPaperclip />{tr('local.pane.dropToAttach')}</span></div>}
       {inGrid && (
         <div
           className="v2-la-pane-hd"
           draggable
           onDragStart={(e) => { e.dataTransfer.setData('text/cwd', cwd); e.dataTransfer.effectAllowed = 'move'; }}
-          title="拖动可重排窗格位置"
+          title={tr('local.pane.dragToRearrange')}
         >
           <span className="dot" />
           <b>{proj?.name || basename(cwd)}</b>
-          <span className="sess">{sessionId ? tab.title : '新会话'}</span>
-          {running && <span className="run" title="进行中" />}
+          <span className="sess">{sessionId ? tab.title : tr('local.newSession')}</span>
+          {running && <span className="run" title={tr('local.running')} />}
           <div className="v2-grow" />
-          <button className="x" title="移出分屏" onClick={(e) => { e.stopPropagation(); la.removePane(cwd); }}>✕</button>
+          <button className="x" title={tr('local.pane.removeFromSplit')} onClick={(e) => { e.stopPropagation(); la.removePane(cwd); }}>✕</button>
         </div>
       )}
 
       <section className="v2-la-pane-stream" ref={streamRef}>
         <div className="v2-la-tl">
-          {loadingSession && <Spinner label="载入会话…" />}
+          {loadingSession && <Spinner label={tr('local.pane.loadingSession')} />}
           {!loadingSession && !hasConversation && (
-            <div className="v2-la-hint center">{sessionId ? '空会话' : '新会话 — 发条消息开始'}</div>
+            <div className="v2-la-hint center">{sessionId ? tr('local.pane.emptySession') : tr('local.pane.newSessionHint')}</div>
           )}
           {!loadingSession && turns.map((t, i) => (
             t.role === 'user'
@@ -834,7 +850,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
             <QuestionPrompt
               q={question}
               onSubmit={(text) => la.answerQuestion(cwd, question.permId, text)}
-              onCancel={() => la.answerQuestion(cwd, question.permId, '用户取消了本次选择，未作答。')}
+              onCancel={() => la.answerQuestion(cwd, question.permId, tr('local.question.cancelMessage'))}
             />
           </div>
         )}
@@ -844,23 +860,23 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
               perm={perm}
               onAllow={() => la.respondPermission(cwd, perm.permId, { behavior: 'allow' })}
               onAlways={() => la.respondPermission(cwd, perm.permId, { behavior: 'allow', updatedPermissions: perm.suggestions || undefined })}
-              onDeny={() => la.respondPermission(cwd, perm.permId, { behavior: 'deny', message: '用户拒绝' })}
+              onDeny={() => la.respondPermission(cwd, perm.permId, { behavior: 'deny', message: tr('local.perm.denyMessage') })}
             />
           </div>
         )}
         <div className={`v2-composer${inGrid ? ' v2-la-slim' : ''}`} data-mode="chat">
           <div className="v2-box">
             {inGrid && (current?.live
-              ? <button className="v2-la-tri" onClick={openCfg} title="模型 / MCP">▷</button>
+              ? <button className="v2-la-tri" onClick={openCfg} title={tr('local.cfg.modelMcp')}>▷</button>
               : <span className="v2-la-prompt" aria-hidden><IconSkill /></span>)}
             {slashOpen && (
               <div className="v2-la-slash">
-                <div className="v2-la-slash-hd">命令 · ↑↓ 选择 · ⏎/Tab 插入 · esc 关闭</div>
+                <div className="v2-la-slash-hd">{tr('local.slash.header')}</div>
                 {slashItems.length === 0 && (
                   <div className="v2-la-slash-empty">
                     {la.commands.length === 0
-                      ? '该项目暂无命令（在 .claude/commands 或 ~/.claude/commands 添加 *.md）'
-                      : '无匹配命令'}
+                      ? tr('local.slash.noCommands')
+                      : tr('local.slash.noMatch')}
                   </div>
                 )}
                 {slashItems.map((c, i) => (
@@ -872,7 +888,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                   >
                     <span className="nm">{c.name}</span>
                     {c.description && <span className="ds">{c.description}</span>}
-                    <span className="sc">{c.scope === 'project' ? '项目' : c.scope === 'user' ? '用户' : '内置'}</span>
+                    <span className="sc">{c.scope === 'project' ? tr('local.scope.project') : c.scope === 'user' ? tr('local.scope.user') : tr('local.scope.builtin')}</span>
                   </button>
                 ))}
               </div>
@@ -886,7 +902,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                       ? <img src={a.dataUrl} alt={a.name} />
                       : <span className="fic"><IconFileGeneric /></span>}
                     <span className="nm">{a.name}</span>
-                    <button className="x" title="移除" onClick={() => la.removeAttachment(cwd, a.id)}>✕</button>
+                    <button className="x" title={tr('local.att.remove')} onClick={() => la.removeAttachment(cwd, a.id)}>✕</button>
                   </div>
                 ))}
               </div>
@@ -895,8 +911,8 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
               ref={taRef}
               rows={1}
               placeholder={
-                !current?.live ? `${current?.label || la.provider} 暂不支持对话`
-                  : sessionId ? '' : inGrid ? '输入消息…  / 命令' : '描述你的任务…（/ 唤出命令 · Tab 切权限模式 · 拖入/粘贴文件参考）'
+                !current?.live ? tr('local.composer.unsupported', { provider: current?.label || la.provider })
+                  : sessionId ? '' : inGrid ? tr('local.composer.placeholderSlim') : tr('local.composer.placeholder')
               }
               value={draft}
               disabled={!current?.live}
@@ -912,28 +928,28 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                 <button
                   className={`v2-la-mode tone-${pm.tone}`}
                   onClick={() => la.cyclePermMode(cwd)}
-                  title={`权限模式：${pm.hint}（Tab 切换）`}
-                >{pm.label}</button>
+                  title={tr('local.permMode.title', { hint: tr(`local.permMode.${effPerm}.hint`) })}
+                >{tr(`local.permMode.${effPerm}.label`)}</button>
                 {current?.live && (
                   <button
                     className={`v2-la-attach${attachments.length ? ' on' : ''}`}
                     onClick={() => la.pickAttachments(cwd)}
-                    title="添加参考文件 / 图片（也可拖入窗格，或粘贴截图）"
+                    title={tr('local.att.addHint')}
                   ><IconPaperclip />{attachments.length > 0 && <span className="n">{attachments.length}</span>}</button>
                 )}
                 {!inGrid && current?.live && (
-                  <button className="v2-la-cfg" onClick={openCfg} title="模型 / MCP">
+                  <button className="v2-la-cfg" onClick={openCfg} title={tr('local.cfg.modelMcp')}>
                     <span className="tri" aria-hidden><IconModel /></span>
-                    <span className="m">{(la.modelOptions.find((m) => m.value === tab.model)?.displayName) || (tab.model || '默认模型')}</span>
+                    <span className="m">{(la.modelOptions.find((m) => m.value === tab.model)?.displayName) || (tab.model || tr('local.cfg.defaultModel'))}</span>
                     {(tab.mcp?.length ?? 0) > 0 && <span className="mcpn">MCP {tab.mcp!.length}</span>}
                   </button>
                 )}
               </div>
               <div className="v2-grow" />
               {running ? (
-                <button className="v2-send stop" title="中断" onClick={() => la.interrupt(cwd)}>■</button>
+                <button className="v2-send stop" title={tr('local.composer.interrupt')} onClick={() => la.interrupt(cwd)}>■</button>
               ) : (
-                <button className="v2-send" title="发送 (Enter)" onClick={() => la.send(cwd)} disabled={(!draft.trim() && attachments.length === 0) || !current?.live}>
+                <button className="v2-send" title={tr('local.composer.send')} onClick={() => la.send(cwd)} disabled={(!draft.trim() && attachments.length === 0) || !current?.live}>
                   <IconSend />
                 </button>
               )}
@@ -944,27 +960,27 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
 
       {cfgOpen && (
         <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) setCfgOpen(false); }} style={{ zIndex: 120 }}>
-          <div className="v2-modal v2-la-cfgmodal" role="dialog" aria-modal="true" aria-label={hasMcp ? '模型与 MCP 设置' : '模型设置'} onMouseDown={(e) => e.stopPropagation()}>
+          <div className="v2-modal v2-la-cfgmodal" role="dialog" aria-modal="true" aria-label={hasMcp ? tr('local.cfg.modalLabelMcp') : tr('local.cfg.modalLabel')} onMouseDown={(e) => e.stopPropagation()}>
             <div className="v2-modal-hd">
-              <h3>{hasMcp ? '模型 / MCP' : '模型'}{proj ? ` · ${proj.name}` : ''}</h3>
-              <button className="x" onClick={() => setCfgOpen(false)} aria-label="关闭">✕</button>
+              <h3>{hasMcp ? tr('local.cfg.modelMcp') : tr('local.cfg.model')}{proj ? ` · ${proj.name}` : ''}</h3>
+              <button className="x" onClick={() => setCfgOpen(false)} aria-label={tr('common.close')}>✕</button>
             </div>
             <div className="v2-la-cfgtabs" role="tablist">
-              <button role="tab" aria-selected={cfgTab === 'model'} className={cfgTab === 'model' ? 'on' : ''} onClick={() => setCfgTab('model')}>模型</button>
+              <button role="tab" aria-selected={cfgTab === 'model'} className={cfgTab === 'model' ? 'on' : ''} onClick={() => setCfgTab('model')}>{tr('local.cfg.model')}</button>
               {hasMcp && <button role="tab" aria-selected={cfgTab === 'mcp'} className={cfgTab === 'mcp' ? 'on' : ''} onClick={() => setCfgTab('mcp')}>MCP{(tab.mcp?.length ?? 0) > 0 ? ` · ${tab.mcp!.length}` : ''}</button>}
             </div>
             <div className="v2-la-cfgbody" role="tabpanel" key={cfgTab}>
               {cfgTab === 'model' ? (
                 la.modelOptions.length === 0 ? (
-                  <div className="v2-la-slash-empty">发送一条消息后即可加载可选模型</div>
+                  <div className="v2-la-slash-empty">{tr('local.cfg.modelsAfterSend')}</div>
                 ) : (
                   <>
                     <button className={`v2-la-model-item${!tab.model ? ' on' : ''}`} onClick={() => { la.setModel(cwd, ''); setCfgOpen(false); }}>
-                      <span className="nm">默认模型</span><span className="ds">跟随 provider 默认</span>
+                      <span className="nm">{tr('local.cfg.defaultModel')}</span><span className="ds">{tr('local.cfg.defaultModelDesc')}</span>
                     </button>
                     {groupModelsByVendor(la.modelOptions).map(([vendor, models]) => (
                       <div key={vendor} className="v2-la-model-group">
-                        <div className="v2-la-model-vendor">{vendor}</div>
+                        <div className="v2-la-model-vendor">{VENDOR_I18N[vendor] ? tr(VENDOR_I18N[vendor]) : vendor}</div>
                         {models.map((m) => (
                           <button key={m.value} className={`v2-la-model-item${tab.model === m.value ? ' on' : ''}`} onClick={() => { la.setModel(cwd, m.value); setCfgOpen(false); }}>
                             <span className="nm">{m.displayName}</span>
@@ -973,17 +989,17 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                         ))}
                       </div>
                     ))}
-                    <div className="v2-la-cfg-foot">切换实时生效，不写入对话</div>
+                    <div className="v2-la-cfg-foot">{tr('local.cfg.modelFoot')}</div>
                   </>
                 )
               ) : (
                 <>
                   <div className="v2-la-cfg-hd">
-                    <span>来自 ~/.claude.json · 勾选即启用（密钥不出本机）</span>
-                    <button className="v2-la-probe" onClick={() => la.refreshMcp(cwd)} title="探测连接状态">探测</button>
+                    <span>{tr('local.cfg.mcpSource')}</span>
+                    <button className="v2-la-probe" onClick={() => la.refreshMcp(cwd)} title={tr('local.cfg.probeStatus')}>{tr('local.cfg.probe')}</button>
                   </div>
-                  {!mcpList && <div className="v2-la-slash-empty">加载中…</div>}
-                  {mcpList && mcpList.length === 0 && <div className="v2-la-slash-empty">无可用 MCP — 在 ~/.claude.json 中配置后重开</div>}
+                  {!mcpList && <div className="v2-la-slash-empty">{tr('local.cfg.mcpLoading')}</div>}
+                  {mcpList && mcpList.length === 0 && <div className="v2-la-slash-empty">{tr('local.cfg.mcpEmpty')}</div>}
                   {mcpList && mcpList.map((m) => {
                     const on = (tab.mcp || []).includes(m.name);
                     const st = tab.mcpStatus?.find((x) => x.name === m.name)?.status;
@@ -991,10 +1007,10 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                       <div key={m.name} className={`v2-la-mcprow${on ? ' on' : ''}`}>
                         <button className="tog" onClick={() => { const cur = tab.mcp || []; la.setMcp(cwd, on ? cur.filter((n) => n !== m.name) : [...cur, m.name]); }}>
                           <span className="nm">{m.name}{st && <span className={`v2-la-mcp-dot ${st}`} title={st} />}</span>
-                          <span className="ds">{m.scope === 'project' ? '项目' : '全局'} · {m.type}{st ? ` · ${st}` : ''}</span>
+                          <span className="ds">{m.scope === 'project' ? tr('local.scope.project') : tr('local.scope.global')} · {m.type}{st ? ` · ${st}` : ''}</span>
                         </button>
                         {on && st && st !== 'connected' && st !== 'pending' && (
-                          <button className="rc" title="重连" onClick={() => la.reconnectMcp(cwd, m.name)}>重连</button>
+                          <button className="rc" title={tr('local.cfg.reconnect')} onClick={() => la.reconnectMcp(cwd, m.name)}>{tr('local.cfg.reconnect')}</button>
                         )}
                       </div>
                     );
@@ -1072,6 +1088,7 @@ const SplitView: React.FC<{ la: LocalAgentState; node: Extract<LayoutNode, { kin
 /** 主区域：layout 非空 → 渲染分屏树；否则单窗（activeCwd）或欢迎页。
  *  把标签拖到任一窗格上即分裂该窗格（见 LocalAgentPane 的放置逻辑）。 */
 export const LocalAgentConversation: React.FC<{ la: LocalAgentState }> = React.memo(({ la }) => {
+  const { t: tr } = useI18n();
   const [over, setOver] = useState(false);
 
   // 主区跟随当前激活标签：激活的是分屏里的窗格 → 显示分屏；否则（未分组/未平铺标签）→ 单屏显示该会话。
@@ -1095,11 +1112,11 @@ export const LocalAgentConversation: React.FC<{ la: LocalAgentState }> = React.m
         <div className="v2-la-welcome">
           <IconAgentCode />
           <h3>Local Agents</h3>
-          <p>在你自己的机器上跑 Claude Code，对话与文件都留在本地，与 Chaya 服务无关。</p>
+          <p>{tr('local.welcome.body')}</p>
           {!la.providers.some((p) => p.installed && p.live) && !la.detecting && (
-            <p className="warn">未检测到可用的 CLI Agent，请先安装 Claude Code。</p>
+            <p className="warn">{tr('local.welcome.noAgent')}</p>
           )}
-          <button className="v2-la-pick" onClick={la.addProject}>添加项目开始</button>
+          <button className="v2-la-pick" onClick={la.addProject}>{tr('local.welcome.start')}</button>
         </div>
       </div>
     </div>
@@ -1177,6 +1194,7 @@ const TURN_CAP = 30;
 const isSubagent = (b: AgentBlock) => b.k === 'tool' && ((b.name || '').toLowerCase() === 'task' || (b.children?.length ?? 0) > 0);
 
 const AgentTurn: React.FC<{ blocks: AgentBlock[]; provider: string; streaming?: boolean; working?: boolean; tail?: string }> = React.memo(({ blocks, provider, streaming, working, tail }) => {
+  const { t: tr } = useI18n();
   const [showAll, setShowAll] = useState(false);
   const overflow = blocks.length - TURN_CAP;
   const shown = (showAll || overflow <= 0) ? blocks : blocks.slice(blocks.length - TURN_CAP);
@@ -1194,7 +1212,7 @@ const AgentTurn: React.FC<{ blocks: AgentBlock[]; provider: string; streaming?: 
       <div className={`v2-la-ava prov-${provider}`} title={PROVIDER_LABELS[provider] || provider}><IconTerminal /></div>
       <div className="v2-la-turn-body">
         {overflow > 0 && !showAll && (
-          <button className="v2-la-earlier" onClick={() => setShowAll(true)}>显示更早的 {overflow} 项</button>
+          <button className="v2-la-earlier" onClick={() => setShowAll(true)}>{tr('local.turn.showEarlier', { n: overflow })}</button>
         )}
         {items.map((it, k) => (
           'row' in it
@@ -1216,26 +1234,30 @@ AgentTurn.displayName = 'AgentTurn';
 
 // 执行中状态行（仿 Claude CLI 的循环 gerund）：左侧 token「上下行」律动条 = 还在收发，
 // 中间翻动的小词（换词即「还活着」的证据，几个带 落墨/誊写 的纸墨调性），右侧计时。
-const TICKER_WORDS = [
-  '琢磨中', '推敲中', '盘算中', '酝酿中', '斟酌中', '梳理中', '构思中', '掂量中',
-  '捣鼓中', '运筹中', '码字中', '查阅中', '推演中', '打磨中', '誊写中', '落墨中',
+// 稳定 key 列表，文案在渲染处经 tr() 取——随语言切换即时变（别把翻译烤进常量）。
+const TICKER_KEYS = [
+  'local.ticker.0', 'local.ticker.1', 'local.ticker.2', 'local.ticker.3',
+  'local.ticker.4', 'local.ticker.5', 'local.ticker.6', 'local.ticker.7',
+  'local.ticker.8', 'local.ticker.9', 'local.ticker.10', 'local.ticker.11',
+  'local.ticker.12', 'local.ticker.13', 'local.ticker.14', 'local.ticker.15',
 ];
 function fmtElapsed(s: number): string {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 const RunningTicker: React.FC = () => {
-  const [idx, setIdx] = useState(() => Math.floor(Math.random() * TICKER_WORDS.length));
+  const { t: tr } = useI18n();
+  const [idx, setIdx] = useState(() => Math.floor(Math.random() * TICKER_KEYS.length));
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef(Date.now());
   useEffect(() => {
-    const word = window.setInterval(() => setIdx((x) => (x + 1) % TICKER_WORDS.length), 2600);
+    const word = window.setInterval(() => setIdx((x) => (x + 1) % TICKER_KEYS.length), 2600);
     const clock = window.setInterval(() => setElapsed(Math.round((Date.now() - startRef.current) / 1000)), 1000);
     return () => { window.clearInterval(word); window.clearInterval(clock); };
   }, []);
   return (
     <div className="v2-la-ticker" aria-live="polite">
       <span className="tok" aria-hidden><i /><i /><i /><i /></span>
-      <span className="w" key={idx}>{TICKER_WORDS[idx]}</span>
+      <span className="w" key={idx}>{tr(TICKER_KEYS[idx])}</span>
       {elapsed > 0 && <span className="m">{fmtElapsed(elapsed)}</span>}
     </div>
   );
@@ -1245,10 +1267,11 @@ const RunningTicker: React.FC = () => {
 // caret so the stream always reads as alive (and visually distinct) even mid-token
 // or right after switching back to its tab.
 const AgentBlockView: React.FC<{ b: AgentBlock; live?: boolean }> = React.memo(({ b, live }) => {
+  const { t: tr } = useI18n();
   if (b.k === 'think') {
     return (
       <details className="v2-la-think">
-        <summary><span className="ic">✦</span>思考过程</summary>
+        <summary><span className="ic">✦</span>{tr('local.tool.thinking')}</summary>
         <div className="bd">{b.text}</div>
       </details>
     );
@@ -1261,13 +1284,13 @@ AgentBlockView.displayName = 'AgentBlockView';
 type ToolStatus = 'pending' | 'ok' | 'err';
 
 /** 把一个 tool block 归一成：动词 + 细节(单行) + 可展开的正文。 */
-function describeTool(b: Extract<Block, { k: 'tool' }>): { verb: string; detail?: string; sub?: string; body: React.ReactNode } {
+function describeTool(b: Extract<Block, { k: 'tool' }>, tr: (key: string, vars?: Record<string, string | number>) => string): { verb: string; detail?: string; sub?: string; body: React.ReactNode } {
   const name = b.name || 'tool';
   const input = b.input || {};
   const lower = name.toLowerCase();
   if (lower === 'askuserquestion') {
     const qs = Array.isArray(input.questions) ? input.questions : [];
-    return { verb: '提问', detail: qs[0]?.header || qs[0]?.question || '', body: b.result ? <OutBlock text={b.result} /> : null };
+    return { verb: tr('local.tool.ask'), detail: qs[0]?.header || qs[0]?.question || '', body: b.result ? <OutBlock text={b.result} /> : null };
   }
   if (lower === 'bash') {
     return {
@@ -1287,12 +1310,12 @@ function describeTool(b: Extract<Block, { k: 'tool' }>): { verb: string; detail?
         : (input.new_string ?? input.content ?? '');
     const verb = lower === 'write' ? 'Write' : lower === 'multiedit' ? 'MultiEdit' : 'Edit';
     const lines = code ? String(code).split('\n').length : 0;
-    return { verb, detail: basename(file), sub: lines > 0 ? `${lines} 行` : undefined, body: code ? <CodePreview code={String(code)} lang={langOf(file)} /> : null };
+    return { verb, detail: basename(file), sub: lines > 0 ? tr('local.tool.lines', { n: lines }) : undefined, body: code ? <CodePreview code={String(code)} lang={langOf(file)} /> : null };
   }
   if (lower === 'todowrite') {
     const todos = Array.isArray(input.todos) ? input.todos : [];
     return {
-      verb: 'Todo', sub: `${todos.length} 项`,
+      verb: 'Todo', sub: tr('local.tool.items', { n: todos.length }),
       body: todos.length > 0 ? (
         <ul className="v2-la-todos">
           {todos.map((t: any, i: number) => (
@@ -1311,12 +1334,13 @@ function describeTool(b: Extract<Block, { k: 'tool' }>): { verb: string; detail?
 
 /** 子 agent（Task）卡片：一眼看出有子 agent + 跑了多少步；展开看其内部活动。 */
 const SubagentCard: React.FC<{ b: Extract<Block, { k: 'tool' }> }> = ({ b }) => {
+  const { t: tr } = useI18n();
   const input = b.input || {};
   const children = b.children || [];
   const steps = children.filter((c) => c.k === 'tool').length;
   const status: ToolStatus = b.pending ? 'pending' : b.isError ? 'err' : 'ok';
   const [open, setOpen] = useState(false);
-  const label = input.description || input.subagent_type || '探索任务';
+  const label = input.description || input.subagent_type || tr('local.sub.exploreTask');
   const kids = children.filter((c) => c.k !== 'user');   // 子 agent 的提示词不当气泡显示
   // 最近一步的「当前在做什么」——不展开也能看到进度（运行中才显示）。
   const lastTool = [...children].reverse().find((c) => c.k === 'tool') as Extract<Block, { k: 'tool' }> | undefined;
@@ -1328,9 +1352,9 @@ const SubagentCard: React.FC<{ b: Extract<Block, { k: 'tool' }> }> = ({ b }) => 
       <div className="v2-la-sub-hd" onClick={() => setOpen((o) => !o)}>
         <span className={`v2-la-tdot ${status}`} />
         <span className="ic"><IconAgentCode /></span>
-        <b>子 Agent</b>
+        <b>{tr('local.sub.title')}</b>
         <span className="lab">{label}</span>
-        <span className="cnt">{b.pending ? `运行中 · ${steps} 步` : `${steps} 步`}</span>
+        <span className="cnt">{b.pending ? tr('local.sub.runningSteps', { n: steps }) : tr('local.sub.steps', { n: steps })}</span>
         <span className="chev">{open ? '▾' : '▸'}</span>
       </div>
       {liveStep && !open && (
@@ -1338,7 +1362,7 @@ const SubagentCard: React.FC<{ b: Extract<Block, { k: 'tool' }> }> = ({ b }) => 
       )}
       {open && (
         <div className="v2-la-sub-body">
-          {kids.length === 0 && !b.result && <div className="v2-la-hint">（无可展开的步骤）</div>}
+          {kids.length === 0 && !b.result && <div className="v2-la-hint">{tr('local.sub.noSteps')}</div>}
           {kids.map((c, i) => <AgentBlockView key={i} b={c as AgentBlock} />)}
           {b.result != null && b.result.trim() !== '' && <div className="v2-la-io"><OutRow text={b.result} /></div>}
         </div>
@@ -1349,11 +1373,12 @@ const SubagentCard: React.FC<{ b: Extract<Block, { k: 'tool' }> }> = ({ b }) => 
 
 /** 工具卡片：默认折叠成紧凑一行（状态点+动词+目标），点击展开正文。错误自动展开。 */
 const ToolCard: React.FC<{ b: Extract<Block, { k: 'tool' }> }> = ({ b }) => {
+  const { t: tr } = useI18n();
+  const status: ToolStatus = b.pending ? 'pending' : (b.isError && (b.name || '').toLowerCase() !== 'askuserquestion') ? 'err' : 'ok';
+  const [open, setOpen] = useState(status === 'err');   // 失败默认展开，其余折叠
   // Task / 任何带子活动的工具 → 子 agent 分组卡片
   if ((b.name || '').toLowerCase() === 'task' || (b.children && b.children.length > 0)) return <SubagentCard b={b} />;
-  const status: ToolStatus = b.pending ? 'pending' : (b.isError && (b.name || '').toLowerCase() !== 'askuserquestion') ? 'err' : 'ok';
-  const { verb, detail, sub, body } = describeTool(b);
-  const [open, setOpen] = useState(status === 'err');   // 失败默认展开，其余折叠
+  const { verb, detail, sub, body } = describeTool(b, tr);
   const hasBody = !!body;
   // 过程默认可见但「弱」：折叠态也在行内给一句结果预览，不必点开就能扫读。
   const preview = !open && b.result ? firstLine(b.result) : '';
@@ -1390,6 +1415,7 @@ const OutBlock: React.FC<{ text: string }> = ({ text }) => (
 );
 
 const OutRow: React.FC<{ text: string; isError?: boolean }> = ({ text, isError }) => {
+  const { t: tr } = useI18n();
   const [open, setOpen] = useState(false);
   const lines = text.split('\n');
   const long = lines.length > 12 || text.length > 1200;
@@ -1398,14 +1424,15 @@ const OutRow: React.FC<{ text: string; isError?: boolean }> = ({ text, isError }
     <div className={`row out${isError ? ' err' : ''}`}>
       <span className="lbl">OUT</span>
       <div className="outbody">
-        <pre>{shown || '（无输出）'}</pre>
-        {long && <button className="v2-la-more" onClick={() => setOpen((v) => !v)}>{open ? '收起' : `展开 ${lines.length} 行`}</button>}
+        <pre>{shown || tr('local.out.empty')}</pre>
+        {long && <button className="v2-la-more" onClick={() => setOpen((v) => !v)}>{open ? tr('local.out.collapse') : tr('local.out.expandLines', { n: lines.length })}</button>}
       </div>
     </div>
   );
 };
 
 const CodePreview: React.FC<{ code: string; lang: string }> = ({ code, lang }) => {
+  const { t: tr } = useI18n();
   const [open, setOpen] = useState(false);
   const lines = code.split('\n');
   const long = lines.length > 24;
@@ -1413,7 +1440,7 @@ const CodePreview: React.FC<{ code: string; lang: string }> = ({ code, lang }) =
   return (
     <div className="v2-la-code">
       <MD text={`\`\`\`${lang}\n${shown}\n\`\`\``} />
-      {long && <button className="v2-la-more" onClick={() => setOpen((v) => !v)}>{open ? '收起' : `展开 ${lines.length} 行`}</button>}
+      {long && <button className="v2-la-more" onClick={() => setOpen((v) => !v)}>{open ? tr('local.out.collapse') : tr('local.out.expandLines', { n: lines.length })}</button>}
     </div>
   );
 };
@@ -1438,10 +1465,10 @@ function firstStr(input: any): string {
 function fmtTime(ms: number): string {
   if (!ms) return '';
   const diff = Date.now() - ms;
-  if (diff < 60_000) return '刚刚';
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}分`;
-  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}时`;
-  if (diff < 30 * 86400_000) return `${Math.floor(diff / 86400_000)}天`;
-  if (diff < 365 * 86400_000) return `${Math.floor(diff / (30 * 86400_000))}月`;
-  return `${Math.floor(diff / (365 * 86400_000))}年`;
+  if (diff < 60_000) return t('local.time.justNow');
+  if (diff < 3600_000) return t('local.time.minutes', { n: Math.floor(diff / 60_000) });
+  if (diff < 86400_000) return t('local.time.hours', { n: Math.floor(diff / 3600_000) });
+  if (diff < 30 * 86400_000) return t('local.time.days', { n: Math.floor(diff / 86400_000) });
+  if (diff < 365 * 86400_000) return t('local.time.months', { n: Math.floor(diff / (30 * 86400_000)) });
+  return t('local.time.years', { n: Math.floor(diff / (365 * 86400_000)) });
 }

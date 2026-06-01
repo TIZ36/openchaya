@@ -5,6 +5,7 @@
    cloud (Smartnote) is a mirror + search index; sync-to-cloud is done by
    the caller. Web (non-Electron) builds: isLocalNotesAvailable()=false.
    ============================================================ */
+import { t } from '../../i18n';
 
 /** Flat registry: file paths the user has added (from anywhere). */
 const LS_FILES = 'chaya_notes_files';
@@ -78,8 +79,8 @@ export async function importNotes(): Promise<string[]> {
 }
 
 /** New note: save-dialog to choose where, create empty file, register it. */
-export async function newNoteFile(defaultName = '未命名笔记.md'): Promise<string | null> {
-  const b = bridge(); if (!b) throw new Error('本地笔记不可用');
+export async function newNoteFile(defaultName = `${t('local.notes.untitled')}.md`): Promise<string | null> {
+  const b = bridge(); if (!b) throw new Error(t('local.notes.unavailable'));
   const r = await b.createFile(defaultName);
   if (!r.ok) { if (r.error) throw new Error(r.error); return null; } // user cancelled → ok:false no error
   if (!r.path) return null;
@@ -90,25 +91,25 @@ export async function newNoteFile(defaultName = '未命名笔记.md'): Promise<s
 export async function readNote(path: string): Promise<string> {
   const b = bridge(); if (!b) return '';
   const r = await b.read(path);
-  if (!r.ok) throw new Error(r.error || '读取失败');
+  if (!r.ok) throw new Error(r.error || t('local.notes.readFailed'));
   return r.content;
 }
 export async function writeNote(path: string, content: string): Promise<void> {
-  const b = bridge(); if (!b) throw new Error('本地笔记不可用');
+  const b = bridge(); if (!b) throw new Error(t('local.notes.unavailable'));
   const r = await b.write(path, content);
-  if (!r.ok) throw new Error(r.error || '保存失败');
+  if (!r.ok) throw new Error(r.error || t('local.notes.saveFailed'));
 }
 export async function renameNote(path: string, name: string): Promise<string> {
-  const b = bridge(); if (!b) throw new Error('本地笔记不可用');
+  const b = bridge(); if (!b) throw new Error(t('local.notes.unavailable'));
   const r = await b.rename(path, name);
-  if (!r.ok || !r.path) throw new Error(r.error || '改名失败');
+  if (!r.ok || !r.path) throw new Error(r.error || t('local.notes.renameFailed'));
   if (r.path !== path) { replaceFile(path, r.path); remapSync(path, r.path); }
   return r.path;
 }
 export async function deleteNote(path: string): Promise<void> {
-  const b = bridge(); if (!b) throw new Error('本地笔记不可用');
+  const b = bridge(); if (!b) throw new Error(t('local.notes.unavailable'));
   const r = await b.delete(path);
-  if (!r.ok) throw new Error(r.error || '删除失败');
+  if (!r.ok) throw new Error(r.error || t('local.notes.deleteFailed'));
   removeFile(path); unmapSync(path);
 }
 /** Remove from the app's list without deleting the file on disk. */

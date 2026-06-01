@@ -13,12 +13,13 @@ import {
 } from '../services/smartnoteApi';
 import type { ClientSettings, AppearanceMode, ColorTheme, GlassZone, GlassIntensity } from '../components/SettingsPage';
 import type { FontId } from '../components/SettingsPage';
-import { TYPE_SPEED_LABELS, type TypeSpeed } from './typewriter';
+import { type TypeSpeed } from './typewriter';
 import { getBackendUrl } from '../utils/backendUrl';
 import { isLocalAgentAvailable } from './services/localAgent';
 import {
   IconUser, IconGear, IconModel, IconPlug, IconCloud, IconTerminal, IconAppearance,
 } from './icons';
+import { useI18n, LANGS, type Lang } from '../i18n';
 
 interface Props {
   settings: ClientSettings;
@@ -36,32 +37,33 @@ type Tab = 'account' | 'appearance' | 'prefs' | 'services' | 'models' | 'mcp' | 
  *  比之前的"基础设置 / Agent 设置"语义更准（RAG/MCP 闲聊也会用到，不只是 agent）。
  *  Hint 行去掉 —— label 已自明，多一行只是噪声，让 nav 高度更安静。
  */
+// `group` / `label` hold i18n keys (see i18n/dictionaries.ts), translated at render.
 const TAB_GROUPS: { group: string; items: { id: Tab; label: string; icon: React.ReactNode }[] }[] = [
   {
-    group: '个人',
+    group: 'settings.group.personal',
     items: [
-      { id: 'account',    label: '账号', icon: <IconUser /> },
-      { id: 'appearance', label: '外观', icon: <IconAppearance /> },
-      { id: 'prefs',      label: '偏好', icon: <IconGear /> },
+      { id: 'account',    label: 'settings.tab.account',    icon: <IconUser /> },
+      { id: 'appearance', label: 'settings.tab.appearance', icon: <IconAppearance /> },
+      { id: 'prefs',      label: 'settings.tab.prefs',      icon: <IconGear /> },
     ],
   },
   {
-    group: '能力',
+    group: 'settings.group.capability',
     items: [
-      { id: 'models',  label: '模型',    icon: <IconModel /> },
-      { id: 'mcp',     label: 'MCP 工具', icon: <IconPlug /> },
+      { id: 'models',  label: 'settings.tab.models', icon: <IconModel /> },
+      { id: 'mcp',     label: 'settings.tab.mcp',    icon: <IconPlug /> },
     ],
   },
   {
-    group: '外部',
+    group: 'settings.group.external',
     items: [
-      { id: 'services', label: '服务', icon: <IconCloud /> },
+      { id: 'services', label: 'settings.tab.services', icon: <IconCloud /> },
     ],
   },
   ...(isLocalAgentAvailable() ? [{
-    group: '桌面',
+    group: 'settings.group.desktop',
     items: [
-      { id: 'localagent' as Tab, label: 'Local Agents', icon: <IconTerminal /> },
+      { id: 'localagent' as Tab, label: 'settings.tab.localagent', icon: <IconTerminal /> },
     ],
   }] : []),
 ];
@@ -88,21 +90,14 @@ const APPEARANCES: { id: AppearanceMode; label: string; icon: string }[] = [
   { id: 'system', label: '跟随系统', icon: '⌣' },
 ];
 
-const GLASS_ZONES: { id: GlassZone; label: string; sub: string }[] = [
-  { id: 'composer', label: '输入框',     sub: '最推荐：消息从输入框背后透出、被柔化' },
-  { id: 'menu',     label: '菜单 / 抽屉', sub: '右键菜单、侧边抽屉浮层' },
-  { id: 'modal',    label: '弹窗背景',    sub: '打开设置等弹窗时，背后界面磨砂下沉' },
-  { id: 'sidebar',  label: '侧栏',        sub: '会自动叠加微弱环境层，玻璃才显现' },
-  { id: 'main',     label: '主界面',      sub: '白卡片本体磨砂；与侧栏一起开效果最佳' },
-  { id: 'topbar',   label: '顶栏',        sub: '消息从标题栏下方滚过、被柔化' },
-  { id: 'bubble',   label: '用户气泡',    sub: '慎用：正文区加玻璃可能影响可读性' },
-];
+// 侧栏透明度的三档预设（id 复用 GlassIntensity，越「通透」越透明）。
 const GLASS_INTENSITIES: { id: GlassIntensity; label: string }[] = [
-  { id: 'subtle',   label: '轻' },
+  { id: 'subtle',   label: '通透' },
   { id: 'standard', label: '标准' },
-  { id: 'strong',   label: '强' },
+  { id: 'strong',   label: '厚实' },
 ];
-export const GLASS_DEFAULT_ZONES: GlassZone[] = ['composer', 'menu', 'modal'];
+// 简化后默认侧栏不开玻璃；输入框/菜单/抽屉/用户气泡的磨砂由 CSS 无条件常开。
+export const GLASS_DEFAULT_ZONES: GlassZone[] = [];
 
 // surface = swatch canvas (dark-first brands show their dark bg);
 // ramp = [tint, base, deep] accent layers shown as chips
@@ -112,6 +107,7 @@ const THEMES: { id: ColorTheme; label: string; sub: string; surface: string; ram
 ];
 
 const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, onClose }) => {
+  const { t: tr } = useI18n();
   const [tab, setTab] = useState<Tab>('account');
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -123,7 +119,7 @@ const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, on
     <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="v2-modal v2-modal-settings" onMouseDown={(e) => e.stopPropagation()}>
         <div className="v2-modal-hd">
-          <h3>设置</h3>
+          <h3>{tr('settings.title')}</h3>
           <button className="x" onClick={onClose}>✕</button>
         </div>
         <div className="v2-settings-body">
@@ -131,7 +127,7 @@ const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, on
             {TAB_GROUPS.map((g) => (
               <div key={g.group} className="v2-settings-nav-group">
                 <div className="v2-settings-nav-head">
-                  <span className="grp">{g.group}</span>
+                  <span className="grp">{tr(g.group)}</span>
                 </div>
                 {g.items.map((t) => (
                   <button
@@ -140,7 +136,7 @@ const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, on
                     onClick={() => setTab(t.id)}
                   >
                     <span className="ic" aria-hidden>{t.icon}</span>
-                    <span className="lab">{t.label}</span>
+                    <span className="lab">{tr(t.label)}</span>
                   </button>
                 ))}
               </div>
@@ -195,6 +191,7 @@ const Switch: React.FC<{ checked: boolean; onChange: (b: boolean) => void }> = (
 /* ============ account / prefs / defaults / rag ============ */
 
 const AccountPane: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
+  const { t: tr } = useI18n();
   const u = api.getUser();
   const plan = u?.tenant?.plan || 'free';
   const displayName = u?.name || u?.email?.split('@')[0] || '—';
@@ -217,10 +214,10 @@ const AccountPane: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         <div className="v2-acc-id-r">
           <div className="v2-acc-nm">{displayName}</div>
           <div className="v2-acc-meta">
-            <span className="v2-acc-meta-i" title="邮箱"><AccIconMail />{u?.email || '—'}</span>
-            <span className="v2-acc-meta-pill" title="套餐">{String(plan).toUpperCase()}</span>
+            <span className="v2-acc-meta-i" title={tr('settings.account.email')}><AccIconMail />{u?.email || '—'}</span>
+            <span className="v2-acc-meta-pill" title={tr('settings.account.plan')}>{String(plan).toUpperCase()}</span>
             {u?.tenant?.name && (
-              <span className="v2-acc-meta-i" title="租户"><AccIconBuilding />{u.tenant.name}</span>
+              <span className="v2-acc-meta-i" title={tr('settings.account.tenant')}><AccIconBuilding />{u.tenant.name}</span>
             )}
           </div>
         </div>
@@ -232,9 +229,9 @@ const AccountPane: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       <div className="v2-acc-foot">
         <button
           className="v2-set-danger v2-acc-btn"
-          onClick={() => { if (window.confirm('退出当前账号？')) onLogout(); }}
+          onClick={() => { if (window.confirm(tr('settings.account.logoutConfirm'))) onLogout(); }}
         >
-          <AccIconPower /><span>退出账号</span>
+          <AccIconPower /><span>{tr('settings.account.logout')}</span>
         </button>
       </div>
     </div>
@@ -289,32 +286,29 @@ const AccIconPower = () => (
 );
 
 const GlassControl: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => {
-  const zones = settings.glassZones ?? GLASS_DEFAULT_ZONES;
-  const has = (z: GlassZone) => zones.includes(z);
-  const toggle = (z: GlassZone, on: boolean) =>
-    updateSettings({ glassZones: on ? Array.from(new Set([...zones, z])) : zones.filter((x) => x !== z) });
-  const anyOn = zones.length > 0;
+  // 简化后只剩「侧栏」一个可调项：开关 + 透明度。其余区域（输入框/菜单/抽屉/用户气泡）
+  // 默认常开磨砂、弹框/顶栏/主界面一律不加玻璃，均由 CSS 固定，无需用户操心。
+  const { t: tr } = useI18n();
+  const sidebarOn = (settings.glassZones ?? GLASS_DEFAULT_ZONES).includes('sidebar');
   return (
     <>
-      <Row label="强度" sub="整体模糊与透明度；对下面所有开启的区域生效">
+      <Row label={tr('settings.glass.sidebar')} sub={tr('settings.glass.sidebarSub')}>
+        <Switch checked={sidebarOn} onChange={(v) => updateSettings({ glassZones: v ? ['sidebar'] : [] })} />
+      </Row>
+      <Row label={tr('settings.glass.opacity')} sub={tr('settings.glass.opacitySub')}>
         <div className="v2-seg">
           {GLASS_INTENSITIES.map((i) => (
             <button
               key={i.id}
               className={`v2-seg-item${(settings.glassIntensity ?? 'standard') === i.id ? ' active' : ''}`}
               onClick={() => updateSettings({ glassIntensity: i.id })}
-              disabled={!anyOn}
+              disabled={!sidebarOn}
             >
-              {i.label}
+              {tr(`settings.glass.intensity.${i.id}`)}
             </button>
           ))}
         </div>
       </Row>
-      {GLASS_ZONES.map((z) => (
-        <Row key={z.id} label={z.label} sub={z.sub}>
-          <Switch checked={has(z.id)} onChange={(v) => toggle(z.id, v)} />
-        </Row>
-      ))}
     </>
   );
 };
@@ -322,10 +316,27 @@ const GlassControl: React.FC<{ settings: ClientSettings; updateSettings: (p: Par
 /** 外观面板：明暗 · 主题 · 毛玻璃 · 字体 — 从 偏好 抽出独立的左导航 tab。
  *  独立后用户更容易找到也更容易做"换皮"动作；旧的 偏好 现在专注对话行为
  *  与出字速度。注意：所有 setting key 都不变，对外行为 / 持久化无影响。 */
-const AppearancePane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => (
+const AppearancePane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => {
+  const { t: tr, lang, setLang } = useI18n();
+  return (
   <>
-    <Section title="明暗">
-      <Row label="" sub="跟随系统会随 macOS / Windows 外观自动切换">
+    <Section title={tr('settings.language')}>
+      <Row label="" sub={tr('settings.languageHint')}>
+        <div className="v2-seg">
+          {LANGS.map((l) => (
+            <button
+              key={l.key}
+              className={`v2-seg-item${lang === l.key ? ' active' : ''}`}
+              onClick={() => setLang(l.key as Lang)}
+            >
+              {l.native}
+            </button>
+          ))}
+        </div>
+      </Row>
+    </Section>
+    <Section title={tr('settings.appearance.title')}>
+      <Row label="" sub={tr('settings.appearance.systemHint')}>
         <div className="v2-seg">
           {APPEARANCES.map((a) => (
             <button
@@ -333,21 +344,21 @@ const AppearancePane: React.FC<{ settings: ClientSettings; updateSettings: (p: P
               className={`v2-seg-item${(settings.appearance ?? 'system') === a.id ? ' active' : ''}`}
               onClick={() => updateSettings({ appearance: a.id })}
             >
-              <span className="ic">{a.icon}</span>{a.label}
+              <span className="ic">{a.icon}</span>{tr(`settings.appearance.${a.id}`)}
             </button>
           ))}
         </div>
       </Row>
     </Section>
-    <Section title="主题">
-      <Row label="" sub="只换配色，不动排版字体">
+    <Section title={tr('settings.theme.title')}>
+      <Row label="" sub={tr('settings.theme.sub')}>
         <div className="v2-theme-row">
           {THEMES.map((t) => (
             <button
               key={t.id}
               className={`v2-theme-chip${(settings.theme ?? 'anthropic') === t.id ? ' active' : ''}`}
               onClick={() => updateSettings({ theme: t.id })}
-              title={`${t.label} · ${t.sub}`}
+              title={`${t.label} · ${tr(`settings.theme.sub.${t.id}`)}`}
             >
               <span className="sw" style={{ background: t.surface }}>
                 {t.ramp.map((c, i) => <i key={i} style={{ background: c }} />)}
@@ -358,10 +369,10 @@ const AppearancePane: React.FC<{ settings: ClientSettings; updateSettings: (p: P
         </div>
       </Row>
     </Section>
-    <Section title="毛玻璃" hint="半透明质感，逐个区域开关；开侧栏 / 顶栏会自动叠一层微弱环境色让玻璃显现">
+    <Section title={tr('settings.glass.title')} hint={tr('settings.glass.hint')}>
       <GlassControl settings={settings} updateSettings={updateSettings} />
     </Section>
-    <Section title="字体" hint="对话内容、输入框、UI 文字全部跟随切换；中日韩字符自动 fallback 到 PingFang / Songti / Noto Serif SC">
+    <Section title={tr('settings.font.title')} hint={tr('settings.font.hint')}>
       <div className="v2-set-grid">
         {FONTS.map((f) => (
           <button
@@ -369,9 +380,9 @@ const AppearancePane: React.FC<{ settings: ClientSettings; updateSettings: (p: P
             className={`v2-set-card${settings.font === f.id ? ' active' : ''}`}
             onClick={() => updateSettings({ font: f.id })}
           >
-            <span className="t" style={f.sampleStyle}>{f.label}</span>
+            <span className="t" style={f.sampleStyle}>{tr(`settings.font.${f.id}`)}</span>
             <span className="s" style={{ ...f.sampleStyle, fontSize: 11, marginTop: 2 }}>
-              茶话 · Quick fox
+              {tr('settings.font.sample')}
             </span>
             <span style={{ fontSize: 8.5, color: 'var(--c-ink-4)', letterSpacing: '0.06em', marginTop: 2 }}>{f.tag}</span>
           </button>
@@ -379,39 +390,45 @@ const AppearancePane: React.FC<{ settings: ClientSettings; updateSettings: (p: P
       </div>
     </Section>
   </>
-);
+  );
+};
 
-const PrefsPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => (
+const PrefsPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => {
+  const { t: tr } = useI18n();
+  return (
   <>
-    <Section title="对话">
-      <Row label="Enter 发送" sub="关闭后：Enter 换行，⌘/⌃+Enter 发送">
+    <Section title={tr('settings.prefs.chat')}>
+      <Row label={tr('settings.prefs.enterToSend')} sub={tr('settings.prefs.enterToSendSub')}>
         <Switch checked={settings.cmdEnterToSend ?? true} onChange={(v) => updateSettings({ cmdEnterToSend: v })} />
       </Row>
-      <Row label="启用工具调用" sub="允许 assistant 调用 MCP / 技能包">
+      <Row label={tr('settings.prefs.toolCalling')} sub={tr('settings.prefs.toolCallingSub')}>
         <Switch checked={settings.enableToolCalling} onChange={(v) => updateSettings({ enableToolCalling: v })} />
       </Row>
-      <Row label="显示 token 消耗" sub="每条助手回复底下展示 token 数">
+      <Row label={tr('settings.prefs.tokenCost')} sub={tr('settings.prefs.tokenCostSub')}>
         <Switch checked={!!settings.showTokenCost} onChange={(v) => updateSettings({ showTokenCost: v })} />
       </Row>
-      <Row label="自动 TTS" sub="助手回复完成后自动朗读">
+      <Row label={tr('settings.prefs.autoTTS')} sub={tr('settings.prefs.autoTTSSub')}>
         <Switch checked={!!settings.autoTTS} onChange={(v) => updateSettings({ autoTTS: v })} />
       </Row>
     </Section>
-    <Section title="出字速度" hint="模型 token 是突发到达的（一坨一坨蹦）。开启后逐字匀速显示，更像打字机。闲聊 / agent对话 / Local Agents 共用此速度。">
-      <Row label="匀速出字" sub="关闭则到达即显示">
+    <Section title={tr('settings.prefs.typeSpeed')} hint={tr('settings.prefs.typeSpeedHint')}>
+      <Row label={tr('settings.prefs.steadyType')} sub={tr('settings.prefs.steadyTypeSub')}>
         <Switch checked={settings.chatStreamSmooth ?? true} onChange={(v) => updateSettings({ chatStreamSmooth: v })} />
       </Row>
       {(settings.chatStreamSmooth ?? true) && (
-        <Row label="速度" sub="慢 = 明显打字机感；快 = 几乎贴近实时">
+        <Row label={tr('settings.prefs.speed')} sub={tr('settings.prefs.speedSub')}>
           <SpeedSeg value={settings.chatStreamSpeed ?? 'normal'} onChange={(sp) => updateSettings({ chatStreamSpeed: sp })} />
         </Row>
       )}
     </Section>
   </>
-);
+  );
+};
 
 /** 三档速度的分段控件（慢 / 适中 / 快）。 */
-const SpeedSeg: React.FC<{ value: TypeSpeed; onChange: (v: TypeSpeed) => void }> = ({ value, onChange }) => (
+const SpeedSeg: React.FC<{ value: TypeSpeed; onChange: (v: TypeSpeed) => void }> = ({ value, onChange }) => {
+  const { t: tr } = useI18n();
+  return (
   <div className="v2-seg">
     {(['slow', 'normal', 'fast'] as TypeSpeed[]).map((sp) => (
       <button
@@ -419,11 +436,12 @@ const SpeedSeg: React.FC<{ value: TypeSpeed; onChange: (v: TypeSpeed) => void }>
         className={`v2-seg-item${value === sp ? ' active' : ''}`}
         onClick={() => onChange(sp)}
       >
-        {TYPE_SPEED_LABELS[sp]}
+        {tr(`settings.prefs.speed.${sp}`)}
       </button>
     ))}
   </div>
-);
+  );
+};
 
 type LAProviderId = 'claude' | 'cursor' | 'codex' | 'gemini';
 interface LAProvider {
@@ -448,6 +466,7 @@ const LA_PROVIDERS: LAProvider[] = [
 /** Cursor headless 模式需要 API Key（cursor-agent 的交互式登录态不被 -p 模式认）。
  *  存后端（/api/local-agent/credentials），驱动起进程时注入 CURSOR_API_KEY。 */
 const CursorKeyRow: React.FC = () => {
+  const { t: tr } = useI18n();
   const [masked, setMasked] = useState<string | null>(null);   // 已存的（打码）
   const [input, setInput] = useState('');
   const [saving, setSaving] = useState(false);
@@ -465,24 +484,24 @@ const CursorKeyRow: React.FC = () => {
     setSaving(true); setMsg(null);
     try {
       const r = await api.put<{ api_key?: string }>('/api/local-agent/credentials/cursor', { api_key: key });
-      setMasked(r?.api_key || null); setInput(''); setMsg('已保存');
-    } catch (e: any) { setMsg(e?.message || '保存失败'); }
+      setMasked(r?.api_key || null); setInput(''); setMsg(tr('settings.localagent.cursorSaved'));
+    } catch (e: any) { setMsg(e?.message || tr('settings.localagent.saveFailed')); }
     finally { setSaving(false); }
   };
 
   return (
-    <Row label="Cursor API Key" sub={masked ? `当前：${masked}（headless 模式必需；cursor.com 控制台获取）` : 'headless 模式必需 —— cursor.com 控制台获取后填入'}>
+    <Row label={tr('settings.localagent.cursorKey')} sub={masked ? tr('settings.localagent.cursorKeySubSaved', { masked }) : tr('settings.localagent.cursorKeySub')}>
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         <input
           type="password"
           className="v2-set-select"
           style={{ minWidth: 240 }}
-          placeholder={masked ? '输入新 Key 覆盖' : 'crsr_…'}
+          placeholder={masked ? tr('settings.localagent.cursorKeyOverride') : 'crsr_…'}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') void onSave(); }}
         />
-        <button className="v2-set-btn primary" disabled={saving || !input.trim()} onClick={() => void onSave()}>{saving ? '保存中…' : '保存'}</button>
+        <button className="v2-set-btn primary" disabled={saving || !input.trim()} onClick={() => void onSave()}>{saving ? tr('settings.localagent.saving') : tr('common.save')}</button>
         {msg && <span className="v2-pill ok">{msg}</span>}
       </div>
     </Row>
@@ -490,10 +509,11 @@ const CursorKeyRow: React.FC = () => {
 };
 
 const LocalAgentPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => {
+  const { t: tr } = useI18n();
   const cur = settings.localAgentProvider ?? 'claude';
   return (
     <>
-      <Section title="Local Agents" hint="在你机器上跑本地 CLI Agent（仅桌面版）。对话与文件都留在本地，与 Chaya 服务无关。点卡片即可设为默认；侧栏徽标随选择切换。">
+      <Section title="Local Agents" hint={tr('settings.localagent.hint')}>
         <div className="v2-la-prov-grid">
           {LA_PROVIDERS.map((p) => (
             <LAProviderCard
@@ -505,9 +525,9 @@ const LocalAgentPane: React.FC<{ settings: ClientSettings; updateSettings: (p: P
           ))}
         </div>
       </Section>
-      <Section title="权限模式" hint="对话框里按 Tab 键即时切换。Claude：default / plan / accept edits / bypass；Cursor：plan / ask / force。">
-        <Row label="说明" sub="plan = 只读规划；ask = 只读问答；accept edits = 自动改文件；bypass / force = 全自动执行（含写/执行，慎用）。每次对话用当前选择的模式。">
-          <div className="v2-set-val">在对话输入框右下角查看与切换</div>
+      <Section title={tr('settings.localagent.permTitle')} hint={tr('settings.localagent.permHint')}>
+        <Row label={tr('settings.localagent.permLabel')} sub={tr('settings.localagent.permSub')}>
+          <div className="v2-set-val">{tr('settings.localagent.permVal')}</div>
         </Row>
       </Section>
     </>
@@ -521,6 +541,7 @@ const LAProviderCard: React.FC<{
   isDefault: boolean;
   onSetDefault: () => void;
 }> = ({ p, isDefault, onSetDefault }) => {
+  const { t: tr } = useI18n();
   return (
     <div className={`v2-la-prov${isDefault ? ' is-default' : ''}${!p.live ? ' is-soon' : ''}`}>
       <div className="v2-la-prov-hd"
@@ -528,30 +549,30 @@ const LAProviderCard: React.FC<{
         tabIndex={p.live ? 0 : -1}
         onClick={p.live ? onSetDefault : undefined}
         onKeyDown={p.live ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSetDefault(); } } : undefined}
-        title={p.live ? '点击设为默认' : '即将接入'}
+        title={p.live ? tr('settings.localagent.clickSetDefault') : tr('settings.localagent.comingSoon')}
       >
         <span className={`v2-la-setdot prov-${p.id}`} />
         <div className="v2-la-prov-meta">
-          <div className="nm">{p.label}{isDefault && <span className="v2-la-prov-def">默认</span>}</div>
+          <div className="nm">{p.label}{isDefault && <span className="v2-la-prov-def">{tr('settings.localagent.default')}</span>}</div>
           <div className="sub">{p.vendor} · <code>{p.cli}</code></div>
         </div>
-        <span className={`v2-pill ${p.live ? 'ok' : 'mute'}`}>{p.live ? '已就绪' : 'soon'}</span>
+        <span className={`v2-pill ${p.live ? 'ok' : 'mute'}`}>{p.live ? tr('settings.localagent.ready') : 'soon'}</span>
       </div>
       <div className="v2-la-prov-body">
         {p.id === 'claude' && (
-          <Row label="CLI" sub="安装后 chaya 自动探测；首次使用按提示登录 Anthropic 账号">
-            <a className="v2-set-btn" href={p.installUrl} target="_blank" rel="noreferrer">安装指南</a>
+          <Row label="CLI" sub={tr('settings.localagent.claudeSub')}>
+            <a className="v2-set-btn" href={p.installUrl} target="_blank" rel="noreferrer">{tr('settings.localagent.installGuide')}</a>
           </Row>
         )}
         {p.id === 'cursor' && <CursorKeyRow />}
         {p.id === 'codex' && (
-          <Row label="状态" sub="OpenAI Codex CLI 接入中；目前可先安装观望">
-            <a className="v2-set-btn" href={p.installUrl} target="_blank" rel="noreferrer">了解</a>
+          <Row label={tr('settings.localagent.status')} sub={tr('settings.localagent.codexSub')}>
+            <a className="v2-set-btn" href={p.installUrl} target="_blank" rel="noreferrer">{tr('settings.localagent.learnMore')}</a>
           </Row>
         )}
         {p.id === 'gemini' && (
-          <Row label="状态" sub="Google Gemini CLI 接入中；目前可先安装观望">
-            <a className="v2-set-btn" href={p.installUrl} target="_blank" rel="noreferrer">了解</a>
+          <Row label={tr('settings.localagent.status')} sub={tr('settings.localagent.geminiSub')}>
+            <a className="v2-set-btn" href={p.installUrl} target="_blank" rel="noreferrer">{tr('settings.localagent.learnMore')}</a>
           </Row>
         )}
       </div>
@@ -563,6 +584,7 @@ const LAProviderCard: React.FC<{
  *  各自一行式凭据 + 探测 + 保存；Smartnote 下方紧跟检索行为开关。
  *  描述压到副标题级别（11.5px ink-4），不让段落 hint 抢走焦点。 */
 const ServicesPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => {
+  const { t: tr } = useI18n();
   // ── Chaya 主后端 ────────────────────────────────────────────
   const savedChaya = (typeof window !== 'undefined' && localStorage.getItem('chatee_backend_url')) || '';
   const [chayaUrl, setChayaUrl] = useState(savedChaya);
@@ -579,16 +601,16 @@ const ServicesPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Par
       const t = setTimeout(() => ctrl.abort(), 5000);
       const r = await fetch(`${base}/health`, { signal: ctrl.signal });
       clearTimeout(t);
-      setChayaProbe(r.ok ? { ok: true, text: `通了 · ${r.status}` } : { ok: false, text: `响应 ${r.status}` });
+      setChayaProbe(r.ok ? { ok: true, text: tr('settings.services.probeOk', { status: r.status }) } : { ok: false, text: tr('settings.services.probeResp', { status: r.status }) });
     } catch (e: any) {
-      setChayaProbe({ ok: false, text: e?.name === 'AbortError' ? '超时' : '连不上' });
+      setChayaProbe({ ok: false, text: e?.name === 'AbortError' ? tr('settings.services.probeTimeout') : tr('settings.services.probeUnreachable') });
     } finally { setChayaProbing(false); }
   };
   const onSaveChaya = () => {
     if (trimmedChaya) localStorage.setItem('chatee_backend_url', trimmedChaya);
     else localStorage.removeItem('chatee_backend_url');
     (window as any).__cachedBackendUrl = trimmedChaya;
-    if (window.confirm('已保存，需要刷新页面才能生效。现在刷新？')) window.location.reload();
+    if (window.confirm(tr('settings.services.savedRefresh'))) window.location.reload();
   };
 
   // ── Smartnote 云知识 ─────────────────────────────────────────
@@ -607,9 +629,9 @@ const ServicesPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Par
     setSnProbing(true); setSnProbe(null);
     try {
       const r = await smartnoteProbe();
-      setSnProbe(r.ok ? { ok: true, text: '通了' } : { ok: false, text: r.error || '失败' });
+      setSnProbe(r.ok ? { ok: true, text: tr('settings.services.connected') } : { ok: false, text: r.error || tr('settings.services.failed') });
     } catch (e: any) {
-      setSnProbe({ ok: false, text: e?.message || '失败' });
+      setSnProbe({ ok: false, text: e?.message || tr('settings.services.failed') });
     } finally { setSnProbing(false); }
   };
 
@@ -617,30 +639,30 @@ const ServicesPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Par
     <div className="v2-acc">
       {/* ── Chaya 服务器 ── */}
       <div className="v2-acc-block">
-        <div className="v2-acc-block-hd"><AccIconServer /><span>Chaya 服务器</span></div>
+        <div className="v2-acc-block-hd"><AccIconServer /><span>{tr('settings.services.chayaServer')}</span></div>
         <div className="v2-acc-endpoint">
           <input
             className="v2-set-select v2-acc-input"
             value={chayaUrl}
             onChange={(e) => { setChayaUrl(e.target.value); setChayaProbe(null); }}
             placeholder="http://localhost:3002"
-            aria-label="Chaya 后端地址"
+            aria-label={tr('settings.services.chayaUrlLabel')}
           />
           <button
             className="v2-set-btn v2-acc-btn"
             onClick={() => void onProbeChaya()}
             disabled={chayaProbing}
-            title="探测连接"
+            title={tr('settings.services.probeTitle')}
           >
-            <AccIconRadar /><span>{chayaProbing ? '探测中' : '探测'}</span>
+            <AccIconRadar /><span>{chayaProbing ? tr('settings.services.probing') : tr('settings.services.probe')}</span>
           </button>
           <button
             className="v2-set-btn primary v2-acc-btn"
             onClick={onSaveChaya}
             disabled={!chayaDirty}
-            title="保存并刷新"
+            title={tr('settings.services.saveRefreshTitle')}
           >
-            <AccIconSave /><span>保存</span>
+            <AccIconSave /><span>{tr('common.save')}</span>
           </button>
         </div>
         <div className="v2-acc-endpoint-meta">
@@ -649,13 +671,13 @@ const ServicesPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Par
               {chayaProbe.text}
             </span>
           )}
-          <span className="v2-acc-endpoint-current" title={effectiveChaya}>当前 · {effectiveChaya}</span>
+          <span className="v2-acc-endpoint-current" title={effectiveChaya}>{tr('settings.services.current')} · {effectiveChaya}</span>
         </div>
       </div>
 
       {/* ── Smartnote 云知识 ── */}
       <div className="v2-acc-block">
-        <div className="v2-acc-block-hd"><AccIconCloud /><span>Smartnote 云知识</span></div>
+        <div className="v2-acc-block-hd"><AccIconCloud /><span>{tr('settings.services.smartnote')}</span></div>
         <div className="v2-acc-endpoint">
           <input
             className="v2-set-select v2-acc-input"
@@ -669,17 +691,17 @@ const ServicesPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Par
             className="v2-set-btn v2-acc-btn"
             onClick={() => void onProbeSn()}
             disabled={snProbing || !snKey.trim()}
-            title="探测连接"
+            title={tr('settings.services.probeTitle')}
           >
-            <AccIconRadar /><span>{snProbing ? '探测中' : '探测'}</span>
+            <AccIconRadar /><span>{snProbing ? tr('settings.services.probing') : tr('settings.services.probe')}</span>
           </button>
           <button
             className="v2-set-btn primary v2-acc-btn"
             onClick={onSaveSn}
             disabled={!snKey.trim()}
-            title="保存凭据"
+            title={tr('settings.services.saveCredTitle')}
           >
-            <AccIconSave /><span>保存</span>
+            <AccIconSave /><span>{tr('common.save')}</span>
           </button>
         </div>
         <div className="v2-acc-endpoint">
@@ -687,7 +709,7 @@ const ServicesPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Par
             className="v2-set-select v2-acc-input"
             value={snBase}
             onChange={(e) => { setSnBase(e.target.value); setSnProbe(null); }}
-            placeholder="Base URL · 留空使用默认 https://api.smartnote.cloud"
+            placeholder={tr('settings.services.baseUrlPlaceholder')}
             aria-label="Smartnote Base URL"
           />
         </div>
@@ -703,9 +725,9 @@ const ServicesPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Par
         {snKey.trim() && (
           <div className="v2-acc-rag">
             <div className="v2-acc-rag-row">
-              <span className="v2-acc-rag-lab">检索</span>
+              <span className="v2-acc-rag-lab">{tr('settings.services.ragRetrieval')}</span>
               <Switch checked={!!settings.ragEnabled} onChange={(v) => updateSettings({ ragEnabled: v })} />
-              <span className="v2-acc-rag-sub">发送前自动捞相关上下文拼到消息顶</span>
+              <span className="v2-acc-rag-sub">{tr('settings.services.ragRetrievalSub')}</span>
             </div>
             {!!settings.ragEnabled && (
               <>
@@ -718,10 +740,10 @@ const ServicesPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Par
                   >
                     {[3, 5, 8, 12, 20].map((n) => <option key={n} value={n}>{n}</option>)}
                   </select>
-                  <span className="v2-acc-rag-sub">一次召回多少条</span>
+                  <span className="v2-acc-rag-sub">{tr('settings.services.ragTopKSub')}</span>
                 </div>
                 <div className="v2-acc-rag-row">
-                  <span className="v2-acc-rag-lab">范围</span>
+                  <span className="v2-acc-rag-lab">{tr('settings.services.ragScope')}</span>
                   <select
                     className="v2-set-select v2-acc-rag-sel"
                     value={settings.ragScope ?? 'auto'}
@@ -731,7 +753,7 @@ const ServicesPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Par
                     <option value="agent">agent</option>
                     <option value="workspace">workspace</option>
                   </select>
-                  <span className="v2-acc-rag-sub">auto · 让 AI 选 · agent · 仅本 agent · workspace · 整库</span>
+                  <span className="v2-acc-rag-sub">{tr('settings.services.ragScopeSub')}</span>
                 </div>
               </>
             )}
@@ -761,6 +783,7 @@ interface CredDraft {
 }
 
 const ModelsPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => {
+  const { t: tr } = useI18n();
   const [list, setList] = useState<LLMConfigFromDB[] | null>(null);
   const [cred, setCred] = useState<CredDraft | null>(null);
   const refresh = () => getLLMConfigs().then((l) => setList(Array.isArray(l) ? l : [])).catch(() => setList([]));
@@ -783,19 +806,19 @@ const ModelsPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Parti
 
   const onToggle = async (c: LLMConfigFromDB, key: 'enabled' | 'media_visible') => {
     try { await updateLLMConfig(c.config_id, { [key]: !c[key] } as any); refresh(); }
-    catch (e: any) { window.alert(e?.message || '失败'); }
+    catch (e: any) { window.alert(e?.message || tr('settings.models.failed')); }
   };
   const onDeleteModel = async (c: LLMConfigFromDB) => {
     try { await deleteLLMConfig(c.config_id); if (defaultId === c.config_id) setDefault(undefined); refresh(); }
-    catch (e: any) { window.alert(e?.message || '失败'); }
+    catch (e: any) { window.alert(e?.message || tr('settings.models.failed')); }
   };
   const onDeleteCred = async (provider: string, configs: LLMConfigFromDB[]) => {
-    if (!window.confirm(`移除 ${PROVIDER_LABELS[provider] || provider} 凭证？其下 ${configs.length} 个模型都会删除。`)) return;
+    if (!window.confirm(tr('settings.models.removeCredConfirm', { provider: PROVIDER_LABELS[provider] || provider, count: configs.length }))) return;
     try {
       await Promise.all(configs.map((c) => deleteLLMConfig(c.config_id)));
       if (configs.some((c) => c.config_id === defaultId)) setDefault(undefined);
       refresh();
-    } catch (e: any) { window.alert(e?.message || '失败'); }
+    } catch (e: any) { window.alert(e?.message || tr('settings.models.failed')); }
   };
   const onManage = async (provider: string, configs: LLMConfigFromDB[]) => {
     let api_key = '';
@@ -807,14 +830,14 @@ const ModelsPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Parti
   return (
     <>
       <Section
-        title="模型"
-        hint="以 API Key 为单位接入 provider —— 填一次 key，动态拉取它的可用模型，按需启用。agent / 茶话 / 创作都从这里挑模型。"
-        trailing={<button className="v2-set-btn primary" onClick={onAddCred}>＋ 接入</button>}
+        title={tr('settings.models.title')}
+        hint={tr('settings.models.hint')}
+        trailing={<button className="v2-set-btn primary" onClick={onAddCred}>＋ {tr('settings.models.connect')}</button>}
       >
-        {!list && <div className="v2-set-empty">加载中…</div>}
-        {list && list.length === 0 && <div className="v2-set-empty">还没接入任何 provider — 点右上角「接入」，填 API Key 即可拉取模型</div>}
+        {!list && <div className="v2-set-empty">{tr('settings.models.loading')}</div>}
+        {list && list.length === 0 && <div className="v2-set-empty">{tr('settings.models.empty')}</div>}
         {groups && groups.length > 0 && (
-          <div className="v2-cred-count">{groups.length} 家 · {enabledCount} 款已启用</div>
+          <div className="v2-cred-count">{tr('settings.models.count', { providers: groups.length, enabled: enabledCount })}</div>
         )}
         {groups && groups.map((g) => (
           <div key={g.provider} className="v2-cred">
@@ -823,14 +846,14 @@ const ModelsPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Parti
               <div className="meta">
                 <div className="nm">{PROVIDER_LABELS[g.provider] || g.provider}</div>
                 <div className="sub">
-                  <span className="v2-pill ok">已连</span>
-                  <span className="cnt">{g.configs.length} 款</span>
-                  {g.configs[0]?.api_url && <span className="v2-pill mute" title={g.configs[0].api_url}>自定义 URL</span>}
+                  <span className="v2-pill ok">{tr('settings.models.connected')}</span>
+                  <span className="cnt">{tr('settings.models.modelCount', { count: g.configs.length })}</span>
+                  {g.configs[0]?.api_url && <span className="v2-pill mute" title={g.configs[0].api_url}>{tr('settings.models.customUrl')}</span>}
                 </div>
               </div>
               <div className="acts">
-                <button className="v2-set-btn" onClick={() => void onManage(g.provider, g.configs)}>管理模型</button>
-                <button className="v2-set-danger" onClick={() => void onDeleteCred(g.provider, g.configs)}>移除</button>
+                <button className="v2-set-btn" onClick={() => void onManage(g.provider, g.configs)}>{tr('settings.models.manage')}</button>
+                <button className="v2-set-danger" onClick={() => void onDeleteCred(g.provider, g.configs)}>{tr('settings.models.remove')}</button>
               </div>
             </div>
             <div className="v2-cred-models">
@@ -841,21 +864,21 @@ const ModelsPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Parti
                   <div key={c.config_id} className={`v2-cred-model${isDefault ? ' is-default' : ''}`}>
                     <button
                       className={`star${isDefault ? ' on' : ''}`}
-                      title={isDefault ? '当前默认（点击取消）' : isEnabled ? '设为新会话默认' : '停用的模型不能设为默认'}
+                      title={isDefault ? tr('settings.models.starDefault') : isEnabled ? tr('settings.models.starSetDefault') : tr('settings.models.starDisabled')}
                       disabled={!isEnabled && !isDefault}
                       onClick={() => setDefault(isDefault ? undefined : c.config_id)}
                     >{isDefault ? '★' : '☆'}</button>
                     <code className="mid" title={c.model}>{c.model || '—'}</code>
                     <div className="grow" />
-                    <label className="tg" title="在创作面板可选（生图/视频）">
-                      <span>创作</span>
+                    <label className="tg" title={tr('settings.models.mediaTitle')}>
+                      <span>{tr('settings.models.media')}</span>
                       <Switch checked={!!c.media_visible} onChange={() => void onToggle(c, 'media_visible')} />
                     </label>
-                    <label className="tg" title="启用后可被 agent/会话选用">
-                      <span>启用</span>
+                    <label className="tg" title={tr('settings.models.enabledTitle')}>
+                      <span>{tr('settings.models.enabled')}</span>
                       <Switch checked={isEnabled} onChange={() => void onToggle(c, 'enabled')} />
                     </label>
-                    <button className="del" title="删除该模型" onClick={() => void onDeleteModel(c)}>✕</button>
+                    <button className="del" title={tr('settings.models.deleteModel')} onClick={() => void onDeleteModel(c)}>✕</button>
                   </div>
                 );
               })}
@@ -882,6 +905,7 @@ const CredentialModal: React.FC<{
   onClose: () => void;
   onSaved: () => void;
 }> = ({ draft, onClose, onSaved }) => {
+  const { t: tr } = useI18n();
   const editMode = draft.existing.length > 0;
   const [provider, setProvider] = useState(draft.provider);
   const [apiKey, setApiKey] = useState(draft.api_key);
@@ -903,7 +927,7 @@ const CredentialModal: React.FC<{
   useEffect(() => { if (editMode && draft.api_key.trim()) void fetchModels(draft.api_key, draft.provider, draft.api_url); /* eslint-disable-next-line */ }, []);
 
   const fetchModels = async (key = apiKey, prov = provider, url = apiUrl) => {
-    if (!key.trim()) { setErr('先填 API Key'); return; }
+    if (!key.trim()) { setErr(tr('settings.models.needKey')); return; }
     setErr(''); setFetching(true);
     try {
       const ms = await listAvailableModels(prov, key.trim(), url.trim() || undefined);
@@ -911,14 +935,14 @@ const CredentialModal: React.FC<{
       const ids = new Set(ms.map((m) => m.id));
       const merged = [...ms, ...draft.existing.filter((c) => !!c.model && !ids.has(c.model)).map((c) => ({ id: c.model as string, name: c.model as string }))];
       setModels(merged);
-    } catch (e: any) { setErr(e?.message || '拉取模型失败'); setModels([]); }
+    } catch (e: any) { setErr(e?.message || tr('settings.models.fetchFailed')); setModels([]); }
     finally { setFetching(false); }
   };
 
   const toggle = (id: string) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const save = async () => {
-    if (sel.size === 0) { setErr('至少选一个模型'); return; }
+    if (sel.size === 0) { setErr(tr('settings.models.pickOne')); return; }
     setBusy(true); setErr('');
     const key = apiKey.trim();
     const url = apiUrl.trim();
@@ -939,7 +963,7 @@ const CredentialModal: React.FC<{
         if (c.model && !sel.has(c.model)) await deleteLLMConfig(c.config_id);
       }
       onSaved();
-    } catch (e: any) { setErr(e?.message || '保存失败'); }
+    } catch (e: any) { setErr(e?.message || tr('settings.models.saveFailed')); }
     finally { setBusy(false); }
   };
 
@@ -953,7 +977,7 @@ const CredentialModal: React.FC<{
     <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }} style={{ zIndex: 110 }}>
       <div className="v2-modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="v2-modal-hd">
-          <h3>{editMode ? `${PROVIDER_LABELS[provider] || provider} · 凭证与模型` : '接入 provider'}</h3>
+          <h3>{editMode ? `${PROVIDER_LABELS[provider] || provider} · ${tr('settings.models.credAndModels')}` : tr('settings.models.connectProvider')}</h3>
           <button className="x" onClick={onClose}>✕</button>
         </div>
         <div className="v2-modal-body">
@@ -964,22 +988,22 @@ const CredentialModal: React.FC<{
             </select>
           </div>
           <div className="v2-modal-sec">
-            <div className="lab">API Key {editMode && <span style={{ color: 'var(--c-ink-4)' }}>(不改就留空)</span>}</div>
+            <div className="lab">API Key {editMode && <span style={{ color: 'var(--c-ink-4)' }}>({tr('settings.models.keepBlank')})</span>}</div>
             <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-…" />
           </div>
           <div className="v2-modal-sec">
-            <div className="lab">Base URL <span style={{ color: 'var(--c-ink-4)' }}>(可选 — 自托管 / proxy)</span></div>
+            <div className="lab">Base URL <span style={{ color: 'var(--c-ink-4)' }}>({tr('settings.models.baseUrlOptional')})</span></div>
             <input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://api.openai.com/v1" />
           </div>
           <div className="v2-modal-sec">
             <div className="lab" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span>可用模型 {sel.size > 0 && <span style={{ color: 'var(--c-ink-4)' }}>· 选了 {sel.size}</span>}</span>
+              <span>{tr('settings.models.availableModels')} {sel.size > 0 && <span style={{ color: 'var(--c-ink-4)' }}>· {tr('settings.models.selected', { count: sel.size })}</span>}</span>
               <button className="v2-set-btn" style={{ marginLeft: 'auto' }} onClick={() => void fetchModels()} disabled={fetching}>
-                {fetching ? '拉取中…' : models ? '重新拉取' : '拉取模型'}
+                {fetching ? tr('settings.models.fetching') : models ? tr('settings.models.refetch') : tr('settings.models.fetch')}
               </button>
             </div>
-            {!models && !fetching && <div className="v2-set-empty" style={{ margin: 0 }}>填好 Key 后点「拉取模型」从 {PROVIDER_LABELS[provider] || provider} 动态获取</div>}
-            {models && models.length === 0 && !fetching && <div className="v2-set-empty" style={{ margin: 0 }}>没拉到模型 — 检查 Key / URL</div>}
+            {!models && !fetching && <div className="v2-set-empty" style={{ margin: 0 }}>{tr('settings.models.fetchHint', { provider: PROVIDER_LABELS[provider] || provider })}</div>}
+            {models && models.length === 0 && !fetching && <div className="v2-set-empty" style={{ margin: 0 }}>{tr('settings.models.noModels')}</div>}
             {models && models.length > 0 && (
               <div className="v2-cred-pick">
                 {models.map((m) => (
@@ -995,8 +1019,8 @@ const CredentialModal: React.FC<{
           {err && <div className="v2-set-empty" style={{ color: 'var(--c-danger)', margin: 0 }}>{err}</div>}
         </div>
         <div className="v2-modal-foot">
-          <button className="v2-mbtn" onClick={onClose} disabled={busy}>取消</button>
-          <button className="v2-mbtn primary" onClick={() => void save()} disabled={busy}>{busy ? '保存中…' : '保存'}</button>
+          <button className="v2-mbtn" onClick={onClose} disabled={busy}>{tr('common.cancel')}</button>
+          <button className="v2-mbtn primary" onClick={() => void save()} disabled={busy}>{busy ? tr('settings.models.saving') : tr('common.save')}</button>
         </div>
       </div>
     </div>
@@ -1006,6 +1030,7 @@ const CredentialModal: React.FC<{
 /* ============ MCP pane (v2 native) ============ */
 
 const McpPane: React.FC = () => {
+  const { t: tr } = useI18n();
   const [list, setList] = useState<MCPServer[] | null>(null);
   const refresh = () => mcpApi.list().then((l) => setList(Array.isArray(l) ? l : [])).catch(() => setList([]));
   useEffect(() => { refresh(); }, []);
@@ -1014,17 +1039,19 @@ const McpPane: React.FC = () => {
   const onProbe = async (m: MCPServer) => {
     try {
       const res = await mcpApi.probe(m.id);
-      window.alert(res.ok ? `通：${res.tool_count} 个工具${res.tools ? `\n${res.tools.slice(0, 12).join(', ')}` : ''}` : `不通：${res.error || '未知'}`);
+      window.alert(res.ok
+        ? tr('settings.mcp.probeOk', { count: res.tool_count }) + (res.tools ? `\n${res.tools.slice(0, 12).join(', ')}` : '')
+        : tr('settings.mcp.probeFail', { error: res.error || tr('settings.mcp.unknown') }));
       refresh();
-    } catch (e: any) { window.alert(e?.message || '探测失败'); }
+    } catch (e: any) { window.alert(e?.message || tr('settings.mcp.probeFailed')); }
   };
   const onToggle = async (m: MCPServer) => {
     try { await mcpApi.update(m.id, { enabled: !m.enabled }); refresh(); }
-    catch (e: any) { window.alert(e?.message || '失败'); }
+    catch (e: any) { window.alert(e?.message || tr('settings.mcp.failed')); }
   };
   const onDelete = async (m: MCPServer) => {
-    if (!window.confirm(`删除 MCP「${m.name}」？所有 agent 上的绑定都会失效。`)) return;
-    try { await mcpApi.remove(m.id); refresh(); } catch (e: any) { window.alert(e?.message || '失败'); }
+    if (!window.confirm(tr('settings.mcp.deleteConfirm', { name: m.name }))) return;
+    try { await mcpApi.remove(m.id); refresh(); } catch (e: any) { window.alert(e?.message || tr('settings.mcp.failed')); }
   };
   const onEdit = (m: MCPServer) => setEditing({
     id: m.id, name: m.name, url: m.url, type: (m.type as any) || 'http', enabled: !!m.enabled,
@@ -1034,12 +1061,12 @@ const McpPane: React.FC = () => {
   return (
     <>
       <Section
-        title="MCP 工具服务"
-        hint="集成第三方工具 — agent 上单独绑定使用"
-        trailing={<button className="v2-set-btn primary" onClick={onAdd}>＋ 添加</button>}
+        title={tr('settings.mcp.title')}
+        hint={tr('settings.mcp.hint')}
+        trailing={<button className="v2-set-btn primary" onClick={onAdd}>＋ {tr('settings.mcp.add')}</button>}
       >
-        {!list && <div className="v2-set-empty">加载中…</div>}
-        {list && list.length === 0 && <div className="v2-set-empty">还没有 MCP 服务器 — 点右上角「添加」</div>}
+        {!list && <div className="v2-set-empty">{tr('settings.mcp.loading')}</div>}
+        {list && list.length === 0 && <div className="v2-set-empty">{tr('settings.mcp.empty')}</div>}
         {list && list.map((m) => (
           <McpRow
             key={m.id}
@@ -1072,6 +1099,7 @@ const McpRow: React.FC<{
   onEdit: (m: MCPServer) => void;
   onDelete: (m: MCPServer) => void | Promise<void>;
 }> = ({ m, onProbe, onToggle, onEdit, onDelete }) => {
+  const { t: tr } = useI18n();
   // stdio servers run as a child process — no OAuth. http/sse may need it.
   const oauthEligible = m.type !== 'stdio';
   const [hasToken, setHasToken] = useState<boolean | null>(null);
@@ -1094,13 +1122,13 @@ const McpRow: React.FC<{
     try {
       const meta = await oauthApi.discover(m.url);
       if (!meta?.authorization_endpoint || !meta?.token_endpoint) {
-        window.alert('这个服务器不需要 OAuth（没发现 authorization_endpoint）');
+        window.alert(tr('settings.mcp.noOauth'));
         setAuthBusy(null);
         return;
       }
       const auth = await oauthApi.authorize({ ...meta, mcp_url: m.url });
       if (!auth?.authorization_url) {
-        window.alert('没拿到授权 URL');
+        window.alert(tr('settings.mcp.noAuthUrl'));
         setAuthBusy(null);
         return;
       }
@@ -1111,7 +1139,7 @@ const McpRow: React.FC<{
       const isElectron = (import.meta as any).env?.VITE_ELECTRON === 'true';
       const popup = window.open(auth.authorization_url, 'mcp-oauth', 'width=520,height=720,menubar=no,toolbar=no');
       if (!popup && !isElectron) {
-        window.alert('浏览器拦了弹窗，允许弹窗后重试');
+        window.alert(tr('settings.mcp.popupBlocked'));
         setAuthBusy(null);
         return;
       }
@@ -1138,54 +1166,54 @@ const McpRow: React.FC<{
         if (popup && popup.closed) { setAuthBusy(null); return; }
         if (Date.now() - start > TIMEOUT_MS) {
           setAuthBusy(null);
-          window.alert('授权超时（3 分钟没完成），重试一下');
+          window.alert(tr('settings.mcp.authTimeout'));
           return;
         }
         setTimeout(() => void tick(), POLL_MS);
       };
       void tick();
     } catch (e: any) {
-      window.alert(e?.message || '授权失败');
+      window.alert(e?.message || tr('settings.mcp.authFailed'));
       setAuthBusy(null);
     }
   };
 
   const authPill = () => {
     if (!oauthEligible) return null;
-    if (authBusy === 'polling') return <span className="v2-pill warn">等回调…</span>;
-    if (hasToken === true) return <span className="v2-pill ok">已授权</span>;
-    if (expired) return <span className="v2-pill warn">已过期</span>;
-    if (hasToken === false) return <span className="v2-pill mute">未授权</span>;
+    if (authBusy === 'polling') return <span className="v2-pill warn">{tr('settings.mcp.awaitingCallback')}</span>;
+    if (hasToken === true) return <span className="v2-pill ok">{tr('settings.mcp.authorized')}</span>;
+    if (expired) return <span className="v2-pill warn">{tr('settings.mcp.expired')}</span>;
+    if (hasToken === false) return <span className="v2-pill mute">{tr('settings.mcp.unauthorized')}</span>;
     return null;
   };
 
   const authLabel =
-    authBusy === 'discover' ? '探…'
-    : authBusy === 'redirect' ? '跳…'
-    : authBusy === 'polling' ? '等回调'
-    : (hasToken || expired ? '重授权' : '授权');
+    authBusy === 'discover' ? tr('settings.mcp.discovering')
+    : authBusy === 'redirect' ? tr('settings.mcp.redirecting')
+    : authBusy === 'polling' ? tr('settings.mcp.callback')
+    : (hasToken || expired ? tr('settings.mcp.reauthorize') : tr('settings.mcp.authorize'));
 
   return (
     <div className="v2-set-card-row">
       <div className="l">
         <div className="t">{m.name} <small>{m.type}</small></div>
         <div className="s">
-          {m.enabled ? <span className="v2-pill ok">启用</span> : <span className="v2-pill mute">停用</span>}
-          {m.healthy ? <span className="v2-pill ok">在线</span> : <span className="v2-pill mute">未探测</span>}
+          {m.enabled ? <span className="v2-pill ok">{tr('settings.mcp.enabled')}</span> : <span className="v2-pill mute">{tr('settings.mcp.disabled')}</span>}
+          {m.healthy ? <span className="v2-pill ok">{tr('settings.mcp.online')}</span> : <span className="v2-pill mute">{tr('settings.mcp.unprobed')}</span>}
           {authPill()}
           <span className="v2-pill mute" title={m.url}>{m.url.length > 40 ? m.url.slice(0, 38) + '…' : m.url}</span>
         </div>
       </div>
       <div className="r">
-        <button className="v2-set-btn" onClick={() => void onProbe(m)}>探测</button>
+        <button className="v2-set-btn" onClick={() => void onProbe(m)}>{tr('settings.mcp.probe')}</button>
         {oauthEligible && (
           <button className="v2-set-btn" onClick={() => void authorize()} disabled={!!authBusy || !m.enabled}>
             {authLabel}
           </button>
         )}
-        <button className="v2-set-btn" onClick={() => void onToggle(m)}>{m.enabled ? '停用' : '启用'}</button>
-        <button className="v2-set-btn" onClick={() => onEdit(m)}>编辑</button>
-        <button className="v2-set-danger" onClick={() => void onDelete(m)}>删除</button>
+        <button className="v2-set-btn" onClick={() => void onToggle(m)}>{m.enabled ? tr('settings.mcp.disable') : tr('settings.mcp.enable')}</button>
+        <button className="v2-set-btn" onClick={() => onEdit(m)}>{tr('settings.mcp.edit')}</button>
+        <button className="v2-set-danger" onClick={() => void onDelete(m)}>{tr('common.delete')}</button>
       </div>
     </div>
   );
@@ -1196,6 +1224,7 @@ const McpEditModal: React.FC<{
   onClose: () => void;
   onSaved: () => void;
 }> = ({ draft, onClose, onSaved }) => {
+  const { t: tr } = useI18n();
   const [d, setD] = useState(draft);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -1204,7 +1233,7 @@ const McpEditModal: React.FC<{
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
   const save = async () => {
-    if (!d.name.trim() || !d.url.trim()) { window.alert('名字和 URL 必填'); return; }
+    if (!d.name.trim() || !d.url.trim()) { window.alert(tr('settings.mcp.nameUrlRequired')); return; }
     setBusy(true);
     try {
       if (d.id) {
@@ -1213,27 +1242,27 @@ const McpEditModal: React.FC<{
         await mcpApi.create({ name: d.name.trim(), url: d.url.trim(), type: d.type, enabled: d.enabled });
       }
       onSaved();
-    } catch (e: any) { window.alert(e?.message || '保存失败'); }
+    } catch (e: any) { window.alert(e?.message || tr('settings.mcp.saveFailed')); }
     finally { setBusy(false); }
   };
   return (
     <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }} style={{ zIndex: 110 }}>
       <div className="v2-modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="v2-modal-hd">
-          <h3>{d.id ? '编辑 MCP' : '添加 MCP'}</h3>
+          <h3>{d.id ? tr('settings.mcp.editMcp') : tr('settings.mcp.addMcp')}</h3>
           <button className="x" onClick={onClose}>✕</button>
         </div>
         <div className="v2-modal-body">
           <div className="v2-modal-sec">
-            <div className="lab">名字</div>
-            <input autoFocus value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} placeholder="如：feishu / gitlab" />
+            <div className="lab">{tr('settings.mcp.name')}</div>
+            <input autoFocus value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} placeholder={tr('settings.mcp.namePlaceholder')} />
           </div>
           <div className="v2-modal-sec">
-            <div className="lab">URL / 命令</div>
-            <input value={d.url} onChange={(e) => setD({ ...d, url: e.target.value })} placeholder="https://… 或 stdio 启动命令" />
+            <div className="lab">{tr('settings.mcp.urlCommand')}</div>
+            <input value={d.url} onChange={(e) => setD({ ...d, url: e.target.value })} placeholder={tr('settings.mcp.urlPlaceholder')} />
           </div>
           <div className="v2-modal-sec">
-            <div className="lab">传输</div>
+            <div className="lab">{tr('settings.mcp.transport')}</div>
             <select className="v2-set-select" style={{ width: '100%' }} value={d.type} onChange={(e) => setD({ ...d, type: e.target.value as any })}>
               <option value="http">http</option>
               <option value="sse">sse</option>
@@ -1242,14 +1271,14 @@ const McpEditModal: React.FC<{
           </div>
           <div className="v2-modal-sec">
             <div className="v2-set-row" style={{ padding: 0 }}>
-              <div className="v2-set-row-l"><div className="lab">启用</div></div>
+              <div className="v2-set-row-l"><div className="lab">{tr('settings.mcp.enable')}</div></div>
               <Switch checked={d.enabled} onChange={(v) => setD({ ...d, enabled: v })} />
             </div>
           </div>
         </div>
         <div className="v2-modal-foot">
-          <button className="v2-mbtn" onClick={onClose} disabled={busy}>取消</button>
-          <button className="v2-mbtn primary" onClick={() => void save()} disabled={busy}>{busy ? '保存中…' : '保存'}</button>
+          <button className="v2-mbtn" onClick={onClose} disabled={busy}>{tr('common.cancel')}</button>
+          <button className="v2-mbtn primary" onClick={() => void save()} disabled={busy}>{busy ? tr('settings.models.saving') : tr('common.save')}</button>
         </div>
       </div>
     </div>

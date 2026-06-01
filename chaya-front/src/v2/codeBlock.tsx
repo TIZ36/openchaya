@@ -26,6 +26,7 @@ import ShikiHighlighter, {
   type Element,
 } from 'react-shiki/web';
 import { IconCopy, IconCheck } from './icons';
+import { useI18n } from '../i18n';
 
 /** rehype plugins for the markdown pipeline — reintroduces the `inline` prop on
  *  code nodes (react-markdown v10 dropped it) so we can split inline vs block. */
@@ -207,6 +208,7 @@ function buildMermaidThemeCSS(): string {
 }
 
 const MermaidBlock: React.FC<{ source: string }> = ({ source }) => {
+  const { t: tr } = useI18n();
   const [svg, setSvg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [mode, setMode] = useState<'light' | 'dark'>(() =>
@@ -278,7 +280,7 @@ const MermaidBlock: React.FC<{ source: string }> = ({ source }) => {
     );
   }
   if (!svg) {
-    return <div className="v2-mermaid v2-mermaid-loading" aria-busy>渲染图表…</div>;
+    return <div className="v2-mermaid v2-mermaid-loading" aria-busy>{tr('misc.mermaidRendering')}</div>;
   }
   // Mermaid's SVG output is sanitized under securityLevel:'strict'.
   return <div className="v2-mermaid" dangerouslySetInnerHTML={{ __html: svg }} />;
@@ -286,6 +288,7 @@ const MermaidBlock: React.FC<{ source: string }> = ({ source }) => {
 
 /** Top-right quick-copy pill. Hover (or focus) on the code block reveals it. */
 const CopyButton: React.FC<{ text: string; lang: string }> = ({ text, lang }) => {
+  const { t: tr } = useI18n();
   const [done, setDone] = useState(false);
   const timerRef = useRef<number | null>(null);
 
@@ -313,8 +316,8 @@ const CopyButton: React.FC<{ text: string; lang: string }> = ({ text, lang }) =>
   }, [text]);
 
   const title = done
-    ? 'Copied'
-    : `Copy${lang && lang !== 'text' ? ` (${lang})` : ''}`;
+    ? tr('misc.copied')
+    : `${tr('misc.copy')}${lang && lang !== 'text' ? ` (${lang})` : ''}`;
   return (
     <button
       type="button"

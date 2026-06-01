@@ -18,6 +18,7 @@ import {
 } from './services/localAgent';
 import { api } from '../utils/apiClient';
 import { TYPEWRITER_PRESETS, DEFAULT_TYPEWRITER, FINISH_DRAIN_SEC, type TypewriterConfig } from './typewriter';
+import { useI18n } from '../i18n';
 
 export type SessionsState = Record<string, SessionSummary[] | 'loading'>;
 
@@ -132,6 +133,7 @@ interface Smooth {
 }
 
 export function useLocalAgent(active: boolean, provider: ProviderId, typewriter: TypewriterConfig = DEFAULT_TYPEWRITER) {
+  const { t: tr } = useI18n();
   // Live typewriter config (toggle + speed) read by the rAF pump without re-binding it.
   const twRef = useRef<TypewriterConfig>(typewriter);
   twRef.current = typewriter;
@@ -431,10 +433,10 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   }, [provider, current, upsertTab, patchTab]);
 
   const newSession = useCallback((cwd: string) => {
-    upsertTab(cwd, null, '新会话');
+    upsertTab(cwd, null, tr('local.newSession'));
     // 预热新会话：先把进程起好，首条消息即暖。
     if (current?.live) void localAgent.warm({ provider, cwd, sessionId: null, permMode: defaultPermMode(provider), apiKey: provider === 'cursor' ? cursorKeyRef.current : undefined });
-  }, [provider, current, upsertTab]);
+  }, [provider, current, upsertTab, tr]);
 
   const closeTab = useCallback((cwd: string) => {
     dropSmooth(cwd);
@@ -505,11 +507,11 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     setGroups((gs) => {
       const used = new Set(gs.map((g) => g.color));
       const color = TAB_COLORS.find((c) => !used.has(c)) || TAB_COLORS[gs.length % TAB_COLORS.length];
-      return [...gs, { id, name: '新分组', color, collapsed: false }];
+      return [...gs, { id, name: tr('local.newGroupName'), color, collapsed: false }];
     });
     setTabs((ts) => clusterTabs(ts.map((t) => (t.cwd === cwd ? { ...t, groupId: id } : t))));
     return id;
-  }, []);
+  }, [tr]);
   const addTabToGroup = useCallback((cwd: string, groupId: string) => {
     setTabs((ts) => clusterTabs(ts.map((t) => (t.cwd === cwd ? { ...t, groupId } : t))));
   }, []);
@@ -571,7 +573,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       return { ...m, [cwd]: cur.filter((s) => s.sessionId !== sid) };
     });
     setTabs((ts) => ts.map((t) => {
-      if (t.cwd === cwd && t.sessionId === sid) { dropSmooth(cwd); return emptyTab(cwd, null, '新会话', t.color); }
+      if (t.cwd === cwd && t.sessionId === sid) { dropSmooth(cwd); return emptyTab(cwd, null, tr('local.newSession'), t.color); }
       return t;
     }));
     if (permMemRef.current[sid]) { delete permMemRef.current[sid]; savePermBySession(permMemRef.current); }
@@ -580,7 +582,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     const res = await localAgent.deleteSession(provider, cwd, sid);
     if (!res.ok) void loadSessionsFor(cwd);
     return res;
-  }, [provider, loadSessionsFor, dropSmooth]);
+  }, [provider, loadSessionsFor, dropSmooth, tr]);
 
   function handleEvent(cwd: string, ev: any) {
     const t = ev?.type;
@@ -597,7 +599,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       // init 带 MCP 连接状态 → 存到该标签供 MCP 控件显示。
       const mcpStatus = Array.isArray(ev.mcp_servers) ? ev.mcp_servers : undefined;
       // 预热（用户还没发送）时 init 也会来——此时 running=false，别显示「处理中」。
-      patchTab(cwd, (tab) => ({ ...(tab.running ? { status: 'Agent 处理中…' } : {}), ...(mcpStatus ? { mcpStatus } : {}) }));
+      patchTab(cwd, (tab) => ({ ...(tab.running ? { status: tr('local.status.processing') } : {}), ...(mcpStatus ? { mcpStatus } : {}) }));
       return;
     }
     if (t === 'stream_event') {
@@ -629,7 +631,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       return;
     }
     if (t === 'question_request') {
-      patchTab(cwd, { question: { permId: ev.permId, questions: (ev.input && ev.input.questions) || [] }, status: '等待你的选择…' });
+      patchTab(cwd, { question: { permId: ev.permId, questions: (ev.input && ev.input.questions) || [] }, status: tr('local.status.awaitingChoice') });
       return;
     }
     if (t === 'permission_request') {
@@ -638,7 +640,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
           permId: ev.permId, toolName: ev.toolName, input: ev.input,
           title: ev.title, displayName: ev.displayName, description: ev.description, suggestions: ev.suggestions,
         },
-        status: '等待你的授权…',
+        status: tr('local.status.awaitingPermission'),
       });
       return;
     }
@@ -646,10 +648,10 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (t === 'result') {
       if (parentId) return;
       if (ev.session_id) pendingByCwd.current.set(cwd, ev.session_id);
-      finalizeTurn(cwd, (ev.subtype && ev.subtype !== 'success') ? '⚠ 回合异常结束' : '');
+      finalizeTurn(cwd, (ev.subtype && ev.subtype !== 'success') ? `⚠ ${tr('local.status.turnAbnormal')}` : '');
       return;
     }
-    if (t === 'error') { patchTab(cwd, { status: `⚠ ${ev.error || '执行出错'}` }); return; }
+    if (t === 'error') { patchTab(cwd, { status: `⚠ ${ev.error || tr('local.status.execError')}` }); return; }
     // 进程真正退出（关标签/切会话/出错）：兜底收尾。
     if (t === 'session_closed') { finalizeTurn(cwd, ''); return; }
   }
@@ -678,15 +680,15 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
 
   /** 用户对权限请求作答 → 回传给 SDK 的 canUseTool，agent 继续。 */
   const respondPermission = useCallback((cwd: string, permId: string, decision: PermissionDecision) => {
-    patchTab(cwd, { perm: null, status: decision.behavior === 'allow' ? 'Agent 处理中…' : '' });
+    patchTab(cwd, { perm: null, status: decision.behavior === 'allow' ? tr('local.status.processing') : '' });
     void localAgent.permissionRespond(permId, decision);
-  }, [patchTab]);
+  }, [patchTab, tr]);
 
   /** 用户答完 AskUserQuestion → 把选择作为答案经 deny-message 回传，agent 据此继续。 */
   const answerQuestion = useCallback((cwd: string, permId: string, answerText: string) => {
-    patchTab(cwd, { question: null, status: 'Agent 处理中…' });
+    patchTab(cwd, { question: null, status: tr('local.status.processing') });
     void localAgent.permissionRespond(permId, { behavior: 'deny', message: answerText });
-  }, [patchTab]);
+  }, [patchTab, tr]);
 
   const send = useCallback(async (cwd: string) => {
     const tab = tabs.find((t) => t.cwd === cwd);
@@ -694,7 +696,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     const text = tab.draft.trim();
     const attachments = tab.attachments || [];
     if ((!text && attachments.length === 0) || tab.running) return;
-    if (!current?.installed || !current?.live) { patchTab(cwd, { status: `⚠ ${current?.label || provider} 不可用` }); return; }
+    if (!current?.installed || !current?.live) { patchTab(cwd, { status: `⚠ ${tr('local.status.unavailable', { provider: current?.label || provider })}` }); return; }
     const sid = tab.sessionId;   // 仅首条用于 resume；常驻会话已存在时后端忽略
     // cursor headless 必需 API Key——优先用缓存，没有则现拉（拉不到则主进程会回 error 提示去设置录入）。
     const apiKey = provider === 'cursor' ? (cursorKeyRef.current || await fetchCursorKey()) : undefined;
@@ -704,11 +706,11 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     patchTab(cwd, (t) => ({
       draft: '', attachments: [],
       messages: [...t.messages, { role: 'user', parts: [{ kind: 'text', text: text + attNote }], ts: null, uuid: null }],
-      liveMsgs: [], livePreview: '', running: true, status: '处理中…', perm: null, question: null,
+      liveMsgs: [], livePreview: '', running: true, status: tr('local.status.processingShort'), perm: null, question: null,
     }));
     const res = await localAgent.send({ provider, cwd, sessionId: sid, prompt: text, permMode: tab.permMode, model: tab.model, mcp: tab.mcp, apiKey, attachments });
-    if (!res.ok) patchTab(cwd, (t) => ({ running: false, status: t.status.startsWith('⚠') ? t.status : '⚠ 启动失败' }));
-  }, [tabs, current, provider, patchTab, dropSmooth, fetchCursorKey]);
+    if (!res.ok) patchTab(cwd, (t) => ({ running: false, status: t.status.startsWith('⚠') ? t.status : `⚠ ${tr('local.status.startFailed')}` }));
+  }, [tabs, current, provider, patchTab, dropSmooth, fetchCursorKey, tr]);
 
   const interrupt = useCallback((cwd: string) => { if (cwd) void localAgent.interrupt(cwd); }, []);
 
@@ -751,11 +753,11 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
         if (gs.some((g) => g.id === gid)) return gs;
         const used = new Set(gs.map((g) => g.color));
         const color = TAB_COLORS.find((c) => !used.has(c)) || TAB_COLORS[gs.length % TAB_COLORS.length];
-        return [...gs, { id: gid, name: '未命名', color, collapsed: false }];
+        return [...gs, { id: gid, name: tr('local.unnamedGroupName'), color, collapsed: false }];
       });
     }
     setTabs((ts) => clusterTabs(ts.map((t) => (leaves.includes(t.cwd) ? { ...t, groupId: gid } : t))));
-  }, [layout, tabs, groups]);
+  }, [layout, tabs, groups, tr]);
 
   /** 把某窗格移出网格；剩一个时塌缩回单窗。 */
   const removePane = useCallback((cwd: string) => {

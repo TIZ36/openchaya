@@ -14,6 +14,7 @@ import {
   TYPEWRITER_PRESETS, DEFAULT_TYPEWRITER, FINISH_DRAIN_SEC,
   type TypewriterConfig,
 } from './typewriter';
+import { useI18n } from '../i18n';
 
 export type WsState = 'idle' | 'connecting' | 'open' | 'closed' | 'error';
 
@@ -70,7 +71,10 @@ interface ChatSmooth {
   finalize: (() => void) | null; // run once drained (merge the persisted message)
 }
 
-export function useChatBackend(typewriter: TypewriterConfig = DEFAULT_TYPEWRITER) {
+// authed=false（未登录）：不拉后端 meta、不连 WS —— 主界面仍可进、本地功能可用，
+// 访问云端功能时由上层提示登录；登录后 authed 翻 true，下面两个 effect 重跑即拉取 + 连线。
+export function useChatBackend(typewriter: TypewriterConfig = DEFAULT_TYPEWRITER, authed: boolean = true) {
+  const { t: tr } = useI18n();
   const [s, setS] = useState<State>({
     loadingMeta: true,
     agents: [],
@@ -212,10 +216,15 @@ export function useChatBackend(typewriter: TypewriterConfig = DEFAULT_TYPEWRITER
   }, []);
 
   useEffect(() => { refreshMetaRef.current = refreshMeta; }, [refreshMeta]);
-  useEffect(() => { void refreshMeta(true); }, [refreshMeta]);
+  // 未登录：不拉 meta，但要把 loadingMeta 落回 false —— 否则骨架屏（SkeletonRows）会一直转。
+  useEffect(() => {
+    if (authed) void refreshMeta(true);
+    else setS((p) => (p.loadingMeta ? { ...p, loadingMeta: false } : p));
+  }, [refreshMeta, authed]);
 
   /* -------- WebSocket lifecycle (single connection, swap subscriptions) -------- */
   useEffect(() => {
+    if (!authed) { setS((p) => ({ ...p, wsState: 'idle' })); return; }
     let mounted = true;
 
     const connect = () => {
@@ -360,7 +369,7 @@ export function useChatBackend(typewriter: TypewriterConfig = DEFAULT_TYPEWRITER
       wsRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authed]);
 
   /* -------- active session: load history + (re)subscribe -------- */
   const loadMessages = useCallback(async (sid: string, silent = false) => {
@@ -493,7 +502,7 @@ export function useChatBackend(typewriter: TypewriterConfig = DEFAULT_TYPEWRITER
   const createTopicAndOpen = useCallback(async (firstText?: string, agentId?: string, extraExt?: Record<string, unknown>): Promise<string | null> => {
     try {
       const created = await api.post<Session>('/api/conversations', {
-        title: firstText ? firstText.slice(0, 40) : '新会话',
+        title: firstText ? firstText.slice(0, 40) : tr('settings.chat.newConversation'),
         session_type: 'topic_general',
       });
       const sid: string | undefined = (created as any).session_id || (created as any).id;
@@ -531,7 +540,7 @@ export function useChatBackend(typewriter: TypewriterConfig = DEFAULT_TYPEWRITER
       console.warn('[v2] createTopic failed', e);
       return null;
     }
-  }, [refreshMeta]);
+  }, [refreshMeta, tr]);
 
   const renameSession = useCallback(async (sid: string, name: string) => {
     try {

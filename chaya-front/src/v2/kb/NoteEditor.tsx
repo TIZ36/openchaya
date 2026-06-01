@@ -6,6 +6,7 @@
    can re-seed content when switching notes without remounting.
    ============================================================ */
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { t } from '../../i18n';
 import { EditorState, Compartment } from '@codemirror/state';
 import {
   EditorView, keymap, lineNumbers, highlightActiveLine,
@@ -48,8 +49,8 @@ function makeFindPanel(view: EditorView): Panel {
 
   const input = document.createElement('input');
   input.className = 'v2-cm-find-input';
-  input.placeholder = '查找…  (输入 :行号 跳转，如 :42)';
-  input.setAttribute('aria-label', '查找');
+  input.placeholder = t('kb.findPlaceholder');
+  input.setAttribute('aria-label', t('kb.find'));
 
   const count = document.createElement('span');
   count.className = 'v2-cm-find-count';
@@ -60,15 +61,15 @@ function makeFindPanel(view: EditorView): Panel {
     b.addEventListener('mousedown', (e) => { e.preventDefault(); on(); });
     return b;
   };
-  const prev = mkBtn('‹', '上一个 (Shift+Enter)', () => findPrevious(view));
-  const next = mkBtn('›', '下一个 (Enter)', () => findNext(view));
-  const close = mkBtn('✕', '关闭 (Esc)', () => closeSearchPanel(view));
+  const prev = mkBtn('‹', t('kb.findPrev'), () => findPrevious(view));
+  const next = mkBtn('›', t('kb.findNext'), () => findNext(view));
+  const close = mkBtn('✕', t('kb.findClose'), () => closeSearchPanel(view));
 
   const lineRe = /^:(\d+)$/;
   const refreshCount = () => {
     const v = input.value;
-    if (lineRe.test(v)) { count.textContent = '跳转行'; return; }
-    count.textContent = v ? String(countMatches(view, v)) + ' 处' : '';
+    if (lineRe.test(v)) { count.textContent = t('kb.gotoLine'); return; }
+    count.textContent = v ? t('kb.matchCount', { n: countMatches(view, v) }) : '';
   };
   input.addEventListener('input', () => {
     const v = input.value;
@@ -192,7 +193,7 @@ export const NoteEditor = forwardRef<NoteEditorHandle, Props>(function NoteEdito
         markdown(),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         EditorView.lineWrapping,
-        cmPlaceholder(placeholder || '开始写…  (Markdown · ⌘S 保存)'),
+        cmPlaceholder(placeholder || t('kb.editorPlaceholder')),
         readOnlyComp.current.of(EditorState.readOnly.of(!!readOnly)),
         keymap.of([
           { key: 'Mod-s', preventDefault: true, run: () => { flushSave(); return true; } },

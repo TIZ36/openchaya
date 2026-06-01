@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Chaya favicon — aperture spark on an ink tile. Legible from 16px up. -->
+<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <rect x="0.5" y="0.5" width="31" height="31" rx="7.5" fill="#0d0d0d"/>
+  <g transform="translate(16 16) scale(1.06) rotate(6)">
+    <g transform="translate(-12 -12)">
+      <path d="M12 2 C12 8.4 15.6 12 22 12 C15.6 12 12 15.6 12 22 C12 15.6 8.4 12 2 12 C8.4 12 12 8.4 12 2 Z"
+            fill="#f7f6f4"/>
+      <path d="M18.8 2.8 C18.8 4.3 19.7 5.2 21.2 5.2 C19.7 5.2 18.8 6.1 18.8 7.6 C18.8 6.1 17.9 5.2 16.4 5.2 C17.9 5.2 18.8 4.3 18.8 2.8 Z"
+            fill="#f7f6f4" opacity="0.5"/>
+    </g>
+  </g>
+</svg>

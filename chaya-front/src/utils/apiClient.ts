@@ -71,6 +71,11 @@ class ApiClient {
   private unauthorizedHandled = false;
   private handleUnauthorized() {
     if (this.unauthorizedHandled) return;
+    // 没有 token 本来就是未登录态（按需登录：可免登录浏览本地功能）——此时 401 是预期的，
+    // 绝不能 clearToken + reload，否则未登录访问任何受保护接口都会触发整页刷新死循环
+    // （reload 后 api 是新实例、unauthorizedHandled 重置，挡不住 → 一直闪 + 卡死）。
+    // 仅当「本地有 token 但被服务端拒绝」（过期/失效）时才登出并刷新到登录态。
+    if (!this.getToken()) return;
     this.unauthorizedHandled = true;
     this.clearToken();
     if (typeof window !== 'undefined') {
