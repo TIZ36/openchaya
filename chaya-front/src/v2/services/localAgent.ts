@@ -293,6 +293,16 @@ export function savePermBySession(map: Record<string, PermMode>): void {
   try { localStorage.setItem(PERM_BY_SESSION_KEY, JSON.stringify(map)); } catch { /* quota */ }
 }
 
+/* CLI 项目树「展开了哪些目录」的记忆（按 project id）。下次启动自动恢复，无需重新点开。 */
+const EXPANDED_KEY = 'chaya.localAgent.expandedProjects';
+export function loadExpandedProjects(): string[] {
+  try { const raw = localStorage.getItem(EXPANDED_KEY); const a = raw ? JSON.parse(raw) : null; return Array.isArray(a) ? a : []; }
+  catch { return []; }
+}
+export function saveExpandedProjects(ids: string[]): void {
+  try { localStorage.setItem(EXPANDED_KEY, JSON.stringify(ids)); } catch { /* quota */ }
+}
+
 /* 每个会话「选用的模型」记忆（按 sessionId）。重开历史会话时默认切回。 */
 const MODEL_BY_SESSION_KEY = 'chaya.localAgent.modelBySession';
 export function loadModelBySession(): Record<string, string> {

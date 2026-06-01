@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   smartnoteProbe, smartnoteMemories, smartnoteDocuments, smartnoteTags,
   smartnoteChunks, smartnoteSearchHistory, smartnoteRetrieve,
@@ -89,7 +90,9 @@ type Selection =
   | { kind: 'note'; path: string }
   | { kind: 'doc'; id: string };
 
-const KnowledgeView: React.FC = () => {
+// standalone：分屏里的 wiki 窗格用 —— 强制走内联两栏（自带左树），不抢主侧栏的
+// #v2-kb-tree-slot（否则多个实例会争同一个 portal 槽位 → 串台）。
+const KnowledgeView: React.FC<{ standalone?: boolean }> = ({ standalone }) => {
   const { t: tr } = useI18n();
   const [conn, setConn] = useState<ConnState>('probing');
   const [connErr, setConnErr] = useState<string | null>(null);
@@ -103,8 +106,14 @@ const KnowledgeView: React.FC = () => {
   const [domainModal, setDomainModal] = useState<Tag | 'new' | null>(null);
   const [createUnder, setCreateUnder] = useState<string | null | undefined>(undefined); // doc-upload modal; value = preset domain
   const [searchOpen, setSearchOpen] = useState(false);
-  const [treeCollapsed, setTreeCollapsed] = useState(false);   // 左侧栏折叠 → 右侧画布全宽
+  const [treeCollapsed, setTreeCollapsed] = useState(!!standalone);   // 左侧栏折叠 → 右侧画布全宽（分屏窄窗格默认折叠）
   const localOk = isLocalNotesAvailable();
+  // The app's left sidebar hosts the KB tree (unified single sidebar). Find its
+  // portal slot after mount; if present we render the tree there and the canvas
+  // takes the full width. Falls back to the inline two-column layout otherwise.
+  const [treeSlot, setTreeSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => { if (!standalone) setTreeSlot(document.getElementById('v2-kb-tree-slot')); }, [standalone]);
+  const embedded = !standalone && !!treeSlot;
 
   const probe = useCallback(async () => {
     setConn('probing'); setConnErr(null);
@@ -208,10 +217,10 @@ const KnowledgeView: React.FC = () => {
       {conn === 'down' && <div className="v2-kb-body"><Down err={connErr} onRetry={probe} /></div>}
       {conn === 'probing' && <div className="v2-kb-body"><KbEmpty title={tr('kb.connecting')} /></div>}
 
-      {conn === 'ok' && (
-        <div className={`v2-kb-workspace${treeCollapsed ? ' tree-collapsed' : ''}`}>
-          {/* 左侧栏：搜索 + sncloud 状态 + 上传 + 知识域树；折叠时滑出（参考主侧栏的
-              transform 滑出 + 网格列收拢动画），不卸载以保证进出都丝滑。 */}
+      {conn === 'ok' && (() => {
+        {/* 左侧栏：搜索 + sncloud 状态 + 上传 + 知识域树。embedded 时整块 portal 进
+            主侧栏槽位，画布吃满整宽；否则走原内联两栏布局（折叠/展开动画保留）。 */}
+        const kbTree = (
           <KbTree
             domains={domains}
             docs={docs}
@@ -220,6 +229,7 @@ const KnowledgeView: React.FC = () => {
             sel={sel}
             expanded={expanded}
             conn={conn}
+            embedded={embedded}
             onOpenSearch={() => setSearchOpen(true)}
             onUpload={() => setCreateUnder(null)}
             onCollapse={() => setTreeCollapsed(true)}
@@ -230,26 +240,31 @@ const KnowledgeView: React.FC = () => {
             onAddNote={addNote}
             onImportNote={importNote}
           />
-          <div className="v2-kb-canvaswrap">
-            {treeCollapsed && (
-              <button className="v2-kb-expandbtn" title={tr('kb.expandSidebar')} onClick={() => setTreeCollapsed(false)}>
-                <IconChevron />
-              </button>
-            )}
-            <KbCanvas
-              sel={sel}
-              docs={docs}
-              notes={notes}
-              domains={domains}
-              llmConfigId={llmConfigId}
-              onDocsChanged={loadDocs}
-              onNotesChanged={loadNotes}
-              onSelect={setSel}
-              onAddNote={addNote}
-            />
+        );
+        return (
+          <div className={`v2-kb-workspace${embedded ? ' embedded' : (treeCollapsed ? ' tree-collapsed' : '')}`}>
+            {embedded ? (treeSlot && createPortal(kbTree, treeSlot)) : kbTree}
+            <div className="v2-kb-canvaswrap">
+              {!embedded && treeCollapsed && (
+                <button className="v2-kb-expandbtn" title={tr('kb.expandSidebar')} onClick={() => setTreeCollapsed(false)}>
+                  <IconChevron />
+                </button>
+              )}
+              <KbCanvas
+                sel={sel}
+                docs={docs}
+                notes={notes}
+                domains={domains}
+                llmConfigId={llmConfigId}
+                onDocsChanged={loadDocs}
+                onNotesChanged={loadNotes}
+                onSelect={setSel}
+                onAddNote={addNote}
+              />
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {searchOpen && (
         <SearchOverlay domain={null} llmConfigId={llmConfigId} noteDocIds={noteDocIds} onOpen={openFromSearch} onClose={() => setSearchOpen(false)} />
@@ -293,7 +308,9 @@ const KbTree: React.FC<{
   onEditDomain: (t: Tag) => void;
   onAddNote: () => void;
   onImportNote: () => void;
-}> = ({ domains, docs, notes, localOk, sel, expanded, conn, onOpenSearch, onUpload, onCollapse, onSelect, onToggle, onNewDomain, onEditDomain, onAddNote, onImportNote }) => {
+  /** Rendered inside the app's left sidebar (portal) — hide the self-collapse. */
+  embedded?: boolean;
+}> = ({ domains, docs, notes, localOk, sel, expanded, conn, embedded, onOpenSearch, onUpload, onCollapse, onSelect, onToggle, onNewDomain, onEditDomain, onAddNote, onImportNote }) => {
   const { t: tr } = useI18n();
   // 云端文档按域分桶。包含上传文档 + 历史云端笔记（如「东方玄学」），但排除
   // 已是本地笔记镜像的云 note（避免与「笔记」组重复）。
@@ -356,13 +373,15 @@ const KbTree: React.FC<{
   const connLabel = conn === 'ok' ? tr('kb.connected') : conn === 'probing' ? tr('kb.connecting2') : conn === 'no-key' ? tr('kb.notConfigured') : tr('kb.unreachable');
 
   return (
-    <aside className="v2-kb-tree">
-      {/* 左栏头：搜索（占主）+ 折叠按钮。 */}
+    <aside className={`v2-kb-tree${embedded ? ' embedded' : ''}`}>
+      {/* 左栏头：搜索（占主）+ 折叠按钮（embedded 时省去，由主侧栏统一折叠）。 */}
       <div className="v2-kb-tree-hd">
         <button className="v2-kb-searchbtn" onClick={onOpenSearch} title={tr('kb.searchAllTip')}>
           <IconSearch /><span>{tr('kb.searchEllipsis')}</span><kbd>⌘K</kbd>
         </button>
-        <button className="v2-kb-collapse" onClick={onCollapse} title={tr('kb.collapseSidebar')}><IconChevron /></button>
+        {!embedded && (
+          <button className="v2-kb-collapse" onClick={onCollapse} title={tr('kb.collapseSidebar')}><IconChevron /></button>
+        )}
       </div>
       <div className="v2-kb-tree-scroll">
         {/* 笔记组置顶（在「全部」之上）—— 本地 .md 文件。导入/新建都是 icon 按钮；

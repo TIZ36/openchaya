@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../utils/apiClient';
 import {
   getLLMConfigs, createLLMConfig, updateLLMConfig, deleteLLMConfig,
@@ -106,14 +106,62 @@ const THEMES: { id: ColorTheme; label: string; sub: string; surface: string; ram
   { id: 'cursor',    label: 'Cursor',    sub: '极夜石墨青', surface: '#0e0f12', ramp: ['#162e2b', '#7eede0', '#b4f0e7'] },
 ];
 
+// Flat, ordered section list (drives the single-page layout + scroll-spy).
+const SETTINGS_SECTIONS = TAB_GROUPS.flatMap((g) => g.items.map((it) => ({ ...it, group: g.group })));
+
 const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, onClose }) => {
   const { t: tr } = useI18n();
-  const [tab, setTab] = useState<Tab>('account');
+  // `active` is the section the nav highlights — set on click AND by scroll-spy.
+  const [active, setActive] = useState<Tab>('account');
+  const paneRef = useRef<HTMLDivElement>(null);
+  const secRefs = useRef<Partial<Record<Tab, HTMLElement | null>>>({});
+  // Suppress scroll-spy briefly while a click-driven smooth scroll is animating,
+  // so the highlight lands on the clicked item instead of flickering through.
+  const lockRef = useRef(0);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  // Scroll-spy: highlight the last section whose top has crossed a trigger line
+  // near the top of the scroll pane.
+  useEffect(() => {
+    const root = paneRef.current;
+    if (!root) return;
+    const onScroll = () => {
+      if (Date.now() < lockRef.current) return;
+      const rootTop = root.getBoundingClientRect().top;
+      let current: Tab = SETTINGS_SECTIONS[0].id;
+      for (const s of SETTINGS_SECTIONS) {
+        const el = secRefs.current[s.id];
+        if (!el) continue;
+        if (el.getBoundingClientRect().top - rootTop <= 72) current = s.id;
+      }
+      setActive((prev) => (prev === current ? prev : current));
+    };
+    root.addEventListener('scroll', onScroll, { passive: true });
+    return () => root.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const jump = (id: Tab) => {
+    setActive(id);
+    lockRef.current = Date.now() + 700;   // hold the highlight through the animation
+    secRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const paneFor = (id: Tab): React.ReactNode => {
+    switch (id) {
+      case 'account':    return <AccountPane onLogout={onLogout} />;
+      case 'appearance': return <AppearancePane settings={settings} updateSettings={updateSettings} />;
+      case 'prefs':      return <PrefsPane settings={settings} updateSettings={updateSettings} />;
+      case 'services':   return <ServicesPane settings={settings} updateSettings={updateSettings} />;
+      case 'models':     return <ModelsPane settings={settings} updateSettings={updateSettings} />;
+      case 'mcp':        return <McpPane />;
+      case 'localagent': return <LocalAgentPane settings={settings} updateSettings={updateSettings} />;
+    }
+  };
 
   return (
     <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -132,8 +180,8 @@ const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, on
                 {g.items.map((t) => (
                   <button
                     key={t.id}
-                    className={`v2-settings-nav-item${tab === t.id ? ' active' : ''}`}
-                    onClick={() => setTab(t.id)}
+                    className={`v2-settings-nav-item${active === t.id ? ' active' : ''}`}
+                    onClick={() => jump(t.id)}
                   >
                     <span className="ic" aria-hidden>{t.icon}</span>
                     <span className="lab">{tr(t.label)}</span>
@@ -142,14 +190,22 @@ const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, on
               </div>
             ))}
           </nav>
-          <div className="v2-settings-pane">
-            {tab === 'account'    && <AccountPane onLogout={onLogout} />}
-            {tab === 'appearance' && <AppearancePane settings={settings} updateSettings={updateSettings} />}
-            {tab === 'prefs'      && <PrefsPane settings={settings} updateSettings={updateSettings} />}
-            {tab === 'services' && <ServicesPane settings={settings} updateSettings={updateSettings} />}
-            {tab === 'models'   && <ModelsPane settings={settings} updateSettings={updateSettings} />}
-            {tab === 'mcp'      && <McpPane />}
-            {tab === 'localagent' && <LocalAgentPane settings={settings} updateSettings={updateSettings} />}
+          {/* Single scrollable page — every pane stacked; nav items are anchors. */}
+          <div className="v2-settings-pane" ref={paneRef}>
+            {SETTINGS_SECTIONS.map((s) => (
+              <section
+                key={s.id}
+                id={`set-sec-${s.id}`}
+                ref={(el) => { secRefs.current[s.id] = el; }}
+                className="v2-settings-sec"
+              >
+                <div className="v2-settings-sec-hd">
+                  <span className="ic" aria-hidden>{s.icon}</span>
+                  <span className="t">{tr(s.label)}</span>
+                </div>
+                {paneFor(s.id)}
+              </section>
+            ))}
           </div>
         </div>
       </div>
@@ -159,15 +215,17 @@ const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, on
 
 /* ============ helpers ============ */
 
-const Section: React.FC<React.PropsWithChildren<{ title: string; hint?: string; trailing?: React.ReactNode }>> = ({ title, hint, trailing, children }) => (
+const Section: React.FC<React.PropsWithChildren<{ title?: string; hint?: string; trailing?: React.ReactNode }>> = ({ title, hint, trailing, children }) => (
   <div className="v2-set-sec">
-    <div className="v2-set-sec-hd">
-      <div>
-        <div className="t">{title}</div>
-        {hint && <div className="h">{hint}</div>}
+    {(title || hint || trailing) && (
+      <div className={`v2-set-sec-hd${title ? '' : ' bare'}`}>
+        <div>
+          {title && <div className="t">{title}</div>}
+          {hint && <div className="h">{hint}</div>}
+        </div>
+        {trailing && <div className="v2-set-sec-trail">{trailing}</div>}
       </div>
-      {trailing && <div className="v2-set-sec-trail">{trailing}</div>}
-    </div>
+    )}
     <div className="v2-set-sec-body">{children}</div>
   </div>
 );
@@ -513,7 +571,7 @@ const LocalAgentPane: React.FC<{ settings: ClientSettings; updateSettings: (p: P
   const cur = settings.localAgentProvider ?? 'claude';
   return (
     <>
-      <Section title="Local Agents" hint={tr('settings.localagent.hint')}>
+      <Section hint={tr('settings.localagent.hint')}>
         <div className="v2-la-prov-grid">
           {LA_PROVIDERS.map((p) => (
             <LAProviderCard
@@ -830,7 +888,6 @@ const ModelsPane: React.FC<{ settings: ClientSettings; updateSettings: (p: Parti
   return (
     <>
       <Section
-        title={tr('settings.models.title')}
         hint={tr('settings.models.hint')}
         trailing={<button className="v2-set-btn primary" onClick={onAddCred}>＋ {tr('settings.models.connect')}</button>}
       >
@@ -1061,7 +1118,6 @@ const McpPane: React.FC = () => {
   return (
     <>
       <Section
-        title={tr('settings.mcp.title')}
         hint={tr('settings.mcp.hint')}
         trailing={<button className="v2-set-btn primary" onClick={onAdd}>＋ {tr('settings.mcp.add')}</button>}
       >

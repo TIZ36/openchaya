@@ -10,7 +10,7 @@ import { createPortal } from 'react-dom';
 import { LocalAgentTabs } from './LocalAgentView';
 import type { LocalAgentState } from './useLocalAgent';
 import type { TopTab } from './useTopTabs';
-import { IconChat, IconGallery, IconKB, IconAgentPrimary } from './icons';
+import { IconChat, IconGallery, IconKB, IconAgentPrimary, IconTerminal } from './icons';
 import { useI18n } from '../i18n';
 
 interface Props {
@@ -20,16 +20,23 @@ interface Props {
   onActivate: (tab: TopTab) => void;
   onClose: (tab: TopTab) => void;
   onTogglePin: (tab: TopTab) => void;
+  /** 已固定到侧栏的 CLI cwd —— 从内联 CLI tab 条隐藏（改在左栏常驻）。 */
+  pinnedLocalCwds?: Set<string>;
+  /** 右键菜单里「固定」CLI tab。 */
+  onLocalTogglePin?: (cwd: string) => void;
 }
 
 interface MenuState { x: number; y: number; tab: TopTab }
 
-export const TopTabs: React.FC<Props> = React.memo(({ la, tabs, activeId, onActivate, onClose, onTogglePin }) => {
+export const TopTabs: React.FC<Props> = React.memo(({ la, tabs, activeId, onActivate, onClose, onTogglePin, pinnedLocalCwds, onLocalTogglePin }) => {
   const { t: tr } = useI18n();
   const nonLocal = tabs.filter((t) => t.kind !== 'local');
-  const pinned = nonLocal.filter((t) => t.pinned);
-  const unpinned = nonLocal.filter((t) => !t.pinned);
-  const hasLocal = la.tabs.length > 0;
+  // Pinned tabs live in the left rail (see ClientShell .v2-rail-pins). Show the
+  // ACTIVE pinned one here too — as a dimmed/gray tab — so an opened pin still
+  // gets a tab on the right; it drops back out of the bar when you switch away.
+  const visible = nonLocal.filter((t) => !t.pinned || t.id === activeId);
+  // CLI tabs 全被固定走光后，内联段就没东西可显 —— 用于决定是否还渲染该段。
+  const hasLocal = la.tabs.some((t) => !pinnedLocalCwds?.has(t.cwd));
   const [menu, setMenu] = useState<MenuState | null>(null);
   if (!hasLocal && nonLocal.length === 0) {
     return <span className="v2-la-tabs-empty">{tr('tabs.empty')}</span>;
@@ -62,20 +69,13 @@ export const TopTabs: React.FC<Props> = React.memo(({ la, tabs, activeId, onActi
   const openMenu = (e: React.MouseEvent, t: TopTab) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, tab: t }); };
   return (
     <div className="v2-la-tabs v2-toptabs" role="tablist" ref={scrollerRef}>
-      {/* 固定的缩略 tab —— 钉在最左侧，仅图标，不可关闭。 */}
-      {pinned.map((t) => (
-        <ChatChip key={t.id} t={t} active={t.id === activeId} pinned
-          onActivate={() => onActivate(t)} onClose={() => onClose(t)} onMenu={(e) => openMenu(e, t)} />
-      ))}
-      {pinned.length > 0 && (hasLocal || unpinned.length > 0) && <span className="v2-toptabs-sep" aria-hidden />}
-      {hasLocal && <LocalAgentTabs la={la} inline onTabActivate={onLocalActivate} activeCwd={activeLocalCwd} />}
-      {/* 在 local 与 chat/系统 tabs 之间留一道极细分隔，避免两段视觉粘在一起。 */}
-      {hasLocal && unpinned.length > 0 && <span className="v2-toptabs-sep" aria-hidden />}
-      {unpinned.map((t) => (
+      {hasLocal && <LocalAgentTabs la={la} inline onTabActivate={onLocalActivate} activeCwd={activeLocalCwd} pinnedCwds={pinnedLocalCwds} onTogglePin={onLocalTogglePin} />}
+      {visible.map((t) => (
         <ChatChip
           key={t.id}
           t={t}
           active={t.id === activeId}
+          dimmed={t.pinned}
           onActivate={() => onActivate(t)}
           onClose={() => onClose(t)}
           onMenu={(e) => openMenu(e, t)}
@@ -96,28 +96,38 @@ TopTabs.displayName = 'TopTabs';
 
 /** 单条非 local tab。chat / gallery / kb 共用同一壳，只换图标。
  *  pinned：缩略（仅图标、无标题、无关闭），钉在最左。右键唤出菜单。 */
-const ChatChip: React.FC<{ t: TopTab; active: boolean; pinned?: boolean; onActivate: () => void; onClose: () => void; onMenu: (e: React.MouseEvent) => void }> = ({ t, active, pinned, onActivate, onClose, onMenu }) => {
+const ChatChip: React.FC<{ t: TopTab; active: boolean; pinned?: boolean; dimmed?: boolean; onActivate: () => void; onClose: () => void; onMenu: (e: React.MouseEvent) => void }> = ({ t, active, pinned, dimmed, onActivate, onClose, onMenu }) => {
   const { t: tr } = useI18n();
+  // `dimmed` = a pinned tab shown in the bar because it's active: keep the label
+  // but render muted/gray, and no close affordance (it's managed from the rail).
+  const noClose = pinned || dimmed;
   return (
     <div
       role="tab"
       aria-selected={active}
       tabIndex={0}
-      className={`v2-la-tab${active ? ' active' : ''}${t.attn ? ' attn' : ''}${pinned ? ' pinned' : ''}`}
+      className={`v2-la-tab${active ? ' active' : ''}${t.attn ? ' attn' : ''}${pinned ? ' pinned' : ''}${dimmed ? ' dim' : ''}`}
       onClick={onActivate}
       onContextMenu={onMenu}
-      onMouseDown={(e) => { if (e.button === 1 && !pinned) { e.preventDefault(); onClose(); } }}   // 中键关闭（固定项除外）
+      // 拖到 CLI 分屏的某个窗格上 → 把该「页」作为异类叶子加入分屏（wiki / chat:<sid>）。
+      // 复用本地 pane 的 text/cwd 落点逻辑（见 LocalAgentPaneImpl.onDrop → la.placePane）。
+      draggable
+      onDragStart={(e) => {
+        const fid = t.kind === 'kb' ? 'wiki' : (t.kind === 'chat' && t.sessionId) ? `chat:${t.sessionId}` : '';
+        if (fid) { e.dataTransfer.setData('text/cwd', fid); e.dataTransfer.effectAllowed = 'copy'; }
+      }}
+      onMouseDown={(e) => { if (e.button === 1 && !noClose) { e.preventDefault(); onClose(); } }}   // 中键关闭（固定项除外）
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onActivate(); }
-        if (!pinned && (e.key === 'Delete' || (e.key === 'w' && (e.metaKey || e.ctrlKey)))) { e.preventDefault(); onClose(); }
+        if (!noClose && (e.key === 'Delete' || (e.key === 'w' && (e.metaKey || e.ctrlKey)))) { e.preventDefault(); onClose(); }
       }}
-      title={pinned ? tr('tabs.pinnedTitle', { label: t.label }) : t.label}
+      title={(pinned || dimmed) ? tr('tabs.pinnedTitle', { label: t.label }) : t.label}
     >
-      <span className="ico" aria-hidden><IconFor t={t} /></span>
+      <span className="ico" aria-hidden><TabTypeIcon t={t} /></span>
       {!pinned && <span className="sess">{t.label}</span>}
       {t.unread && !active && <span className="unread" aria-label={tr('tabs.unread')} />}
       {t.attn && <span className="attn-mark" aria-label={tr('tabs.needApproval')}>!</span>}
-      {!pinned && (
+      {!noClose && (
         <button
           className="x"
           onClick={(e) => { e.stopPropagation(); onClose(); }}
@@ -157,10 +167,12 @@ const TabMenu: React.FC<{ menu: MenuState; onClose: () => void; onPin: () => voi
   );
 };
 
-/** 类型图标：用 SVG 而非 unicode glyph，保证基线/字号在所有主题下都一致。 */
-const IconFor: React.FC<{ t: TopTab }> = ({ t }) => {
+/** 类型图标：用 SVG 而非 unicode glyph，保证基线/字号在所有主题下都一致。
+ *  导出给左侧栏的固定 tab（pinned）小图标复用，保持图标语义一致。 */
+export const TabTypeIcon: React.FC<{ t: TopTab }> = ({ t }) => {
   if (t.kind === 'gallery') return <IconGallery />;
   if (t.kind === 'kb') return <IconKB />;
+  if (t.kind === 'local') return <IconTerminal />;
   if (t.kind === 'chat') {
     if (t.isPrimary || t.sessionType === 'agent') return <IconAgentPrimary />;
     return <IconChat />;

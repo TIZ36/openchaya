@@ -523,31 +523,9 @@ html[data-electron="true"] .chaya-v2 .v2-tb .v2-dots { display: none; }
 /* 折叠 = 整条统一侧栏滑出窗外，白卡片左移补位。 */
 .chaya-v2 .v2-app.collapsed .v2-side { transform: translate3d(-100%, 0, 0); opacity: 0; pointer-events: none; }
 .chaya-v2 .v2-app.collapsed .v2-main { margin-left: 6px; }
-/* Permanent sidebar-toggle button. Lives at the top-left corner of the
- * window, parked just right of the macOS traffic lights so it never moves
- * and never overlaps them. Click toggles the sidebar in either direction.
- * z-index needs to clear both .v2-tb (z:10) AND any sibling drag region of
- * .v2-topbar inside .v2-main so Electron's app-region hit-test picks the
- * no-drag region; otherwise mousedown is consumed as a window drag and the
- * click never fires. */
-/* Center at y=22 — locked on the same axis as the macOS traffic lights
- * (top=16, height=12 → center 22) and the topbar crumb (card margin-top=4
- * + topbar 36/2 = 22). */
-.chaya-v2 .v2-shell-toggle {
-  position: fixed; z-index: 200; top: 6px; left: 14px;
-  width: 32px; height: 32px; border-radius: var(--c-radius-md);
-  background: transparent; color: var(--c-ink-3);
-  display: grid; place-items: center; cursor: pointer;
-  pointer-events: auto;
-  -webkit-app-region: no-drag;
-  transition: background 140ms var(--c-ease), color 140ms var(--c-ease), left 240ms var(--c-ease);
-}
-.chaya-v2 .v2-shell-toggle:hover { background: var(--c-hover); color: var(--c-ink); }
-.chaya-v2 .v2-shell-toggle:active { background: var(--c-selected); }
-.chaya-v2 .v2-shell-toggle svg { width: 18px; height: 18px; pointer-events: none; }
-/* On macOS the traffic lights claim the first ~70px. Park the toggle right
- * after them so they never collide. */
-html[data-electron-platform="darwin"] .chaya-v2 .v2-shell-toggle { left: 80px; }
+/* Sidebar collapse/expand now lives entirely on the pin row (far left when open)
+ * and, when collapsed, on the top-tab bar's left rail (.v2-topbar-rail). The old
+ * floating .v2-shell-toggle is gone — no more control parked over the lights. */
 
 /* ===== sidebar =====
    核心导航：256px 宽（之前 240 给中文会话名太挤），sidebar 背景同 main card 之间
@@ -570,7 +548,72 @@ html[data-electron-platform="darwin"] .chaya-v2 .v2-shell-toggle { left: 80px; }
 }
 /* ===== 统一侧栏：v2-side 一条 212px 的导航 + 当前功能列表 + 底部账号，整条 --c-sidebar
    底色；白卡片只裹右侧内容。导航为 icon+文字「水平」排列。 ===== */
-.chaya-v2 .v2-side.v2-sidebar { width: 212px; align-items: stretch; padding: 44px 8px 10px; }
+.chaya-v2 .v2-side.v2-sidebar { width: 290px; align-items: stretch; padding: 8px 8px 10px; }
+/* 顶部控制条：折叠按钮（最左）+ 固定 tab 小图标，与右侧顶栏 tab 同处标题栏一行，
+   下方一道与功能列表同款细分隔。 */
+.chaya-v2 .v2-rail-pins {
+  flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+  padding: 0 2px 8px; margin-bottom: 6px; min-height: 32px;
+  border-bottom: 1px solid color-mix(in oklab, var(--c-ink) 7%, transparent);
+}
+/* macOS 交通灯占据左上 ~78px。用一个一次性的占位器把「第一行」的功能图标推到灯的
+   右侧（仅 line 1，不影响换行后的自定义置顶）；非 mac / 非 electron 占位为 0。 */
+.chaya-v2 .v2-rail-lights-gap { flex: 0 0 auto; width: 0; height: 32px; }
+html[data-electron-platform="darwin"] .chaya-v2 .v2-rail-lights-gap { width: 70px; }
+/* 强制换行：basis 100% 的零高占位器，让其后的自定义置顶落到第二行（从最左排起，
+   不带交通灯缩进）。 */
+.chaya-v2 .v2-rail-break { flex: 1 0 100%; height: 0; margin: 0; }
+.chaya-v2 .v2-rail-pins-grow { flex: 1 1 auto; min-width: 4px; }
+.chaya-v2 .v2-rail-collapse { color: var(--c-ink-4); }
+.chaya-v2 .v2-rail-collapse:hover { color: var(--c-ink); }
+/* 折叠按钮推到这一行最右，紧贴右侧主白卡片（仅 pin 行；顶栏 rail 里的展开钮不受影响）。 */
+.chaya-v2 .v2-rail-pins .v2-rail-collapse { margin-left: auto; }
+.chaya-v2 .v2-pin {
+  position: relative; width: 32px; height: 32px;
+  display: grid; place-items: center; border-radius: var(--c-radius-md);
+  color: var(--c-ink-3); cursor: pointer; border: 1px solid transparent;
+  /* The pin row now lives in the title strip (over the .v2-tb drag region);
+     no-drag keeps these buttons clickable instead of starting a window drag. */
+  -webkit-app-region: no-drag;
+  transition: background 140ms var(--c-ease), color 140ms var(--c-ease), box-shadow 140ms var(--c-ease), transform 100ms var(--c-ease);
+}
+.chaya-v2 .v2-pin:hover { background: var(--c-hover-soft); color: var(--c-ink); }
+.chaya-v2 .v2-pin:active { transform: scale(0.94); }
+.chaya-v2 .v2-pin.active { background: var(--c-hover); color: var(--c-ink); box-shadow: inset 0 0 0 1px var(--c-rule); }
+.chaya-v2 .v2-pin.active svg { color: var(--c-accent-strong); }   /* 选中态：图标点一笔 accent（与 railbtn 一致） */
+.chaya-v2 .v2-pin svg { width: 17px; height: 17px; }
+.chaya-v2 .v2-pin:focus-visible { outline: none; box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--c-accent) 55%, var(--c-ink)); }
+.chaya-v2 .v2-pin .dot { position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent); box-shadow: 0 0 0 1.5px var(--c-sidebar); }
+.chaya-v2 .v2-pin.attn { box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--c-accent) 65%, transparent); }
+.chaya-v2 .v2-pin .attn-mark { position: absolute; top: 1px; right: 4px; font-size: 9px; font-weight: 700; line-height: 1; color: var(--c-accent-strong); }
+
+/* ── 自定义置顶 chip：圆角方块 + 会话首字 + 按类型描边（适应主题）──────────────
+   .ch 是可见方块（24×24，留 4px 给 .v2-pin 的 hover 命中区）；--chip-bd 由 data-kind
+   提供，OKLCH 中等明度 + 中等彩度，浅/深色都读得清。激活时方块填一层同色。 */
+.chaya-v2 .v2-pin-chip { --chip-bd: color-mix(in oklab, var(--c-ink) 30%, transparent); }
+.chaya-v2 .v2-pin-chip .ch {
+  display: grid; place-items: center;
+  width: 24px; height: 24px; border-radius: 7px;
+  border: 1.5px solid var(--chip-bd);
+  background: color-mix(in oklab, var(--chip-bd) 9%, var(--c-bg));
+  font-size: 12px; font-weight: 650; line-height: 1; letter-spacing: 0;
+  color: color-mix(in oklab, var(--chip-bd) 55%, var(--c-ink));
+  transition: background 140ms var(--c-ease), border-color 140ms var(--c-ease);
+}
+.chaya-v2 .v2-pin-chip:hover { background: transparent; }   /* 命中区不抢方块 */
+.chaya-v2 .v2-pin-chip:hover .ch { background: color-mix(in oklab, var(--chip-bd) 16%, var(--c-bg)); }
+.chaya-v2 .v2-pin-chip.active { background: transparent; box-shadow: none; }
+.chaya-v2 .v2-pin-chip.active .ch {
+  background: color-mix(in oklab, var(--chip-bd) 22%, var(--c-bg));
+  border-color: color-mix(in oklab, var(--chip-bd) 85%, var(--c-ink));
+  color: var(--c-ink);
+}
+.chaya-v2 .v2-pin-chip[data-kind="agent"]   { --chip-bd: oklch(0.55 0.13 305); }
+.chaya-v2 .v2-pin-chip[data-kind="chat"]    { --chip-bd: oklch(0.60 0.11 245); }
+.chaya-v2 .v2-pin-chip[data-kind="kb"]      { --chip-bd: oklch(0.58 0.11 150); }
+.chaya-v2 .v2-pin-chip[data-kind="gallery"] { --chip-bd: oklch(0.66 0.12 70);  }
+.chaya-v2 .v2-pin-chip[data-kind="local"]   { --chip-bd: oklch(0.60 0.10 35);  }
+
 .chaya-v2 .v2-rail-nav { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; }
 .chaya-v2 .v2-railbtn {
   display: flex; flex-direction: row; align-items: center; gap: 10px;
@@ -595,8 +638,20 @@ html[data-electron-platform="darwin"] .chaya-v2 .v2-shell-toggle { left: 80px; }
   border-top: 1px solid color-mix(in oklab, var(--c-ink) 7%, transparent);
 }
 .chaya-v2 .v2-side-list:empty { border-top: 0; margin-top: 0; }   /* 画廊/知识库无列表时不留空线 */
-.chaya-v2 .v2-side-list > .v2-la-tree { flex: 1 1 auto; min-height: 0; }
+/* The active panel is the sole occupant of the list area, so the project tree
+   fills ALL of it — drop the 42vh cap here so it uses the full lower space
+   before its inner list scrolls (the cap only applies in the mixed chat list). */
+.chaya-v2 .v2-side-list > .v2-la-tree { flex: 1 1 auto; min-height: 0; max-height: none; }
 .chaya-v2 .v2-side-hint { padding: 8px 12px; font-size: 12px; color: var(--c-ink-4); }
+
+/* Wikis（知识库域）行：色点 + 名称，与 chats / agents 行同一节奏。
+   作为知识库面板的主体，填满列表区并自行滚动。 */
+.chaya-v2 .v2-wikis { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
+.chaya-v2 .v2-wiki { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: var(--c-radius-row); font-size: 13px; color: var(--c-ink); cursor: pointer; transition: background 140ms var(--c-ease); min-width: 0; text-align: left; }
+.chaya-v2 .v2-wiki:hover { background: var(--c-hover-soft); }
+.chaya-v2 .v2-wiki.active { background: var(--c-hover); }
+.chaya-v2 .v2-wiki .dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 0 1px color-mix(in oklab, var(--c-ink) 12%, transparent); }
+.chaya-v2 .v2-wiki .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 轨底：用户 / 登录 —— 横排 头像 + 名字 + 齿轮 */
 .chaya-v2 .v2-railme {
@@ -660,6 +715,29 @@ html[data-electron-platform="darwin"] .chaya-v2 .v2-shell-toggle { left: 80px; }
 
 /* Codex 风：极安静的灰色 label，常规字重，不上 caps —— 段间靠呼吸（padding）分组，
    不靠 hairline 也不靠装饰性字体处理。 */
+/* 子功能基础动作：置顶于列表区的主操作（新对话 / 打开新项目）。与知识库的搜索框
+   同一槽位、同一外形，让四个功能切换时顶部动作位保持一致。 */
+.chaya-v2 .v2-side-action {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 9px;
+  margin: 2px 10px 10px; padding: 9px 12px;
+  border-radius: var(--c-radius-lg);
+  background: var(--c-surface); color: var(--c-ink); cursor: pointer;
+  border: 1px solid var(--c-rule);
+  transition: background 140ms var(--c-ease), border-color 140ms var(--c-ease), box-shadow 140ms var(--c-ease), transform 100ms var(--c-ease);
+}
+.chaya-v2 .v2-side-action:hover {
+  background: var(--c-bg);
+  border-color: color-mix(in oklab, var(--c-ink) 14%, var(--c-rule));
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+}
+.chaya-v2 .v2-side-action:active { transform: scale(0.99); }
+.chaya-v2 .v2-side-action svg { width: 16px; height: 16px; flex: 0 0 auto; color: var(--c-ink-3); transition: color 140ms var(--c-ease); }
+.chaya-v2 .v2-side-action:hover svg { color: var(--c-ink-2); }
+.chaya-v2 .v2-side-action span { flex: 1 1 auto; text-align: left; font-size: 13.5px; font-weight: 500; }
+.chaya-v2 .v2-side-action kbd { font-size: 10.5px; font-family: var(--c-mono); color: var(--c-ink-4); background: var(--c-bg); border: 1px solid var(--c-rule); border-radius: var(--c-radius-xs); padding: 1px 6px; }
+/* First section right under the action button doesn't need its full top inset. */
+.chaya-v2 .v2-side-action + .v2-sec { padding-top: 6px; }
+
 .chaya-v2 .v2-sec {
   flex: 0 0 auto; padding: 18px 18px 6px;
   font-size: 11px; color: var(--c-ink-4); font-weight: 400;
@@ -727,17 +805,24 @@ html[data-electron-platform="darwin"] .chaya-v2 .v2-shell-toggle { left: 80px; }
 }
 .chaya-v2 .v2-input::placeholder { color: var(--c-ink-4); }
 
+/* Recent chats fill the chat panel and scroll under the pinned Agents header. */
 .chaya-v2 .v2-recents { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; scrollbar-gutter: stable; }
 .chaya-v2 .v2-recents::-webkit-scrollbar { width: 8px; }
 .chaya-v2 .v2-recents::-webkit-scrollbar-thumb { background: transparent; border-radius: var(--c-radius-xs); }
 .chaya-v2 .v2-recents:hover::-webkit-scrollbar-thumb { background: var(--c-scrollbar); }
-.chaya-v2 .v2-recents .v2-r { position: relative; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--c-radius-row); font-size: 13px; color: var(--c-ink); cursor: pointer; transition: background 140ms var(--c-ease); min-width: 0; }
+/* Grid mirrors .v2-agents .v2-a (20px icon · title · more) so the leading icons
+   in the Agents and Chats lists sit on the same vertical rail. */
+.chaya-v2 .v2-recents .v2-r { position: relative; display: grid; grid-template-columns: 20px 1fr auto; gap: 10px; align-items: center; padding: 7px 10px; border-radius: var(--c-radius-row); font-size: 13px; color: var(--c-ink); cursor: pointer; transition: background 140ms var(--c-ease); min-width: 0; }
 .chaya-v2 .v2-recents .v2-r:hover { background: var(--c-hover-soft); }
 .chaya-v2 .v2-recents .v2-r.active { background: var(--c-hover); }
-.chaya-v2 .v2-recents .v2-r .v2-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Default session icon — quiet ink, brightens with hover/active like agent rows. */
+.chaya-v2 .v2-recents .v2-r .v2-ic { width: 20px; height: 20px; display: grid; place-items: center; color: var(--c-ink-4); transition: color 140ms var(--c-ease); }
+.chaya-v2 .v2-recents .v2-r:hover .v2-ic,
+.chaya-v2 .v2-recents .v2-r.active .v2-ic { color: var(--c-ink-2); }
+.chaya-v2 .v2-recents .v2-r .v2-ic svg { width: 16px; height: 16px; }
+.chaya-v2 .v2-recents .v2-r .v2-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chaya-v2 .v2-recents .v2-r .v2-more { flex: 0 0 auto; opacity: 0; color: var(--c-ink-3); padding: 0 2px; line-height: 1; font-size: 16px; transition: opacity 140ms var(--c-ease); }
 .chaya-v2 .v2-recents .v2-r:hover .v2-more { opacity: 1; }
-.chaya-v2 .v2-recents .v2-r.create::before { content: ''; flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%; background: var(--c-ink-2); opacity: 0.5; }
 
 /* Sidebar bottom — user pill. Sits in the sidebar's natural flow (no
  * border-top divider, the sidebar tone already separates it from main).
@@ -788,7 +873,10 @@ html[data-electron-platform="darwin"] .chaya-v2 .v2-shell-toggle { left: 80px; }
      比之前 8% 的"晕"提一档但仍是极细 1px，不抢戏；半径 lg 保持"刀切纸"硬朗。 */
   border: 1px solid color-mix(in oklab, var(--c-ink) 28%, transparent);
   border-radius: var(--c-radius-lg);
-  margin: 4px 6px 6px 218px;   /* 留出左侧 212px 统一侧栏 + 6px 间隙 */
+  /* Card sits high — its top-tab bar lives in the title strip alongside the
+     macOS lights (right of them, the card starts at x≈218). The sidebar lifts
+     its pin row to the same strip so left + right top bars align, no dead band. */
+  margin: 4px 6px 6px 296px;   /* 留出左侧 290px 统一侧栏 + 6px 间隙 */
   overflow: hidden;
   /* 阴影：inset 顶高光 + 短焦贴底 + 中焦微浮，所有过渡都在 ≤16px 内收住，
      避免长焦糊化边缘。 */
@@ -797,7 +885,7 @@ html[data-electron-platform="darwin"] .chaya-v2 .v2-shell-toggle { left: 80px; }
     0 1px 3px -1px color-mix(in oklab, var(--c-ink) 8%, transparent),
     0 6px 16px -8px color-mix(in oklab, var(--c-ink) 12%, transparent);
   position: relative;
-  height: calc(100% - 10px);
+  height: calc(100% - 10px);   /* 4px top + 6px bottom margin */
   transition: margin-left var(--m-panel) var(--ease-emphasis);
   contain: layout style;
 }
@@ -806,6 +894,9 @@ html[data-electron-platform="darwin"] .chaya-v2 .v2-shell-toggle { left: 80px; }
 .chaya-v2 .v2-main > .v2-view-frame { animation: v2-view-in var(--m-view) var(--ease-emphasis) both; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 @keyframes v2-view-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .chaya-v2 .v2-main > .v2-view-frame { animation: none; } }
+/* keep-alive view slot：常驻挂载、用 hidden 切显隐（切换瞬时，无重挂）。 */
+.chaya-v2 .v2-view-slot { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+.chaya-v2 .v2-view-slot[hidden] { display: none; }
 /* When sidebar collapses, the card expands left to occupy the freed space
  * while keeping a small margin from the window edge. */
 /* When the sidebar collapses, shrink the card to a 3:4 portrait and center
@@ -838,18 +929,40 @@ html[data-electron-platform="darwin"] .chaya-v2 .v2-shell-toggle { left: 80px; }
   background: transparent;
   transition: padding-left 240ms var(--c-ease);
 }
-/* Collapsed card is centered + narrow (3:4), so the shell-toggle (fixed at
- * window-left) usually sits far from the card and no extra padding is
- * needed inside the topbar. We keep a small bump just so the crumb doesn't
- * jam the card's rounded corner. */
-/* The card fills the window when collapsed, so its topbar starts at x≈6.
- * Push the crumb past the toggle (left:14 + w:32 = 46) on non-mac, and
- * past the lights + toggle (~112) on macOS. */
-/* 展开时折叠钮(mac 80–112 / 非 mac 14–46)落在侧栏上、不压卡片，顶栏无需留白。
-   折叠后侧栏滑出、卡片左移到 x≈6，折叠钮压在卡片起始处，故仅折叠态给顶栏左留白，
-   让首个 tab 避开折叠钮。 */
-.chaya-v2 .v2-app.collapsed .v2-topbar { padding-left: 52px; }
-html[data-electron-platform="darwin"] .chaya-v2 .v2-app.collapsed .v2-topbar { padding-left: 118px; }
+/* Collapsed: the card fills the window (starts at x≈6) and the top-tab bar now
+ * carries the expand button + pinned tabs on its left rail. Pad the bar left so
+ * that rail clears the macOS traffic lights (which end ~x=78). Non-mac has no
+ * lights over the card, so only a small inset keeps it off the rounded corner. */
+.chaya-v2 .v2-app.collapsed .v2-topbar { padding-left: 10px; }
+html[data-electron-platform="darwin"] .chaya-v2 .v2-app.collapsed .v2-topbar { padding-left: 86px; }
+/* Left rail inside the top-tab bar — only present when the sidebar is collapsed.
+ * Mirrors the sidebar's pin row: collapse/expand toggle first, then pinned tabs,
+ * with a hairline divider separating it from the tab strip. */
+/* Always mounted; hidden (zero-width, off to the left) until the sidebar
+ * collapses, then slides + grows into place. The sidebar slides out over the
+ * same duration/easing so the pins read as gliding from the rail into the bar. */
+.chaya-v2 .v2-topbar-rail {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 4px;
+  max-width: 0; opacity: 0; transform: translateX(-12px);
+  margin-right: 0; padding-right: 0;
+  border-right: 1px solid transparent;
+  overflow: hidden; pointer-events: none;
+  transition:
+    max-width var(--m-panel) var(--ease-emphasis),
+    transform var(--m-panel) var(--ease-emphasis),
+    opacity calc(var(--m-panel) - 140ms) var(--c-ease),
+    margin-right var(--m-panel) var(--ease-emphasis),
+    padding-right var(--m-panel) var(--ease-emphasis);
+}
+.chaya-v2 .v2-app.collapsed .v2-topbar-rail {
+  max-width: 60vw; opacity: 1; transform: translateX(0);
+  margin-right: 4px; padding-right: 8px;
+  border-right-color: color-mix(in oklab, var(--c-ink) 7%, transparent);
+  pointer-events: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chaya-v2 .v2-topbar-rail { transition: none; }
+}
 /* Whisper-thin header rule — inset 14px on both sides so it doesn't run all
  * the way into the card's rounded corners; uses ::after on the topbar so we
  * don't touch the card's own border. */
@@ -872,7 +985,7 @@ html[data-electron-platform="darwin"] .chaya-v2 .v2-app.collapsed .v2-topbar { p
 .chaya-v2 .v2-tbtn:active { transform: translateY(0.5px); }
 .chaya-v2 .v2-tbtn svg { width: 16px; height: 16px; }
 
-.chaya-v2 .v2-stream { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 0 220px; }
+.chaya-v2 .v2-stream { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 0 140px; }
 .chaya-v2 .v2-stream::-webkit-scrollbar { width: 10px; }
 .chaya-v2 .v2-stream::-webkit-scrollbar-thumb { background: transparent; border-radius: var(--c-radius-sm); }
 .chaya-v2 .v2-stream:hover::-webkit-scrollbar-thumb { background: var(--c-scrollbar); }
@@ -881,12 +994,12 @@ html[data-electron-platform="darwin"] .chaya-v2 .v2-app.collapsed .v2-topbar { p
 html[data-electron="true"] .chaya-v2 .v2-msgs { max-width: 920px; }
 /* Avatar-less layout: the message body fills the row, role differentiation
  * comes from the user's tinted bubble vs. the assistant's flat prose. */
-.chaya-v2 .v2-msg { display: flex; margin-bottom: 14px; animation: v2-fadeUp 220ms var(--c-ease) both; }
+.chaya-v2 .v2-msg { display: flex; margin-bottom: 11px; animation: v2-fadeUp 220ms var(--c-ease) both; }
 .chaya-v2 .v2-msg.user { justify-content: flex-end; }
 .chaya-v2 .v2-msg.assistant { justify-content: flex-start; }
 .chaya-v2 .v2-msg .v2-body { min-width: 0; max-width: 100%; }
 .chaya-v2 .v2-msg.user .v2-body { max-width: 78%; }
-.chaya-v2 .v2-msg .v2-body p { font-size: 14px; color: var(--c-ink); line-height: 1.6; margin-bottom: 4px; }
+.chaya-v2 .v2-msg .v2-body p { font-size: 14px; color: var(--c-ink); line-height: 1.52; margin-bottom: 4px; }
 .chaya-v2 .v2-msg .v2-body p:last-child { margin-bottom: 0; }
 
 /* ===== Markdown surface (.v2-md) — typography for assistant prose ===== */
@@ -1325,33 +1438,40 @@ html[data-electron="true"] .chaya-v2 .v2-msgs { max-width: 920px; }
 
 /* ===== composer ===== */
 .chaya-v2 .v2-composer-wrap { position: absolute; left: 0; right: 0; bottom: 14px; padding: 0 24px; display: flex; justify-content: center; pointer-events: none; }
-.chaya-v2 .v2-composer { width: 100%; max-width: 740px; pointer-events: auto; }
+.chaya-v2 .v2-composer { width: 100%; max-width: 740px; pointer-events: auto; display: flex; flex-direction: column; align-items: stretch; }
 /* Keep the composer aligned with the wider desktop chat column (+20px gutter). */
 html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 /* `overflow: hidden` was clipping the cbar-inner's drop shadow into a hard
  * rectangle visible at the bottom edge. `clip-path` with a negative inset
  * lets the shadow breathe sideways/upward while we still clip vertically
  * for the collapse animation. */
-.chaya-v2 .v2-cbar {
-  max-height: 0; opacity: 0;
-  overflow: hidden;
-  clip-path: inset(-32px -32px 0 -32px);
-  transition: max-height 260ms var(--c-ease), opacity 220ms var(--c-ease), margin 220ms var(--c-ease);
+/* ===== create-mode, arranged INSIDE the composer box =====
+   The old design floated a separate bordered card above the input box. Now the
+   config chips live in the box's bottom toolbar row, reference images sit at the
+   top of the box, and the style/aspect/count picker opens as a popover above the
+   box (anchored to .v2-box, which is position:relative). One box, no second card. */
+
+/* Config chips cluster, trailing the mode pills in the toolbar row. A hair of
+   left padding separates it from the pills; it wraps with the rest of .v2-l. */
+.chaya-v2 .v2-create-chips { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; padding-left: 2px; }
+/* "no agent persona" note — quiet, informational, reveals its full reasoning on
+   hover. Never competes with the chips for attention. */
+.chaya-v2 .v2-create-note { display: inline-flex; align-items: center; font-size: 11px; color: var(--c-ink-4); letter-spacing: 0.01em; cursor: help; padding: 0 2px; white-space: nowrap; }
+
+/* The style / aspect / count / negative picker, floated above the box like the
+   @域 mention popover. Reuses .v2-panel internals but drops its divider/offset. */
+.chaya-v2 .v2-create-pop {
+  /* Anchored to .v2-box, opens upward. The chat/创作 mode pill sits in the 8px
+     gap directly above the box, so a +8px offset lands the panel right on top of
+     it. Clear the pill stack (~30px tall) so the panel floats above it instead. */
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 44px);
+  background: var(--c-bg); border: 1px solid var(--c-rule);
+  border-radius: var(--c-radius-xl); box-shadow: var(--c-shadow-card);
+  padding: 13px 15px; z-index: 30;
+  max-height: min(54vh, 420px); overflow-y: auto;
+  animation: v2-popUp 200ms var(--c-ease) both;
 }
-.chaya-v2 .v2-composer[data-mode="create"] .v2-cbar { max-height: 420px; opacity: 1; margin-bottom: 8px; }
-/* Collapsed cbar: same component, just compressed to header height so the
- * fold/unfold toggle stays clickable. */
-.chaya-v2 .v2-composer.cbar-collapsed .v2-cbar { max-height: 44px; opacity: 1; margin-bottom: 6px; }
-.chaya-v2 .v2-composer.cbar-collapsed .v2-cbar .v2-cbar-inner { padding: 6px 12px; }
-.chaya-v2 .v2-composer.cbar-collapsed .v2-cbar .v2-hd { margin-bottom: 0; }
-.chaya-v2 .v2-composer.cbar-collapsed .v2-cbar .v2-chips,
-.chaya-v2 .v2-composer.cbar-collapsed .v2-cbar .v2-refs { display: none; }
-.chaya-v2 .v2-composer.cbar-collapsed .v2-cbar > .v2-cbar-inner > :nth-child(n+3) { display: none; }
-/* When folded, drop the verbose helper text/warning and surface the live config
- * as spec chips — identical look to the sent CreateSpecCard. */
-.chaya-v2 .v2-composer.cbar-collapsed .v2-cbar .v2-hd .v2-h,
-.chaya-v2 .v2-composer.cbar-collapsed .v2-cbar .v2-hd .v2-h-warn { display: none; }
-.chaya-v2 .v2-cbar-summary { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+.chaya-v2 .v2-create-pop .v2-panel { margin-top: 0; border-top: none; padding-top: 0; animation: none; }
 
 /* ===== create spec card (user-side message in the chat stream) ===== */
 .chaya-v2 .v2-bubble.v2-spec { padding: 8px 14px; }
@@ -1478,43 +1598,42 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
   transition: background 140ms var(--c-ease), transform 120ms var(--c-ease);
 }
 .chaya-v2 .v2-imgpreview-dl:hover { background: #fff; transform: translateY(-1px); }
-/* Same Codex-style card as .v2-box — hairline border + a single soft drop.
- * Triple-stack shadows were what made the clipped bottom edge look "square"
- * and harsh against the page. */
-.chaya-v2 .v2-cbar-inner {
-  background: var(--c-bg);
-  border-radius: var(--c-radius-xl);
-  border: 1px solid var(--c-rule);
-  box-shadow: var(--c-shadow-card);
-  padding: 12px 14px;
-}
-.chaya-v2 .v2-cbar .v2-h-warn { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; background: var(--c-danger-bg); color: var(--c-danger); font-size: 11px; letter-spacing: 0.02em; }
-.chaya-v2 .v2-cbar .v2-hd { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-.chaya-v2 .v2-cbar .v2-hd .v2-t { font-size: 13px; font-weight: 600; color: var(--c-ink); }
-.chaya-v2 .v2-cbar .v2-hd .v2-h { font-size: 12px; color: var(--c-ink-3); }
-.chaya-v2 .v2-cbar .v2-hd .v2-x { width: 22px; height: 22px; border-radius: var(--c-radius-sm); display: grid; place-items: center; color: var(--c-ink-3); cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
-.chaya-v2 .v2-cbar .v2-hd .v2-x:hover { background: var(--c-hover); color: var(--c-ink); }
-/* Expand/collapse toggle — a chevron that rotates between down (展开 → 收起)
-   and right (收起 → 展开). margin-left:auto pushes it + the ✕ to the right. */
-.chaya-v2 .v2-cbar .v2-hd .v2-cbar-toggle { margin-left: auto; width: 24px; height: 24px; border-radius: var(--c-radius-sm); display: grid; place-items: center; color: var(--c-ink-4); cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
-.chaya-v2 .v2-cbar .v2-hd .v2-cbar-toggle:hover { background: var(--c-hover); color: var(--c-ink); }
-.chaya-v2 .v2-cbar .v2-hd .v2-cbar-toggle svg { width: 16px; height: 16px; transform: rotate(-90deg); transition: transform 200ms var(--c-ease); }
-.chaya-v2 .v2-cbar .v2-hd .v2-cbar-toggle.open svg { transform: rotate(0deg); }
-.chaya-v2 .v2-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+/* Config chip — pill button carrying a label + current value (风格/比例/数量/负面). */
 .chaya-v2 .v2-chip { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 12px; border-radius: var(--c-radius-pill); background: var(--c-surface); color: var(--c-ink); font-size: 12px; cursor: pointer; transition: background 140ms var(--c-ease); }
 .chaya-v2 .v2-chip:hover { background: var(--c-hover); }
 .chaya-v2 .v2-chip .v2-k { color: var(--c-ink-3); font-size: 11px; }
 .chaya-v2 .v2-chip.empty { color: var(--c-ink-3); }
-.chaya-v2 .v2-refs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-.chaya-v2 .v2-ref { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: center; padding: 6px 10px 6px 6px; background: var(--c-hover-soft); border-radius: var(--c-radius-lg); min-width: 280px; }
-.chaya-v2 .v2-ref:hover { background: var(--c-surface); }
-.chaya-v2 .v2-ref .v2-th { width: 64px; height: 64px; border-radius: var(--c-radius-md); background: var(--c-hover); display: grid; place-items: center; color: var(--c-ink-3); font-size: 11px; font-weight: 600; overflow: hidden; }
+
+/* Reference images, prototype-aligned: a strip of small square thumbnails with
+   a circular remove button tucked into the top-right corner. Each carries a
+   slim optional directive caption beneath it (our per-ref instruction) — quiet
+   enough that blank ones read as plain thumbnails like the prototype. */
+.chaya-v2 .v2-refs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.chaya-v2 .v2-ref { display: flex; flex-direction: column; gap: 4px; width: 92px; }
+.chaya-v2 .v2-ref .v2-th { position: relative; width: 92px; height: 92px; border-radius: var(--c-radius-md); border: 1px solid var(--c-rule); background: var(--c-surface); overflow: hidden; }
 .chaya-v2 .v2-ref .v2-th img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
-.chaya-v2 .v2-ref input.v2-dir { font-size: 12px; color: var(--c-ink-2); width: 100%; padding: 4px 0; }
+.chaya-v2 .v2-ref .v2-rm {
+  position: absolute; top: -6px; right: -6px;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--c-ink); color: var(--c-bg);
+  display: grid; place-items: center; font-size: 10px; line-height: 1; cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.22);
+  opacity: 0; transform: scale(0.8);
+  transition: opacity 140ms var(--c-ease), transform 140ms var(--c-ease-spring), background 140ms var(--c-ease);
+}
+.chaya-v2 .v2-ref:hover .v2-rm, .chaya-v2 .v2-ref .v2-th:focus-within .v2-rm { opacity: 1; transform: scale(1); }
+.chaya-v2 .v2-ref .v2-rm:hover { background: var(--c-ink-deep); }
+.chaya-v2 .v2-ref input.v2-dir {
+  width: 92px; font-size: 11px; color: var(--c-ink-2);
+  padding: 3px 7px; border-radius: var(--c-radius-sm);
+  background: var(--c-hover-soft); border: 1px solid transparent;
+  transition: background 140ms var(--c-ease), border-color 140ms var(--c-ease);
+}
 .chaya-v2 .v2-ref input.v2-dir::placeholder { color: var(--c-ink-4); font-style: italic; }
-.chaya-v2 .v2-ref .v2-x { color: var(--c-ink-4); cursor: pointer; padding: 0 4px; font-size: 12px; align-self: start; padding-top: 4px; transition: color 140ms var(--c-ease); }
-.chaya-v2 .v2-ref .v2-x:hover { color: var(--c-ink); }
-.chaya-v2 .v2-ref.add { justify-content: center; border: 1px dashed #d8d8d8; background: transparent; min-width: 130px; min-height: 76px; color: var(--c-ink-3); cursor: pointer; font-size: 12px; padding: 6px 12px; transition: border-color 140ms var(--c-ease), color 140ms var(--c-ease), background 140ms var(--c-ease); display: grid; place-items: center; }
+.chaya-v2 .v2-ref input.v2-dir:hover { background: var(--c-surface); }
+.chaya-v2 .v2-ref input.v2-dir:focus { outline: none; background: var(--c-bg); border-color: color-mix(in oklab, var(--c-ink) 20%, var(--c-rule)); }
+/* "add" tile matches the thumbnail footprint — a dashed square that invites a drop. */
+.chaya-v2 .v2-ref.add { width: 92px; height: 92px; display: grid; place-items: center; text-align: center; line-height: 1.3; border: 1px dashed color-mix(in oklab, var(--c-ink-4) 35%, var(--c-rule)); border-radius: var(--c-radius-md); background: transparent; color: var(--c-ink-3); cursor: pointer; font-size: 11px; padding: 6px; transition: border-color 140ms var(--c-ease), color 140ms var(--c-ease), background 140ms var(--c-ease); }
 .chaya-v2 .v2-ref.add:hover { border-color: var(--c-ink-2); color: var(--c-ink); background: var(--c-hover-soft); }
 
 /* ===== chip / inline-expand panel inside cbar ===== */
@@ -1750,14 +1869,31 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
   width: 2px; border-radius: 1px;
   background: color-mix(in oklab, var(--c-ink) 72%, transparent);
 }
-.chaya-v2 .v2-settings-pane { padding: 24px 30px 28px; overflow-y: auto; min-height: 0; }
+.chaya-v2 .v2-settings-pane { padding: 24px 30px 28px; overflow-y: auto; min-height: 0; scroll-behavior: smooth; }
+/* Single-page settings: every pane is an anchored section. The nav scrolls here
+   (scroll-margin clears the pane's top padding) and a hairline divides sections. */
+.chaya-v2 .v2-settings-sec { scroll-margin-top: 18px; }
+.chaya-v2 .v2-settings-sec + .v2-settings-sec { margin-top: 30px; padding-top: 28px; border-top: 1px solid var(--c-rule); }
+/* Level 1 — the section title (account / appearance / models …). Icon + 17px
+   so it clearly outranks the panes' inner sub-labels (1.26 ratio over 13.5px). */
+.chaya-v2 .v2-settings-sec-hd { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+.chaya-v2 .v2-settings-sec-hd .ic { display: inline-flex; flex: 0 0 auto; color: var(--c-ink-2); }
+.chaya-v2 .v2-settings-sec-hd .ic svg { width: 18px; height: 18px; }
+.chaya-v2 .v2-settings-sec-hd .t { font-size: 17px; font-weight: 650; line-height: 1.2; letter-spacing: -0.015em; color: var(--c-ink); text-transform: capitalize; }
+@media (prefers-reduced-motion: reduce) { .chaya-v2 .v2-settings-pane { scroll-behavior: auto; } }
 
-.chaya-v2 .v2-set-sec { margin-bottom: 30px; }
+.chaya-v2 .v2-set-sec { margin-bottom: 26px; }
 .chaya-v2 .v2-set-sec:last-child { margin-bottom: 0; }
-.chaya-v2 .v2-set-sec-hd { margin-bottom: 6px; display: flex; align-items: flex-start; gap: 14px; }
+.chaya-v2 .v2-set-sec-hd { margin-bottom: 8px; display: flex; align-items: flex-start; gap: 14px; }
 .chaya-v2 .v2-set-sec-hd > div:first-child { flex: 1; min-width: 0; }
-.chaya-v2 .v2-set-sec-hd .t { font-size: 15px; font-weight: 600; color: var(--c-ink); letter-spacing: -0.01em; }
+/* Level 2 — inner sub-label under the section title. Demoted to 13.5px so it
+   reads as a grouping, not a competing heading. */
+.chaya-v2 .v2-set-sec-hd .t { font-size: 13.5px; font-weight: 600; color: var(--c-ink); letter-spacing: -0.005em; }
 .chaya-v2 .v2-set-sec-hd .h { font-size: 12px; color: var(--c-ink-4); margin-top: 3px; line-height: 1.5; }
+/* Title-less section (title now lives in the pane-level header): description on
+   the left, action on the right, vertically centered. */
+.chaya-v2 .v2-set-sec-hd.bare { align-items: center; margin-bottom: 14px; }
+.chaya-v2 .v2-set-sec-hd.bare .h { margin-top: 0; }
 .chaya-v2 .v2-set-sec-trail { flex-shrink: 0; }
 .chaya-v2 .v2-set-group { margin-bottom: 14px; }
 .chaya-v2 .v2-set-group-hd { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--c-ink-3); padding: 4px 4px 8px; }
@@ -2307,7 +2443,10 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-row .v2-ib:active { transform: scale(0.92); }
 .chaya-v2 .v2-row .v2-ib svg { width: 18px; height: 18px; }
 
-.chaya-v2 .v2-modepills { position: relative; display: inline-flex; padding: 2px; background: var(--c-surface); border-radius: var(--c-radius-pill); margin-left: 6px; }
+.chaya-v2 .v2-modepills { position: relative; display: inline-flex; padding: 2px; background: var(--c-surface); border-radius: var(--c-radius-pill); }
+/* Above the box (prototype layout): a standalone toggle hugging the left edge,
+   with a little breathing room before the box. */
+.chaya-v2 .v2-composer > .v2-modepills { align-self: flex-start; margin: 0 0 8px 4px; }
 .chaya-v2 .v2-modepills button { position: relative; z-index: 1; padding: 5px 14px; border-radius: var(--c-radius-pill); cursor: pointer; color: var(--c-ink-3); font-size: 12px; transition: color 140ms var(--c-ease); }
 .chaya-v2 .v2-modepills button.on { color: var(--c-ink); font-weight: 500; }
 .chaya-v2 .v2-modepills .v2-indicator { position: absolute; top: 2px; bottom: 2px; background: var(--c-bg); border-radius: var(--c-radius-pill); box-shadow: 0 1px 2px rgba(0,0,0,0.06); transition: left 240ms var(--c-ease-spring), width 240ms var(--c-ease-spring); z-index: 0; }
@@ -2361,6 +2500,18 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 /* 折叠左栏 → 列宽收到 0、间距归零，右侧画布吃满整宽。 */
 .chaya-v2 .v2-kb-workspace.tree-collapsed { grid-template-columns: 0px 1fr; gap: 0; }
 .chaya-v2 .v2-kb-workspace.tree-collapsed .v2-kb-tree { transform: translate3d(-12px, 0, 0); opacity: 0; pointer-events: none; }
+/* Embedded：知识域树已 portal 进主侧栏，画布吃满整宽（无左列）。 */
+.chaya-v2 .v2-kb-workspace.embedded { grid-template-columns: 1fr; gap: 0; }
+
+/* 主侧栏里承接 KB 树的槽位：填满列表区，由树自身滚动（不再嵌套外层滚动）。 */
+.chaya-v2 .v2-kb-tree-slot { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* 槽位是 keep-alive（非 wiki 时带 [hidden] 常驻在侧栏里）：上面的 display:flex 会压过
+   UA 的 [hidden]{display:none}，导致切到 CLI/画廊后知识库的树仍显示在侧栏下方。显式让
+   [hidden] 真隐藏。 */
+.chaya-v2 .v2-kb-tree-slot[hidden] { display: none; }
+/* 只有「真正显示着」的槽位（wiki 激活）才让侧栏收紧；隐藏态不要影响其它 nav 的侧栏。 */
+.chaya-v2 .v2-side-list:has(.v2-kb-tree-slot:not([hidden])) { overflow: hidden; padding-bottom: 0; }
+.chaya-v2 .v2-kb-tree.embedded { flex: 1 1 auto; min-height: 0; }
 /* 画布外壳：承接 grid 单元，画布填满；折叠态下左上角浮出「展开」把手。 */
 .chaya-v2 .v2-kb-canvaswrap { position: relative; min-width: 0; min-height: 0; display: flex; }
 .chaya-v2 .v2-kb-canvaswrap > .v2-kb-canvas { flex: 1 1 auto; }
@@ -3279,11 +3430,13 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-la-pick:active { transform: scale(0.985); }
 
 /* ---- 标签栏（类浏览器）：并入顶栏一行，下划线指示激活，坐在顶栏底线上 ---- */
-/* Tab 条吃满卡片宽度：去掉 topbar 默认的 12px 左右 padding，让首/末 tab
-   直接坐到卡片内边缘。卡片自带 overflow:hidden + 14px 外圆角负责裁切超出
-   曲线的部分；下面再把首/末 tab 的 outer 倒角对齐到同样 14px，避免裁切
-   出锯齿状阴影边缘。 */
-.chaya-v2 .v2-topbar-tabs { padding: 0; }
+/* Tab 条吃满卡片宽度：去掉 topbar 默认的 12px 左右 padding + 8px flex gap，
+   让首 tab 直接坐到卡片左内边缘。否则即便侧栏展开（左 rail 收成 0 宽），
+   topbar 的 gap 仍会在 rail 与 tab 条之间留 8px，使首 tab 离卡片边线一道缝。
+   卡片自带 overflow:hidden + 外圆角负责裁切超出曲线的部分；下面再把首 tab
+   的 outer 倒角对齐到卡片曲率，避免"尖角顶在曲面边缘"。
+   折叠态下 rail 自带 margin-right + border-right 作分隔，无须依赖此 gap。 */
+.chaya-v2 .v2-topbar-tabs { padding: 0; gap: 0; }
 /* 顶栏的 .v2-tb 是 z:10 的拖拽区，会吞掉 mousedown；标签须 no-drag + 抬到其之上，
    否则只有底部 2px 能点中（拖拽区盖住了上半部分）。 */
 .chaya-v2 .v2-la-tabs { flex: 1 1 auto; display: flex; align-items: stretch; height: 100%; min-width: 0; overflow-x: auto; scrollbar-width: none; position: relative; z-index: 11; -webkit-app-region: no-drag; }
@@ -3334,7 +3487,7 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
    组色用得克制，墨字始终占主体（calm 的核心：颜色是信号，不是装饰）。 */
 .chaya-v2 .v2-la-group { display: inline-flex; align-items: stretch; flex: 0 0 auto;
   height: calc(100% - 8px); align-self: center;   /* 不撑破 36px 顶栏 */
-  border-radius: var(--c-radius-md); margin: 0 3px; padding: 0 2px;
+  border-radius: var(--c-radius-md); margin: 0 1px; padding: 0 2px;
   overflow: hidden;   /* 内部 tab hover 底色不再溢出圆角 */
   background: color-mix(in oklab, var(--g) 10%, var(--c-bg));
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--g) 36%, transparent);
@@ -3370,7 +3523,9 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-la-group.dropbefore { box-shadow: inset 2px 0 0 0 var(--c-accent), inset 0 0 0 1px color-mix(in oklab, var(--g) 36%, transparent); }
 .chaya-v2 .v2-la-tabs-end { flex: 1 1 auto; min-width: 24px; align-self: stretch; }
 /* inline 模式（被 TopTabs 容纳时）：不要撑满，否则会把后面的 chat/gallery tab 推走。 */
-.chaya-v2 .v2-la-tabs-end.inline { flex: 0 0 8px; min-width: 8px; }
+/* inline（顶栏）模式：本地段与右侧 chat tab 之间不再留 8px 段间隙，全部 tab 一条
+   紧挨排列（不按类型分段）；保留 2px 极小拖放落点，与相邻 tab 的 gap 一致。 */
+.chaya-v2 .v2-la-tabs-end.inline { flex: 0 0 2px; min-width: 2px; }
 .chaya-v2 .v2-la-tabs-end.dropbefore { box-shadow: inset 2px 0 0 0 var(--c-accent); }
 
 /* ===== 全局 TopTabs：Local / Chat / Agent对话 / 画廊 / 知识库 并到一行 ===== */
@@ -3394,12 +3549,35 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
   border-radius: var(--c-radius-sm) var(--c-radius-sm) 0 0;
 }
 .chaya-v2 .v2-toptabs > .v2-la-tab:first-child {
-  /* Match the card's outer 14px curve so the chip's outer corner blends into
-     the card edge instead of being clipped by overflow:hidden. The leftmost
-     tab is always at the card's left edge (flex flows L→R after removing
-     topbar padding), so this rule applies cleanly every time. */
-  border-top-left-radius: var(--c-radius-xl);
+  /* Match the card's OWN corner radius (--c-radius-lg, 10px) so the chip's outer
+     corner fills the card's rounded corner exactly — no sliver between the card's
+     clip arc and the chip's arc. The leftmost tab now sits flush at the card's
+     left edge (topbar padding + gap both zeroed above), so this lands cleanly. */
+  border-top-left-radius: var(--c-radius-lg);
 }
+/* Active top-level tab = a notebook folder tab. Page-colored fill, a hairline
+   ring on top + the two sides, and an OPEN bottom that merges into the page
+   below (the tab paints over the topbar's baseline rule, z:11 > ::after). This
+   replaces the old single ink underline — it reads like a tab in a binder
+   rather than a button with a line under it, which is calmer and more
+   "handmade notebook". Group + pinned tabs keep their own active treatment. */
+.chaya-v2 .v2-toptabs > .v2-la-tab.active:not(.pinned) {
+  background: var(--c-bg);
+  box-shadow:
+    inset 0 1px 0 0 var(--c-rule),
+    inset 1px 0 0 0 var(--c-rule),
+    inset -1px 0 0 0 var(--c-rule);
+}
+/* Dimmed tab = an active *pinned* conversation surfaced in the bar. Keep the
+   folder-tab shape but render it grayer than a normal tab so it reads as
+   "pinned, opened" (its real home is the left rail chip). */
+.chaya-v2 .v2-toptabs > .v2-la-tab.dim { color: var(--c-ink-4); }
+.chaya-v2 .v2-toptabs > .v2-la-tab.dim .ico { opacity: 0.6; }
+.chaya-v2 .v2-toptabs > .v2-la-tab.dim .sess { color: var(--c-ink-4); }
+.chaya-v2 .v2-toptabs > .v2-la-tab.dim.active:not(.pinned) {
+  background: color-mix(in oklab, var(--c-bg) 64%, var(--c-sidebar));
+}
+.chaya-v2 .v2-toptabs > .v2-la-tab.dim.active .sess { color: var(--c-ink-3); }
 /* Right edge is intentionally NOT pinned to xl. The sibling v2-grow spacer
    absorbs trailing space, so the visual "last tab" almost never sits flush
    against the card's right edge — pinning it to 14px would float a big
@@ -3586,7 +3764,15 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 
 /* CLI 是信息稀疏、低关注度的对话：整体比主聊天更紧凑（字号小、行距密、留白少）。
    入场缓慢但短促——4px 起浮、200ms 出，安静地"落下"。 */
-.chaya-v2 .v2-la-turn { display: flex; margin: 0 0 14px; animation: v2-la-turn-in 200ms var(--c-ease) both; }
+.chaya-v2 .v2-la-turn {
+  display: flex; margin: 0 0 14px;
+  animation: v2-la-turn-in 200ms var(--c-ease) both;
+  /* 只渲染/排版「可见」的轮次（类 wave 的虚拟化）：长会话里离屏轮跳过 layout+paint，
+   * 打开大记录的 session 不再因为一次性排版几千行而卡。auto 让浏览器记住每条真实
+   * 高度，回滚时不跳动；离屏轮的入场动画也一并跳过，减少同时动画数。 */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 56px;
+}
 @keyframes v2-la-turn-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
 /* 用户轮：右对齐气泡，做出「压进纸里」的 letterpress deboss——
@@ -3639,15 +3825,15 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-la-prose .v2-md h2 { font-size: 14.5px; }
 .chaya-v2 .v2-la-prose .v2-md h3 { font-size: 13.5px; }
 .chaya-v2 .v2-la-prose .v2-md h4 { font-size: 13px; }
-/* clear · 可读性：正文文本块限制在舒适测度（~74ch），宽列里不再拉成疲劳长行；
-   代码块 / 表格 / 引用容器不限宽，仍占满列宽。生成留白即「考究、沉静」。 */
+/* CLI 正文全宽：与表格/代码一致占满列宽（之前为可读性限到 ~42em，宽列里 prose 早早换行、
+   右侧留大块空白，与全宽的表格不齐）。窄窗格仍由上面的 max-width:100% 兜底。 */
 .chaya-v2 .v2-la-prose .v2-md > p,
 .chaya-v2 .v2-la-prose .v2-md > ul,
 .chaya-v2 .v2-la-prose .v2-md > ol,
 .chaya-v2 .v2-la-prose .v2-md > h1,
 .chaya-v2 .v2-la-prose .v2-md > h2,
 .chaya-v2 .v2-la-prose .v2-md > h3,
-.chaya-v2 .v2-la-prose .v2-md > h4 { max-width: 42em; }
+.chaya-v2 .v2-la-prose .v2-md > h4 { max-width: none; }
 /* Live stream caret — terminal block cursor at the streaming tail。
    原来用 steps(1) 硬切，眼睛容易跟着跳；改 ease-in-out 平滑呼吸，calm-letterpress。
    宽度也细一档（0.5em → 0.42em），看起来更像「下一笔即将落下」的笔尖。 */
@@ -3713,6 +3899,20 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-la-pane-stream::-webkit-scrollbar { width: 10px; }
 .chaya-v2 .v2-la-pane-stream::-webkit-scrollbar-thumb { background: transparent; border-radius: var(--c-radius-sm); }
 .chaya-v2 .v2-la-pane-stream:hover::-webkit-scrollbar-thumb { background: var(--c-scrollbar); }
+/* 异类窗格（wiki / chat 进分屏）：复用窗格头部，主体填满；内部视图（知识库 / 只读会话）
+   自带滚动与排版，这里只负责框住并隔离。 */
+.chaya-v2 .v2-la-foreign { background: var(--c-bg); }
+.chaya-v2 .v2-la-foreign-body { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.chaya-v2 .v2-la-foreign-body > * { flex: 1 1 auto; min-height: 0; min-width: 0; }
+.chaya-v2 .v2-foreign-stream { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 0 24px; }
+/* 分屏聊天窗格：上方消息流 + 下方极简输入条。 */
+.chaya-v2 .v2-foreign-chat { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.chaya-v2 .v2-foreign-composer { flex: 0 0 auto; display: flex; gap: 8px; align-items: flex-end; padding: 8px 12px 10px; border-top: 1px solid var(--c-rule); }
+.chaya-v2 .v2-foreign-composer textarea { flex: 1 1 auto; resize: none; max-height: 120px; min-height: 22px; font-size: 14px; line-height: 1.5; color: var(--c-ink); background: transparent; }
+.chaya-v2 .v2-foreign-composer textarea::placeholder { color: var(--c-ink-4); }
+.chaya-v2 .v2-foreign-send { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%; background: var(--c-ink); color: var(--c-bg); display: grid; place-items: center; font-size: 15px; cursor: pointer; transition: opacity 140ms var(--c-ease), transform 100ms var(--c-ease); }
+.chaya-v2 .v2-foreign-send:active { transform: scale(0.92); }
+.chaya-v2 .v2-foreign-send:disabled { opacity: 0.4; cursor: default; }
 
 /* Pane 内输入框回到文档流（覆盖全局 .v2-composer-wrap 的 absolute 浮动） */
 .chaya-v2 .v2-la-pane .v2-composer-wrap { position: static; left: auto; right: auto; bottom: auto; padding: 4px 16px 12px; }
@@ -3819,6 +4019,37 @@ body.v2-la-resizing { user-select: none; }
   font-size: 10px; line-height: 1; cursor: pointer; transition: background 120ms var(--c-ease), color 120ms var(--c-ease);
 }
 .chaya-v2 .v2-la-att .x:hover { background: var(--c-danger, #c0392b); color: #fff; }
+
+/* 排队条：AI 处理中累积的待发指令；本轮收尾后自动打包成一轮发出。安静、低饱和，
+   一眼分得清「还没发」——与已发的用户气泡区隔。 */
+.chaya-v2 .v2-la-queue { display: flex; flex-direction: column; gap: 3px; padding: 2px 2px 6px; }
+.chaya-v2 .v2-la-queue-hd {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.01em; color: var(--c-ink-4);
+}
+.chaya-v2 .v2-la-queue-hd .dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+  background: var(--c-accent); animation: v2-la-queue-pulse 1.6s var(--c-ease) infinite;
+}
+@keyframes v2-la-queue-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+.chaya-v2 .v2-la-queue-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 6px 4px 9px; border-radius: var(--c-radius-sm, 8px);
+  background: color-mix(in oklab, var(--c-ink) 4%, var(--c-bg));
+  border: 1px dashed var(--c-rule);
+  font-size: 12px; color: var(--c-ink-2);
+}
+.chaya-v2 .v2-la-queue-row .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-la-queue-row .att { flex-shrink: 0; font-size: 11px; color: var(--c-ink-4); }
+.chaya-v2 .v2-la-queue-row .x {
+  flex-shrink: 0; width: 16px; height: 16px; border-radius: 50%; border: none;
+  background: color-mix(in oklab, var(--c-ink) 8%, transparent); color: var(--c-ink-3);
+  font-size: 10px; line-height: 1; cursor: pointer; transition: background 120ms var(--c-ease), color 120ms var(--c-ease);
+}
+.chaya-v2 .v2-la-queue-row .x:hover { background: var(--c-danger, #c0392b); color: #fff; }
+/* 处理中的「排队」发送键：弱化为描边态，和红色 stop 键并排时不抢戏。 */
+.chaya-v2 .v2-send.queue { background: transparent; color: var(--c-ink-2); border: 1px solid var(--c-rule); }
+.chaya-v2 .v2-send.queue:hover { background: color-mix(in oklab, var(--c-ink) 6%, var(--c-bg)); color: var(--c-ink); }
 
 /* 附件按钮（输入框工具行）：与权限档/模型按钮同款 ghost 风；有附件时点亮 + 角标计数。 */
 .chaya-v2 .v2-la-attach {
@@ -4119,13 +4350,9 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .v2-la-cfgmodal {
   position: relative;
   width: 360px; max-width: 92vw; padding: 0;
-  /* 之前 calc(--glass-alpha + 0.24) 在 subtle 强度下只到 0.80，外加 saturate(150%)
-     会把背后聊天内容的色彩透出来，看着像「半透贴纸」。这是浮层菜单，可读性大于
-     玻璃质感 —— 锁到固定高不透明 (0.97)，仍保留 blur + 轻 saturate 形成"磨砂厚度"，
-     但不再被全局强度档位带偏。 */
-  background: rgba(var(--glass-rgb), 0.97);
-  -webkit-backdrop-filter: blur(14px) saturate(125%);
-  backdrop-filter: blur(14px) saturate(125%);
+  /* 浮层菜单：可读性大于玻璃质感 —— 实色不透明面板，正文锐利、不被背后内容干扰，
+     也省掉 backdrop-filter 的合成层（文字光栅化重采样是发虚的主因之一）。 */
+  background: rgba(var(--glass-rgb), 1);
   border: 1px solid rgba(var(--glass-hairline), calc(var(--glass-hairline-a) + 0.08));
   border-radius: 16px;
   /* 阴影加重一点，强化"浮起来的实体面板"而不是"透出去的玻璃片"。 */
@@ -4369,12 +4596,12 @@ body.v2-la-resizing { user-select: none; }
    · 侧栏：唯一可调项 —— data-glass~="sidebar" 打开，data-glass-i 调透明度。
    =========================================================================== */
 
-/* ---- 输入框（composer / create bar）：常开磨砂，背景近乎不透明 ---- */
+/* ---- 输入框（composer / create bar）：实色纸面（去磨砂）—— 输入文字边缘锐利、不发虚 ---- */
 .chaya-v2 .v2-box,
-.chaya-v2 .v2-cbar-inner {
-  background: rgba(var(--glass-rgb), 0.97);
-  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 1.4)) saturate(140%);
-  backdrop-filter: blur(calc(var(--glass-blur) * 1.4)) saturate(140%);
+.chaya-v2 .v2-create-pop {
+  background: var(--c-bg);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   border-color: rgba(var(--glass-hairline), calc(var(--glass-hairline-a) + 0.10));
   box-shadow:
     0 1px 2px rgba(0, 0, 0, 0.05),
@@ -4389,26 +4616,22 @@ body.v2-la-resizing { user-select: none; }
     inset 0 1px 0 var(--gl-ridge);
 }
 
-/* ---- 菜单 / 抽屉（浮层）：常开磨砂，背景不透明，不被背后内容干扰 ---- */
+/* ---- 菜单 / 抽屉（浮层）：实色表面（去磨砂）—— 浮层文字清晰，不被背后内容干扰 ---- */
 .chaya-v2 .v2-rowmenu {
-  background: rgba(var(--glass-rgb), 0.98);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(130%);
-  backdrop-filter: blur(var(--glass-blur)) saturate(130%);
+  background: rgba(var(--glass-rgb), 1);
   border: 1px solid rgba(var(--glass-hairline), calc(var(--glass-hairline-a) + 0.04));
   box-shadow: var(--gl-shadow-pop), inset 0 1px 0 var(--gl-ridge);
 }
 .chaya-v2 .v2-drawer {
-  background: rgba(var(--glass-rgb), 0.98);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(130%);
-  backdrop-filter: blur(var(--glass-blur)) saturate(130%);
+  background: rgba(var(--glass-rgb), 1);
   box-shadow: var(--gl-shadow-anchor), inset 0 1px 0 var(--gl-ridge);
 }
 
-/* ---- 用户气泡：常开磨砂，更鲜明（更高 alpha + 更重 hairline + 略强 blur）---- */
+/* ---- 用户气泡：实色纸面（去磨砂）—— 文字直接压在不透明纸上，边缘锐利、对比足 ---- */
 .chaya-v2 .v2-msg.user .v2-bubble {
-  background: rgba(var(--glass-rgb), 0.74);
-  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.9)) saturate(145%);
-  backdrop-filter: blur(calc(var(--glass-blur) * 0.9)) saturate(145%);
+  background: var(--c-hover-soft);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   border: 1px solid rgba(var(--glass-hairline), calc(var(--glass-hairline-a) + 0.07));
 }
 
@@ -4441,7 +4664,7 @@ body.v2-la-resizing { user-select: none; }
 /* 系统「减少透明度」：去掉所有模糊，回退实色表面 */
 @media (prefers-reduced-transparency: reduce) {
   .chaya-v2 .v2-box,
-  .chaya-v2 .v2-cbar-inner,
+  .chaya-v2 .v2-create-pop,
   .chaya-v2 .v2-rowmenu,
   .chaya-v2 .v2-drawer,
   .chaya-v2 .v2-msg.user .v2-bubble,
@@ -4450,7 +4673,7 @@ body.v2-la-resizing { user-select: none; }
     -webkit-backdrop-filter: none; backdrop-filter: none;
   }
   .chaya-v2 .v2-box,
-  .chaya-v2 .v2-cbar-inner,
+  .chaya-v2 .v2-create-pop,
   .chaya-v2 .v2-rowmenu,
   .chaya-v2 .v2-drawer { background: var(--c-bg); }
   .chaya-v2 .v2-msg.user .v2-bubble { background: var(--c-hover-soft); }

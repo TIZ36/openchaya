@@ -10,7 +10,8 @@
 const stroke = {
   fill: 'none',
   stroke: 'currentColor',
-  strokeWidth: 1.7,
+  // 1.85 在 24-grid 上、渲染到 13–18px 容器时，描边不会掉到 1px 以下而发灰发虚。
+  strokeWidth: 1.85,
   strokeLinecap: 'round' as const,
   strokeLinejoin: 'round' as const,
 };
@@ -39,6 +40,16 @@ export const IconChat = () => (
     <circle cx="9" cy="12" r="0.75" fill="currentColor" stroke="none" />
     <circle cx="12" cy="12" r="0.75" fill="currentColor" stroke="none" />
     <circle cx="15" cy="12" r="0.75" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+// 茶话：一只冒着热气的茶杯 —— Chaya（茶屋）本命意象，给"茶话"会话一个会心的标记
+export const IconTeahouse = () => (
+  <svg viewBox="0 0 24 24" {...stroke}>
+    <path d="M5 10h11v3.5a5.5 5.5 0 0 1-11 0z" />
+    <path d="M16 11h1.6a2.2 2.2 0 0 1 0 4.4H16" />
+    <path d="M4.5 20.5h12" />
+    <path d="M8.5 3.2c-.7.8-.7 1.6 0 2.4M12 3.2c-.7.8-.7 1.6 0 2.4" strokeWidth={1.4} />
   </svg>
 );
 

@@ -7,12 +7,18 @@
  *
  * 对话用时间线渲染（状态点 + 工具卡片：Edit 代码块 / Bash IN/OUT），配色走 Chaya token。
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { basename, PERM_META, permModesFor, defaultPermMode, type TranscriptMessage, type SlashCommand, type SessionSummary, type PermissionRequest, type QuestionRequest, type TabGroup as TabGroupT, type McpAvailable, type ModelInfo, type Attachment } from './services/localAgent';
-import type { LocalAgentState, LayoutNode, DropSide, Tab } from './useLocalAgent';
-import { TAB_COLORS } from './useLocalAgent';
+import type { LocalAgentState, LayoutNode, DropSide, Tab, QueuedMsg } from './useLocalAgent';
+import { TAB_COLORS, isForeignLeaf } from './useLocalAgent';
+
+// 异类窗格渲染器：由 ClientShell 注入（wiki → 知识库；chat:<sid> → 聊天会话）。分屏树叶子
+// 若是异类 id（见 isForeignLeaf），就走这个渲染器，从而把 CLI 之外的页装进同一分屏。
+export type ForeignPaneRender = (id: string) => React.ReactNode;
+export const ForeignPaneContext = React.createContext<ForeignPaneRender | null>(null);
 import { IconSend, IconAgentCode, IconPlus, IconChevron, IconTrash, IconSkill, IconModel } from './icons';
 import { CodeBlock, PreBlock, mdRehypePlugins } from './codeBlock';
 import { useI18n, t } from '../i18n';
@@ -88,7 +94,7 @@ const MD: React.FC<{ text: string; live?: boolean }> = React.memo(({ text, live 
   </div>
 ));
 
-const PROVIDER_LABELS: Record<string, string> = {
+export const PROVIDER_LABELS: Record<string, string> = {
   claude: 'Claude Code',
   cursor: 'Cursor',
   codex: 'Codex',
@@ -159,33 +165,13 @@ export const LocalAgentTree: React.FC<{
   la: LocalAgentState;
   /** 打开会话/新建时切到 CLI 视图（点击标题进入并触发探测）。 */
   onEnter: () => void;
-  /** 单击 provider 徽标循环切换：claude → codex → gemini。 */
-  onCycleProvider: () => void;
-}> = React.memo(({ la, onEnter, onCycleProvider }) => {
+}> = React.memo(({ la, onEnter }) => {
   const { t: tr } = useI18n();
   const openSess = (cwd: string, sid: string, title: string) => { onEnter(); void la.openSession(cwd, sid, title); };
   const fresh = (cwd: string) => { onEnter(); la.newSession(cwd); };
-  const cur = la.current;
-  const ready = !la.detecting && !!cur?.installed && !!cur?.live;
   return (
     <div className="v2-la-tree">
-      {/* 顶部：CLI 品牌行 + 当前 provider 彩色徽标。
-          点击标题进入并探测；探测中转圈，就绪打勾。单击徽标循环切换 provider。 */}
-      <div className="v2-sec v2-la-brand">
-        <span className="v2-la-brand-ic"><IconTerminal /></span>
-        <span className="v2-la-title" onClick={onEnter}>CLI</span>
-        <button
-          className={`v2-la-badge prov-${la.provider}${ready ? ' ready' : ''}`}
-          onClick={onCycleProvider}
-          title={tr('local.tree.providerBadge', { provider: PROVIDER_LABELS[la.provider] })}
-        >
-          <span className="ic">
-            {la.detecting ? <span className="v2-la-spinner sm" /> : ready ? <span className="ck">✓</span> : null}
-          </span>
-          {PROVIDER_LABELS[la.provider]}
-        </button>
-      </div>
-
+      {/* CLI 品牌行已上移到主导航的 CLI 入口（含 provider 徽标）；这里直接从项目列表开始。 */}
       {/* 项目列表 */}
       <div className="v2-sec v2-la-projsec">
         <span>Projects</span>
@@ -236,34 +222,35 @@ LocalAgentTree.displayName = 'LocalAgentTree';
 type MenuState = { x: number; y: number; kind: 'tab' | 'group'; id: string };
 
 /** 单个标签 chip：点击切主区内容、可拖到右侧平铺、右键唤出分组菜单。 */
-const TabChip: React.FC<{ la: LocalAgentState; t: Tab; grouped?: boolean; onMenu: (e: React.MouseEvent, kind: 'tab', id: string) => void; dropProps?: React.HTMLAttributes<HTMLDivElement>; dropBefore?: boolean; onActivate?: (cwd: string) => void; activeCwd?: string | null }> = ({ la, t, grouped, onMenu, dropProps, dropBefore, onActivate, activeCwd }) => {
+const TabChip: React.FC<{ la: LocalAgentState; t: Tab; grouped?: boolean; dimmed?: boolean; onMenu: (e: React.MouseEvent, kind: 'tab', id: string) => void; dropProps?: React.HTMLAttributes<HTMLDivElement>; dropBefore?: boolean; onActivate?: (cwd: string) => void; activeCwd?: string | null }> = ({ la, t, grouped, dimmed, onMenu, dropProps, dropBefore, onActivate, activeCwd }) => {
   const { t: tr } = useI18n();
   const proj = la.projects.find((p) => p.path === t.cwd);
   // 高亮判断：上层（TopTabs）提供 activeCwd 覆盖时，以它为准 —— 这样当全局 activeId
   // 是一个 chat tab 时，本地 tab 不会还残留 hairline；未提供则回退到 la.activeCwd
   // （非 inline 模式下旧行为）。
   const isActive = (activeCwd === undefined ? la.activeCwd : activeCwd) === t.cwd;
+  // dimmed = 已固定到侧栏、但因当前激活而临时回到顶栏的 tab：灰一些、无关闭键、不可拖。
   return (
     <div
-      className={`v2-la-tab${isActive ? ' active' : ''}${la.gridCwds.includes(t.cwd) ? ' ingrid' : ''}${grouped ? ' grouped' : ''}${dropBefore ? ' dropbefore' : ''}`}
+      className={`v2-la-tab${isActive ? ' active' : ''}${la.gridCwds.includes(t.cwd) ? ' ingrid' : ''}${grouped ? ' grouped' : ''}${dropBefore ? ' dropbefore' : ''}${dimmed ? ' dim' : ''}`}
       onClick={() => { la.setActiveTab(t.cwd); onActivate?.(t.cwd); }}
-      draggable
-      onDragStart={(e) => { e.dataTransfer.setData('text/cwd', t.cwd); e.dataTransfer.effectAllowed = 'copy'; }}
+      draggable={!dimmed}
+      onDragStart={dimmed ? undefined : (e) => { e.dataTransfer.setData('text/cwd', t.cwd); e.dataTransfer.effectAllowed = 'copy'; }}
       onContextMenu={(e) => { e.preventDefault(); onMenu(e, 'tab', t.cwd); }}
       title={`${t.cwd}\n${tr('local.tab.chipHint')}`}
-      {...dropProps}
+      {...(dimmed ? {} : dropProps)}
     >
       <span className="proj">{proj?.name || basename(t.cwd)}</span>
       <span className="sep">/</span>
       <span className="sess">{t.sessionId ? t.title : tr('local.newSession')}</span>
       {t.running && <span className="rundot" title={tr('local.running')} />}
-      <button className="x" title={tr('local.tab.close')} onClick={(e) => { e.stopPropagation(); la.closeTab(t.cwd); }}>✕</button>
+      {!dimmed && <button className="x" title={tr('local.tab.close')} onClick={(e) => { e.stopPropagation(); la.closeTab(t.cwd); }}>✕</button>}
     </div>
   );
 };
 
 /** 标签/分组右键菜单：新建分组、加入/移出、改色、重命名、折叠、解散。 */
-const TabMenu: React.FC<{ la: LocalAgentState; menu: MenuState; onClose: () => void; onRename: (id: string) => void }> = ({ la, menu, onClose, onRename }) => {
+const TabMenu: React.FC<{ la: LocalAgentState; menu: MenuState; onClose: () => void; onRename: (id: string) => void; onTogglePin?: (cwd: string) => void }> = ({ la, menu, onClose, onRename, onTogglePin }) => {
   const { t: tr } = useI18n();
   useEffect(() => {
     const h = () => onClose();
@@ -273,11 +260,15 @@ const TabMenu: React.FC<{ la: LocalAgentState; menu: MenuState; onClose: () => v
     return () => { window.removeEventListener('mousedown', h); window.removeEventListener('keydown', k); };
   }, [onClose]);
   const style: React.CSSProperties = { left: Math.min(menu.x, window.innerWidth - 220), top: menu.y };
+  // Portal 到 .chaya-v2 根：菜单 position:fixed + clientX/Y 定位，必须脱离带
+  // backdrop-filter/transform 的祖先（CLI 工作区容器），否则 fixed 相对它而非
+  // 视口，菜单不跟随鼠标。与 TopTabs 的右键菜单同一套路。
+  const host = (typeof document !== 'undefined' && document.querySelector('.chaya-v2')) || document.body;
 
   if (menu.kind === 'tab') {
     const t = la.tabs.find((x) => x.cwd === menu.id);
     if (!t) return null;
-    return (
+    return createPortal(
       <div className="v2-la-menu" style={style} onMouseDown={(e) => e.stopPropagation()}>
         {!t.groupId && <button onClick={() => { const id = la.createGroupFromTab(t.cwd); onRename(id); }}>{tr('local.menu.newGroup')}</button>}
         {!t.groupId && la.groups.length > 0 && <div className="sec">{tr('local.menu.addToGroup')}</div>}
@@ -287,15 +278,17 @@ const TabMenu: React.FC<{ la: LocalAgentState; menu: MenuState; onClose: () => v
           </button>
         ))}
         {t.groupId && <button onClick={() => { la.removeTabFromGroup(t.cwd); onClose(); }}>{tr('local.menu.removeFromGroup')}</button>}
+        {onTogglePin && <button onClick={() => { onTogglePin(t.cwd); onClose(); }}>{tr('tabs.pin')}</button>}
         <div className="div" />
         <button className="danger" onClick={() => { la.closeTab(t.cwd); onClose(); }}>{tr('local.tab.close')}</button>
-      </div>
+      </div>,
+      host,
     );
   }
 
   const g = la.groups.find((x) => x.id === menu.id);
   if (!g) return null;
-  return (
+  return createPortal(
     <div className="v2-la-menu" style={style} onMouseDown={(e) => e.stopPropagation()}>
       <button onClick={() => onRename(g.id)}>{tr('local.menu.rename')}</button>
       <div className="sec">{tr('local.menu.color')}</div>
@@ -318,11 +311,12 @@ const TabMenu: React.FC<{ la: LocalAgentState; menu: MenuState; onClose: () => v
       <div className="div" />
       <button onClick={() => { la.toggleGroup(g.id); onClose(); }}>{g.collapsed ? tr('local.menu.expandGroup') : tr('local.menu.collapseGroup')}</button>
       <button className="danger" onClick={() => { la.ungroupGroup(g.id); onClose(); }}>{tr('local.menu.ungroup')}</button>
-    </div>
+    </div>,
+    host,
   );
 };
 
-export const LocalAgentTabs: React.FC<{ la: LocalAgentState; inline?: boolean; onTabActivate?: (cwd: string) => void; activeCwd?: string | null }> = ({ la, inline, onTabActivate, activeCwd }) => {
+export const LocalAgentTabs: React.FC<{ la: LocalAgentState; inline?: boolean; onTabActivate?: (cwd: string) => void; activeCwd?: string | null; pinnedCwds?: Set<string>; onTogglePin?: (cwd: string) => void }> = ({ la, inline, onTabActivate, activeCwd, pinnedCwds, onTogglePin }) => {
   const { t: tr } = useI18n();
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -346,7 +340,13 @@ export const LocalAgentTabs: React.FC<{ la: LocalAgentState; inline?: boolean; o
     },
   });
 
-  if (la.tabs.length === 0) return inline ? null : <span className="v2-la-tabs-empty">Local Agents</span>;
+  // 固定到侧栏的 tab 从内联条隐藏（改在左栏常驻，见 ClientShell .v2-rail-pins）；
+  // 但「当前激活」的那个固定 tab 仍回到顶栏显示（灰色 dim 样式），与云端 pin 一致。
+  const isPinned = (cwd: string) => !!pinnedCwds && pinnedCwds.has(cwd);
+  const visibleTabs = pinnedCwds && pinnedCwds.size
+    ? la.tabs.filter((t) => !pinnedCwds.has(t.cwd) || t.cwd === activeCwd)
+    : la.tabs;
+  if (visibleTabs.length === 0) return inline ? null : <span className="v2-la-tabs-empty">Local Agents</span>;
 
   // 把已聚拢的标签按 groupId 折成渲染单元：连续同组 → 一个分组块，否则单标签。
   type Unit = { kind: 'tab'; tab: Tab } | { kind: 'group'; group: TabGroupT; members: Tab[] };
@@ -354,12 +354,12 @@ export const LocalAgentTabs: React.FC<{ la: LocalAgentState; inline?: boolean; o
   // 即便 tabs 里成员暂不连续也不会出现重复 key / 重复分组块。
   const units: Unit[] = [];
   const emittedGroups = new Set<string>();
-  for (const t of la.tabs) {
+  for (const t of visibleTabs) {
     const g = t.groupId ? la.groups.find((x) => x.id === t.groupId) : undefined;
     if (t.groupId && g) {
       if (emittedGroups.has(g.id)) continue;   // 该分组已渲染过 → 跳过后续散落成员
       emittedGroups.add(g.id);
-      units.push({ kind: 'group', group: g, members: la.tabs.filter((x) => x.groupId === g.id) });
+      units.push({ kind: 'group', group: g, members: visibleTabs.filter((x) => x.groupId === g.id) });
     } else {
       units.push({ kind: 'tab', tab: t });
     }
@@ -367,7 +367,7 @@ export const LocalAgentTabs: React.FC<{ la: LocalAgentState; inline?: boolean; o
 
   const body = (<>
       {units.map((u) => u.kind === 'tab' ? (
-        <TabChip key={u.tab.cwd} la={la} t={u.tab} onMenu={openMenu} dropProps={groupDrop(u.tab.cwd)} dropBefore={dropAt === u.tab.cwd} onActivate={onTabActivate} activeCwd={activeCwd} />
+        <TabChip key={u.tab.cwd} la={la} t={u.tab} dimmed={isPinned(u.tab.cwd)} onMenu={openMenu} dropProps={groupDrop(u.tab.cwd)} dropBefore={dropAt === u.tab.cwd} onActivate={onTabActivate} activeCwd={activeCwd} />
       ) : (
         <div
           key={u.group.id}
@@ -401,12 +401,12 @@ export const LocalAgentTabs: React.FC<{ la: LocalAgentState; inline?: boolean; o
             )}
             {u.group.collapsed && <span className="gcnt">{u.members.length}</span>}
           </div>
-          {!u.group.collapsed && u.members.map((m) => <TabChip key={m.cwd} la={la} t={m} grouped onMenu={openMenu} dropProps={groupDrop(m.cwd)} dropBefore={dropAt === m.cwd} onActivate={onTabActivate} activeCwd={activeCwd} />)}
+          {!u.group.collapsed && u.members.map((m) => <TabChip key={m.cwd} la={la} t={m} grouped dimmed={isPinned(m.cwd)} onMenu={openMenu} dropProps={groupDrop(m.cwd)} dropBefore={dropAt === m.cwd} onActivate={onTabActivate} activeCwd={activeCwd} />)}
         </div>
       ))}
       {/* 末尾放置区：把分组拖到这里 = 移到最右。inline 模式下不撑满（不要把后面的 chat tabs 推走）。 */}
       <div className={`v2-la-tabs-end${dropAt === 'end' ? ' dropbefore' : ''}${inline ? ' inline' : ''}`} {...groupDrop('end')} />
-      {menu && <TabMenu la={la} menu={menu} onClose={() => setMenu(null)} onRename={(id) => { setRenaming(id); setMenu(null); }} />}
+      {menu && <TabMenu la={la} menu={menu} onClose={() => setMenu(null)} onRename={(id) => { setRenaming(id); setMenu(null); }} onTogglePin={onTogglePin} />}
   </>);
   return inline ? body : <div className="v2-la-tabs">{body}</div>;
 };
@@ -574,6 +574,57 @@ const QuestionPrompt: React.FC<{
  * ================================================================== */
 const NO_MSGS: TranscriptMessage[] = [];
 const NO_ATTS: Attachment[] = [];
+const NO_QUEUE: QueuedMsg[] = [];
+
+/* ---- Timeline (会话记录) 独立 memo ----
+ * 关键性能边界：时间线只吃「会话内容」相关的 props（turns / livePreview / running
+ * …），不吃输入框的 draft。于是在输入框打字时，父级 Pane 虽因 draft 重渲，这块
+ * memo 因 props 引用不变而整体 bail —— 长会话 / 分屏下每次按键不再 O(N) 重建并
+ * 逐一对比所有轮次（这正是输入卡顿的根因）。turns 在父级用 useMemo 缓存，打字时
+ * 引用稳定，故 bail 成立。 */
+type PaneTimelineProps = {
+  turns: Turn[];
+  loadingSession: boolean;
+  hasConversation: boolean;
+  livePreview: string;
+  running: boolean;
+  busy: boolean;          // perm || question —— 用于 gate 底部「执行中」轮
+  status: string;
+  provider: string;
+  sessionId: string | null;
+};
+const PaneTimeline: React.FC<PaneTimelineProps> = React.memo(({ turns, loadingSession, hasConversation, livePreview, running, busy, status, provider, sessionId }) => {
+  const { t: tr } = useI18n();
+  return (
+    <div className="v2-la-tl">
+      {loadingSession && <Spinner label={tr('local.pane.loadingSession')} />}
+      {!loadingSession && !hasConversation && (
+        <div className="v2-la-hint center">{sessionId ? tr('local.pane.emptySession') : tr('local.pane.newSessionHint')}</div>
+      )}
+      {!loadingSession && turns.map((t, i) => (
+        t.role === 'user'
+          ? <UserTurn key={t.key ?? `t${i}`} text={t.text} />
+          : <AgentTurn
+              key={t.key ?? `t${i}`}
+              blocks={t.blocks}
+              provider={provider}
+              streaming={t.streaming}
+              tail={i === turns.length - 1 && livePreview ? livePreview : undefined}
+              working={i === turns.length - 1 && running && !busy}
+            />
+      ))}
+      {!loadingSession && running && !busy && (turns.length === 0 || turns[turns.length - 1].role === 'user') && (
+        <AgentTurn blocks={[]} provider={provider} tail={livePreview || undefined} working />
+      )}
+      {!loadingSession && !running && status && (
+        (status === tr('local.status.processing') || status === tr('local.status.processingShort'))
+          ? <RunningTicker />
+          : <div className="v2-la-note err">{status}</div>
+      )}
+    </div>
+  );
+});
+PaneTimeline.displayName = 'PaneTimeline';
 
 /** 一个独立会话窗格：自带时间线 + 输入框 + 斜杠/权限/选择，全部按 cwd 寻址。 */
 type PaneProps = { la: LocalAgentState; cwd: string; inGrid?: boolean };
@@ -592,6 +643,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const [mcpList, setMcpList] = useState<McpAvailable[] | null>(null);
 
   const attachments = tab?.attachments ?? NO_ATTS;
+  const queue = tab?.queue ?? NO_QUEUE;
   const draft = tab?.draft ?? '';
   const messages = tab?.messages ?? NO_MSGS;
   const liveMsgs = tab?.liveMsgs ?? NO_MSGS;
@@ -638,12 +690,15 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const lastScrolledCwdRef = useRef<string | null>(null);
   const settleTimersRef = useRef<number[]>([]);
   const settleRafRef = useRef<number | null>(null);
+  // 滚动「身份」= cwd + sessionId：在同一项目窗格里切换 session（cwd 不变）也要被当作
+  // 「换了内容」从而硬滚到底——否则只走「同窗格」分支（不在底部就不滚），载入后停在第一行。
+  const scrollKey = `${cwd}::${sessionId ?? ''}`;
   useEffect(() => {
     if (scrollRafRef.current != null) return;
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null;
       const el = streamRef.current; if (!el) return;
-      const cwdChanged = lastScrolledCwdRef.current !== cwd;
+      const cwdChanged = lastScrolledCwdRef.current !== scrollKey;
       if (cwdChanged) {
         // Stage 1: immediate hard snap to whatever height we have now.
         el.scrollTop = el.scrollHeight;
@@ -670,7 +725,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
           window.setTimeout(restick, 60),
           window.setTimeout(restick, 240),
         );
-        if (messages.length > 0) lastScrolledCwdRef.current = cwd;
+        if (messages.length > 0) lastScrolledCwdRef.current = scrollKey;
         return;
       }
       const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -689,7 +744,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
       for (const id of settleTimersRef.current) window.clearTimeout(id);
       settleTimersRef.current = [];
     };
-  }, [cwd, messages.length, liveMsgs.length, livePreview, status, loadingSession]);
+  }, [scrollKey, cwd, messages.length, liveMsgs.length, livePreview, status, loadingSession]);
   // 载入完成且当前激活时聚焦输入框——直接续聊。
   useEffect(() => {
     if (!loadingSession && cwd === la.activeCwd && la.current?.live) requestAnimationFrame(() => taRef.current?.focus());
@@ -815,32 +870,18 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
       )}
 
       <section className="v2-la-pane-stream" ref={streamRef}>
-        <div className="v2-la-tl">
-          {loadingSession && <Spinner label={tr('local.pane.loadingSession')} />}
-          {!loadingSession && !hasConversation && (
-            <div className="v2-la-hint center">{sessionId ? tr('local.pane.emptySession') : tr('local.pane.newSessionHint')}</div>
-          )}
-          {!loadingSession && turns.map((t, i) => (
-            t.role === 'user'
-              ? <UserTurn key={i} text={t.text} />
-              : <AgentTurn
-                  key={i}
-                  blocks={t.blocks}
-                  provider={la.provider}
-                  streaming={t.streaming}
-                  // livePreview 只挂到「最后一条」agent 轮的尾巴——只有这一个 AgentTurn 会随打字机重渲，
-                  // 其余历史轮在 React.memo 下引用未变即整体跳过（与块的 markdown 一起）。
-                  tail={i === turns.length - 1 && livePreview ? livePreview : undefined}
-                  working={i === turns.length - 1 && running && !perm && !question}
-                />
-          ))}
-          {/* 回合在跑但还没有 agent 轮（刚发出/工具前）：给个带头像的「寒暄」轮，定在左侧；
-              此时若已经在出字，尾巴显示 livePreview。 */}
-          {!loadingSession && running && !perm && !question && (turns.length === 0 || turns[turns.length - 1].role === 'user') && (
-            <AgentTurn blocks={[]} provider={la.provider} tail={livePreview || undefined} working />
-          )}
-          {!loadingSession && !running && status && <div className="v2-la-note err">{status}</div>}
-        </div>
+        {/* 时间线抽成独立 memo：打字（draft 变）时它整块 bail，不再随每次按键重建全部轮次。 */}
+        <PaneTimeline
+          turns={turns}
+          loadingSession={loadingSession}
+          hasConversation={hasConversation}
+          livePreview={livePreview}
+          running={running}
+          busy={!!perm || !!question}
+          status={status}
+          provider={la.provider}
+          sessionId={sessionId}
+        />
       </section>
 
       <div className="v2-composer-wrap v2-la-composer-wrap">
@@ -893,6 +934,19 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                 ))}
               </div>
             )}
+            {/* 排队条：AI 处理中用户继续发的指令，本轮结束后自动打包成一轮发出；× 可撤回。 */}
+            {queue.length > 0 && (
+              <div className="v2-la-queue" title={tr('local.queue.title')}>
+                <div className="v2-la-queue-hd"><span className="dot" aria-hidden />{tr('local.queue.title')}</div>
+                {queue.map((q) => (
+                  <div key={q.id} className="v2-la-queue-row">
+                    <span className="nm">{q.text || q.attachments.map((a) => a.name).join('、')}</span>
+                    {q.attachments.length > 0 && <span className="att">📎{q.attachments.length}</span>}
+                    <button className="x" title={tr('local.queue.remove')} onClick={() => la.dequeue(cwd, q.id)}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
             {/* 参考附件条：图片显缩略图、其它文件显图标 + 名；× 移除。随下条消息发出。 */}
             {attachments.length > 0 && (
               <div className="v2-la-atts">
@@ -912,6 +966,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
               rows={1}
               placeholder={
                 !current?.live ? tr('local.composer.unsupported', { provider: current?.label || la.provider })
+                  : running ? tr('local.composer.queuePlaceholder')
                   : sessionId ? '' : inGrid ? tr('local.composer.placeholderSlim') : tr('local.composer.placeholder')
               }
               value={draft}
@@ -947,7 +1002,15 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
               </div>
               <div className="v2-grow" />
               {running ? (
-                <button className="v2-send stop" title={tr('local.composer.interrupt')} onClick={() => la.interrupt(cwd)}>■</button>
+                <>
+                  {/* 处理中也能发：有草稿时显示「排队」按钮（Enter 等效），本轮完成后自动打包发出。 */}
+                  {(draft.trim() || attachments.length > 0) && (
+                    <button className="v2-send queue" title={tr('local.composer.queue')} onClick={() => la.send(cwd)}>
+                      <IconSend />
+                    </button>
+                  )}
+                  <button className="v2-send stop" title={tr('local.composer.interrupt')} onClick={() => la.interrupt(cwd)}>■</button>
+                </>
               ) : (
                 <button className="v2-send" title={tr('local.composer.send')} onClick={() => la.send(cwd)} disabled={(!draft.trim() && attachments.length === 0) || !current?.live}>
                   <IconSend />
@@ -1048,10 +1111,59 @@ const paneEqual = (a: PaneProps, b: PaneProps): boolean => {
 const LocalAgentPane = React.memo(LocalAgentPaneImpl, paneEqual);
 LocalAgentPane.displayName = 'LocalAgentPane';
 
-/** 分屏树递归渲染：叶子 = 一个窗格；split = 两子树 + 一条可拖拽分隔线。 */
+/** 分屏树递归渲染：叶子 = 一个窗格；split = 两子树 + 一条可拖拽分隔线。
+ *  叶子 id 为异类（wiki / chat:<sid>）→ 走 ForeignLeaf（不挂 CLI 进程，性能透明）。 */
 const PaneLayout: React.FC<{ la: LocalAgentState; node: LayoutNode }> = ({ la, node }) => {
-  if (node.kind === 'leaf') return <LocalAgentPane la={la} cwd={node.cwd} inGrid />;
+  if (node.kind === 'leaf') {
+    return isForeignLeaf(node.cwd)
+      ? <ForeignLeaf la={la} id={node.cwd} />
+      : <LocalAgentPane la={la} cwd={node.cwd} inGrid />;
+  }
   return <SplitView la={la} node={node} />;
+};
+
+/** 异类窗格：极薄头部（标题 + 关闭），主体交给注入的渲染器。渲染器内部组件自管状态/
+ *  订阅；wiki 无流式、chat 仅聚焦者接 WS（见 ClientShell），分屏不拖垮性能。 */
+const ForeignLeaf: React.FC<{ la: LocalAgentState; id: string }> = ({ la, id }) => {
+  const render = useContext(ForeignPaneContext);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [dropSide, setDropSide] = useState<DropSide | null>(null);
+  const title = id === 'wiki' ? 'Wiki' : id.startsWith('chat:') ? 'Chat' : id;
+  // 异类窗格同样是分屏落点 + 可拖：拖任意 tab/窗格到它的某条边 → 从该侧分裂（wiki↔chat、
+  // foreign↔cli 互相都能分）。复用与 CLI 窗格一致的 computeSide / placePane。
+  const computeSide = (e: React.DragEvent): DropSide => {
+    const r = rootRef.current?.getBoundingClientRect();
+    if (!r) return 'right';
+    const dx = { left: (e.clientX - r.left) / r.width, right: (r.right - e.clientX) / r.width, top: (e.clientY - r.top) / r.height, bottom: (r.bottom - e.clientY) / r.height };
+    return (Object.keys(dx) as DropSide[]).reduce((best, k) => (dx[k] < dx[best] ? k : best), 'right' as DropSide);
+  };
+  const onDragOver = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('text/cwd')) return;
+    e.preventDefault();
+    const s = computeSide(e); if (s !== dropSide) setDropSide(s);
+  };
+  const onDrop = (e: React.DragEvent) => {
+    const c = e.dataTransfer.getData('text/cwd'); const s = dropSide || computeSide(e); setDropSide(null);
+    if (c && c !== id) { e.preventDefault(); e.stopPropagation(); la.placePane(id, c, s); }
+  };
+  // 给本窗格一个 --pane 主色（拖放虚线/头部圆点/聚焦边框都取它）：wiki 绿、chat 蓝。
+  const paneColor = id === 'wiki' ? '#3a8a6e' : '#5e8bd0';
+  return (
+    <div ref={rootRef} className="v2-la-pane v2-la-foreign ingrid"
+      style={{ ['--pane' as string]: paneColor } as React.CSSProperties}
+      onDragOver={onDragOver} onDragLeave={() => setDropSide(null)} onDrop={onDrop}>
+      {dropSide && <div className={`v2-la-drop ${dropSide}`} aria-hidden />}
+      <div className="v2-la-pane-hd" draggable
+        onDragStart={(e) => { e.dataTransfer.setData('text/cwd', id); e.dataTransfer.effectAllowed = 'move'; }}
+        title="拖动重排 · 拖标签到边缘再分裂">
+        <span className="dot" />
+        <b>{title}</b>
+        <div className="v2-grow" />
+        <button className="x" title="移出分屏" onClick={() => la.removePane(id)}>✕</button>
+      </div>
+      <div className="v2-la-foreign-body">{render ? render(id) : null}</div>
+    </div>
+  );
 };
 
 const SplitView: React.FC<{ la: LocalAgentState; node: Extract<LayoutNode, { kind: 'split' }> }> = ({ la, node }) => {
@@ -1096,7 +1208,7 @@ export const LocalAgentConversation: React.FC<{ la: LocalAgentState }> = React.m
   if (la.layout && activeInLayout) {
     return <div className="v2-la-grid-root"><PaneLayout la={la} node={la.layout} /></div>;
   }
-  if (la.activeCwd) {
+  if (la.activeCwd && !isForeignLeaf(la.activeCwd)) {
     return <div className="v2-la-single"><LocalAgentPane la={la} cwd={la.activeCwd} /></div>;
   }
   // 欢迎页：还没有任何激活会话；拖标签到这里就把它打开。
@@ -1128,10 +1240,10 @@ LocalAgentConversation.displayName = 'LocalAgentConversation';
  * 时间线区块：把消息折叠成块，并把 tool_use 与结果配对。
  * ================================================================== */
 type Block =
-  | { k: 'user'; text: string }
-  | { k: 'text'; text: string }
-  | { k: 'think'; text: string }
-  | { k: 'tool'; name: string; input: any; id?: string; result?: string; isError?: boolean; pending: boolean; children?: Block[] };
+  | { k: 'user'; text: string; uid?: string }
+  | { k: 'text'; text: string; uid?: string }
+  | { k: 'think'; text: string; uid?: string }
+  | { k: 'tool'; name: string; input: any; id?: string; result?: string; isError?: boolean; pending: boolean; children?: Block[]; uid?: string };
 
 /** 把消息折叠成块：tool_use↔tool_result 配对；子 agent(Task) 的块嵌进派生它的 Task.children。 */
 function buildBlocks(msgs: TranscriptMessage[]): Block[] {
@@ -1140,13 +1252,14 @@ function buildBlocks(msgs: TranscriptMessage[]): Block[] {
   for (const m of msgs) {
     const parent = m.parentId || null;
     const sink = parent && byId.get(parent) ? (byId.get(parent)!.children ??= []) : top;
+    const uid = m.uuid || undefined;   // 源消息 uuid → 用作轮次的稳定 key（增量补齐历史时不重挂可见轮）
     for (const p of m.parts) {
       if (p.kind === 'text') {
-        sink.push(m.role === 'user' ? { k: 'user', text: p.text } : { k: 'text', text: p.text });
+        sink.push(m.role === 'user' ? { k: 'user', text: p.text, uid } : { k: 'text', text: p.text, uid });
       } else if (p.kind === 'thinking') {
-        sink.push({ k: 'think', text: p.text });
+        sink.push({ k: 'think', text: p.text, uid });
       } else if (p.kind === 'tool_use') {
-        const b: Extract<Block, { k: 'tool' }> = { k: 'tool', name: p.name, input: p.input, id: p.id, pending: true };
+        const b: Extract<Block, { k: 'tool' }> = { k: 'tool', name: p.name, input: p.input, id: p.id, pending: true, uid };
         sink.push(b);
         if (p.id) byId.set(p.id, b);   // 注册（含子 agent 的工具，供其 result 配对）
       } else if (p.kind === 'tool_result') {
@@ -1162,16 +1275,27 @@ function buildBlocks(msgs: TranscriptMessage[]): Block[] {
 /** 折成轮次：user → 一轮右侧气泡；连续 agent 块 → 一轮左侧带头像。 */
 type AgentBlock = Exclude<Block, { k: 'user' }>;
 type Turn =
-  | { role: 'user'; text: string }
-  | { role: 'agent'; blocks: AgentBlock[]; streaming?: boolean };
+  | { role: 'user'; text: string; key?: string }
+  | { role: 'agent'; blocks: AgentBlock[]; streaming?: boolean; key?: string };
 
 function groupTurns(blocks: Block[], streamingTail: boolean): Turn[] {
   const turns: Turn[] = [];
+  // 同一源消息的多个 part 共用 m.uuid（见 buildBlocks）；多 part 的 user 消息 / 某些
+  // transcript（如 cursor）重复 uuid，会让相邻 user 轮拿到相同 key → React 重复 key 报错、
+  // 轮次被去重/错位。这里给每个轮次发稳定且唯一的 key：同一 uid 首次保留原值（历史增量
+  // 回填时可见轮不重挂），后续出现追加 `#n` 后缀。
+  const seen = new Map<string, number>();
+  const uniqKey = (uid?: string): string | undefined => {
+    if (!uid) return undefined;
+    const n = seen.get(uid) ?? 0;
+    seen.set(uid, n + 1);
+    return n === 0 ? uid : `${uid}#${n}`;
+  };
   for (const b of blocks) {
-    if (b.k === 'user') { turns.push({ role: 'user', text: b.text }); continue; }
+    if (b.k === 'user') { turns.push({ role: 'user', text: b.text, key: uniqKey(b.uid) }); continue; }
     const last = turns[turns.length - 1];
     if (last && last.role === 'agent') last.blocks.push(b);
-    else turns.push({ role: 'agent', blocks: [b] });
+    else turns.push({ role: 'agent', blocks: [b], key: uniqKey(b.uid) });
   }
   if (streamingTail) {
     const last = turns[turns.length - 1];

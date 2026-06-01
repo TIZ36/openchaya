@@ -12,6 +12,7 @@ import {
   localAgent, loadProjects, addProject as addProjectStore, removeProject as removeProjectStore,
   loadTabsState, saveTabsState, loadPermBySession, savePermBySession, loadModelBySession, saveModelBySession,
   loadMcpBySession, saveMcpBySession, permModesFor, defaultPermMode,
+  loadExpandedProjects, saveExpandedProjects,
   type DetectedProvider, type ProviderId, type SessionSummary, type TranscriptMessage, type LocalProject,
   type PermMode, type SlashCommand, type PermissionRequest, type PermissionDecision, type QuestionRequest,
   type TabGroup, type ModelInfo, type McpStatus, type Attachment,
@@ -44,6 +45,14 @@ export interface Tab {
   mcp?: string[];          // 该会话启用的 MCP server 名字（空 = 不启用）
   mcpStatus?: McpStatus[]; // MCP 连接状态（来自 init / setMcp 回执）
   attachments?: Attachment[]; // 待发送的参考附件（拖入/选取的文件 + 粘贴图片），发送后清空
+  queue?: QueuedMsg[];        // AI 处理中时用户继续发的指令：本轮结束后自动打包成一轮发出
+}
+
+/** 队列里的一条待发指令（在 AI 处理中入队，本轮收尾后与同队其它条目打包成一轮）。 */
+export interface QueuedMsg {
+  id: string;
+  text: string;
+  attachments: Attachment[];
 }
 
 // 自动分配的窗格 / 分组色板（沉静、互相可辨；非强饱和，贴合 letterpress 调性）。
@@ -71,8 +80,13 @@ function mkSplit(dir: SplitDir, a: LayoutNode, b: LayoutNode): LayoutNode {
   return { kind: 'split', id: `sp-${Date.now()}-${++_splitSeq}`, dir, ratio: 0.5, a, b };
 }
 /** 恢复时裁掉布局树里已不存在的叶子（cwd 不在打开标签中）；空了返回 null。 */
+// 异类叶子（非 CLI cwd）：约定用前缀编码 id —— `wiki` / `chat:<sessionId>`。它们由
+// ClientShell 通过 ForeignPaneContext 渲染，对 CLI 的 tabs/warm/readSession 等逻辑「透明」
+// （不进 tabs、不触发本地进程），从而把不同类型页装进同一分屏而不拖垮性能。
+export const isForeignLeaf = (id: string): boolean => id === 'wiki' || id.startsWith('chat:');
+
 function pruneLayout(n: LayoutNode, valid: Set<string>): LayoutNode | null {
-  if (n.kind === 'leaf') return valid.has(n.cwd) ? n : null;
+  if (n.kind === 'leaf') return (valid.has(n.cwd) || isForeignLeaf(n.cwd)) ? n : null;
   const a = pruneLayout(n.a, valid);
   const b = pruneLayout(n.b, valid);
   if (!a) return b;
@@ -132,6 +146,9 @@ interface Smooth {
   finalize: (() => void) | null;  // 排空后执行的收尾（合并最终消息块）
 }
 
+// 首屏只渲染尾部 N 条历史，余量后台补齐（见 setHistory）。
+const HISTORY_TAIL = 20;
+
 export function useLocalAgent(active: boolean, provider: ProviderId, typewriter: TypewriterConfig = DEFAULT_TYPEWRITER) {
   const { t: tr } = useI18n();
   // Live typewriter config (toggle + speed) read by the rAF pump without re-binding it.
@@ -144,7 +161,9 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   const [modelOptions, setModelOptions] = useState<ModelInfo[]>([]);   // 可选模型（SDK supportedModels）
 
   const [projects, setProjects] = useState<LocalProject[]>(() => loadProjects());
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // 展开的项目目录：从持久化恢复（下次启动不用重新点开）；变化即回存。
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(loadExpandedProjects()));
+  useEffect(() => { saveExpandedProjects([...expanded]); }, [expanded]);
   const [sessionsByPath, setSessionsByPath] = useState<SessionsState>({});
 
   // 启动即从持久化恢复 —— 放进 useState 初始值，首帧就正确。
@@ -305,7 +324,9 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (rafRef.current != null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
     for (const t of tabs) void localAgent.sessionClose(t.cwd);   // 关掉所有常驻进程
     setSessionsByPath({});
-    setExpanded(new Set());
+    // 注意：不清 expanded —— 项目目录跨 provider 保留，展开记忆也应保留（否则换 provider
+    // 或带 provider 切换的启动时序会把持久化的展开态冲成空）。会话列表由下方 restore 副作用
+    // 按新 provider 重新拉。
     setTabs([]);
     setActiveCwd(null);
     setLayout(null);
@@ -372,6 +393,16 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     });
   }, [sessionsByPath, loadSessionsFor]);
 
+  // 恢复展开记忆后，为已展开但尚未载入的项目补拉一次会话列表（否则展开了却空着）。
+  // 只在进入 CLI / 项目列表变化时对账；不依赖 sessionsByPath 以免 loadSessionsFor 自激发回环。
+  useEffect(() => {
+    if (!active || !projects.length || !expanded.size) return;
+    for (const p of projects) {
+      if (expanded.has(p.id) && !sessionsByPath[p.path]) void loadSessionsFor(p.path);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, projects, provider]);
+
   const expandProject = useCallback((cwd: string) => {
     const p = projects.find((x) => x.path === cwd);
     if (p) setExpanded((cur) => (cur.has(p.id) ? cur : new Set(cur).add(p.id)));
@@ -417,6 +448,20 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     return existed;
   }, [dropSmooth, provider]);
 
+  // 落历史：大会话先放尾部 N 条 → 首屏立刻可读，整段历史让出一帧后在后台补齐
+  // （buildBlocks/groupTurns 的全量处理推到首屏之后；渲染由 .v2-la-turn 的
+  //  content-visibility 兜底）。会话切走 / 已追加新消息则不再回填，避免覆盖。
+  const setHistory = useCallback((cwd: string, sid: string, msgs: TranscriptMessage[]) => {
+    if (msgs.length > HISTORY_TAIL + 10) {
+      patchTab(cwd, { messages: msgs.slice(-HISTORY_TAIL), loading: false });
+      setTimeout(() => {
+        patchTab(cwd, (t) => (t.sessionId === sid && t.messages.length <= HISTORY_TAIL ? { messages: msgs } : {}));
+      }, 0);
+    } else {
+      patchTab(cwd, { messages: msgs, loading: false });
+    }
+  }, [patchTab]);
+
   const openSession = useCallback(async (cwd: string, sid: string, title: string) => {
     upsertTab(cwd, sid, title);
     const remembered = permMemRef.current[sid];
@@ -429,8 +474,8 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     // cursor 无常驻进程，warm 只登记状态 + 拉模型；apiKey 注入（已预拉则同步可得）。
     if (current?.live) void localAgent.warm({ provider, cwd, sessionId: sid, permMode: pm, model: md, mcp: mc, apiKey: provider === 'cursor' ? cursorKeyRef.current : undefined });
     const { messages: msgs } = await localAgent.readSession(provider, cwd, sid);
-    patchTab(cwd, { messages: msgs, loading: false });
-  }, [provider, current, upsertTab, patchTab]);
+    setHistory(cwd, sid, msgs);
+  }, [provider, current, upsertTab, patchTab, setHistory]);
 
   const newSession = useCallback((cwd: string) => {
     upsertTab(cwd, null, tr('local.newSession'));
@@ -471,10 +516,8 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (!tab || !tab.pendingLoad || !tab.sessionId || tab.loading) return;
     patchTab(activeCwd, { loading: true, pendingLoad: false });
     const sid = tab.sessionId;
-    localAgent.readSession(provider, activeCwd, sid).then(({ messages: msgs }) => {
-      patchTab(activeCwd, { messages: msgs, loading: false });
-    });
-  }, [active, activeCwd, tabs, provider, patchTab]);
+    localAgent.readSession(provider, activeCwd, sid).then(({ messages: msgs }) => setHistory(activeCwd, sid, msgs));
+  }, [active, activeCwd, tabs, provider, patchTab, setHistory]);
 
   const setActiveTab = useCallback((cwd: string) => setActiveCwd(cwd), []);
 
@@ -690,12 +733,12 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     void localAgent.permissionRespond(permId, { behavior: 'deny', message: answerText });
   }, [patchTab, tr]);
 
-  const send = useCallback(async (cwd: string) => {
+  /** 真正把一轮发给后端：拼用户气泡、running=true、调 localAgent.send。
+   *  text/attachments 显式传入（manual send 来自 draft，队列 flush 来自打包后的队列）。
+   *  clearComposer：manual send 把 draft/附件清空；队列 flush 不动用户正在敲的 draft。 */
+  const dispatchTurn = useCallback(async (cwd: string, text: string, attachments: Attachment[], clearComposer: boolean) => {
     const tab = tabs.find((t) => t.cwd === cwd);
     if (!cwd || !tab) return;
-    const text = tab.draft.trim();
-    const attachments = tab.attachments || [];
-    if ((!text && attachments.length === 0) || tab.running) return;
     if (!current?.installed || !current?.live) { patchTab(cwd, { status: `⚠ ${tr('local.status.unavailable', { provider: current?.label || provider })}` }); return; }
     const sid = tab.sessionId;   // 仅首条用于 resume；常驻会话已存在时后端忽略
     // cursor headless 必需 API Key——优先用缓存，没有则现拉（拉不到则主进程会回 error 提示去设置录入）。
@@ -704,7 +747,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     // 气泡里把附件名缀在用户文本后，让发出去的这一轮一眼看出带了哪些参考。
     const attNote = attachments.length ? `${text ? '\n' : ''}📎 ${attachments.map((a) => a.name).join('、')}` : '';
     patchTab(cwd, (t) => ({
-      draft: '', attachments: [],
+      ...(clearComposer ? { draft: '', attachments: [] } : {}),
       messages: [...t.messages, { role: 'user', parts: [{ kind: 'text', text: text + attNote }], ts: null, uuid: null }],
       liveMsgs: [], livePreview: '', running: true, status: tr('local.status.processingShort'), perm: null, question: null,
     }));
@@ -712,7 +755,74 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (!res.ok) patchTab(cwd, (t) => ({ running: false, status: t.status.startsWith('⚠') ? t.status : `⚠ ${tr('local.status.startFailed')}` }));
   }, [tabs, current, provider, patchTab, dropSmooth, fetchCursorKey, tr]);
 
-  const interrupt = useCallback((cwd: string) => { if (cwd) void localAgent.interrupt(cwd); }, []);
+  const queueSeqRef = useRef(0);
+  const mkQueueId = () => `q-${Date.now()}-${queueSeqRef.current++}`;
+
+  const send = useCallback(async (cwd: string) => {
+    const tab = tabs.find((t) => t.cwd === cwd);
+    if (!cwd || !tab) return;
+    const text = tab.draft.trim();
+    const attachments = tab.attachments || [];
+    if (!text && attachments.length === 0) return;
+    // AI 处理中（含等权限/选择）→ 不阻塞输入，入队；本轮收尾后由 flush 副作用打包发出。
+    if (tab.running) {
+      patchTab(cwd, (t) => ({
+        draft: '', attachments: [],
+        queue: [...(t.queue || []), { id: mkQueueId(), text, attachments }],
+      }));
+      return;
+    }
+    await dispatchTurn(cwd, text, attachments, true);
+  }, [tabs, patchTab, dispatchTurn]);
+
+  /** 从队列移除一条（用户在 flush 前反悔）。 */
+  const dequeue = useCallback((cwd: string, id: string) => {
+    patchTab(cwd, (t) => ({ queue: (t.queue || []).filter((q) => q.id !== id) }));
+  }, [patchTab]);
+
+  /** 本轮收尾（running→false）且队列非空 → 把整队打包成一轮自动发出。
+   *  flushingRef 防止 async 间隙里副作用重入造成重复发送。 */
+  const flushingRef = useRef<Set<string>>(new Set());
+  const flushQueue = useCallback(async (cwd: string) => {
+    try {
+      const tab = tabs.find((t) => t.cwd === cwd);
+      const q = tab?.queue || [];
+      if (!tab || tab.running || q.length === 0) return;
+      patchTab(cwd, { queue: [] });
+      const text = q.map((i) => i.text).filter(Boolean).join('\n\n');
+      const attachments = q.flatMap((i) => i.attachments || []);
+      await dispatchTurn(cwd, text, attachments, false);
+    } finally {
+      flushingRef.current.delete(cwd);
+    }
+  }, [tabs, patchTab, dispatchTurn]);
+
+  useEffect(() => {
+    for (const tab of tabs) {
+      if (!tab.running && (tab.queue?.length ?? 0) > 0 && !flushingRef.current.has(tab.cwd)) {
+        flushingRef.current.add(tab.cwd);
+        void flushQueue(tab.cwd);
+      }
+    }
+  }, [tabs, flushQueue]);
+
+  const interrupt = useCallback((cwd: string) => {
+    if (!cwd) return;
+    // 中断：把待发队列整合为一条回填到输入框（不发出），用户中断当前轮后可继续编辑再发。
+    // 同步清空 queue —— 抢在中断触发的 finalizeTurn（running→false）之前，避免自动 flush 把队列发出去。
+    patchTab(cwd, (t) => {
+      const q = t.queue || [];
+      if (q.length === 0) return {};
+      const merged = q.map((i) => i.text).filter(Boolean).join('\n\n');
+      // 时序：队列条目在前（更早入队），用户当前正在敲的草稿在后。
+      const draft = [merged, t.draft.trim()].filter(Boolean).join('\n\n');
+      const seen = new Set((t.attachments || []).map((a) => a.id));
+      const attachments = [...(t.attachments || [])];
+      for (const a of q.flatMap((i) => i.attachments || [])) { if (!seen.has(a.id)) { seen.add(a.id); attachments.push(a); } }
+      return { queue: [], draft, attachments };
+    });
+    void localAgent.interrupt(cwd);
+  }, [patchTab]);
 
   /* ---- 多窗格：二叉分屏树（类 Wave）。把标签拖到某个窗格 → 该窗格一分为二，
          其余窗格自适应填充；分隔线可拖拽改比例。layout=null → 单窗（看 activeCwd）。 ---- */
@@ -764,7 +874,13 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     setLayout((cur) => {
       if (!cur) return cur;
       const next = removeLeaf(cur, cwd);
-      if (next && next.kind === 'leaf') { const only = next.cwd; queueMicrotask(() => setActiveCwd(only)); return null; }
+      if (next && next.kind === 'leaf') {
+        const only = next.cwd;
+        queueMicrotask(() => setActiveCwd(only));
+        // 只剩一个异类叶子（wiki/chat）→ 保留为单叶布局（异类页没有 CLI 单窗形态，
+        // 不能塌到 activeCwd 的 CLI 单窗，否则会去渲染一个名为 'wiki' 的 CLI 窗格）。
+        return isForeignLeaf(only) ? next : null;
+      }
       return next;
     });
   }, []);
@@ -813,7 +929,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     question: activeTab?.question ?? null,
     setDraft,
     addAttachments, removeAttachment, pickAttachments,
-    openSession, newSession, deleteSession, send, interrupt, respondPermission, answerQuestion,
+    openSession, newSession, deleteSession, send, dequeue, interrupt, respondPermission, answerQuestion,
   }), [
     providers, provider, current, detecting,
     cyclePermMode, commands, modelOptions, setModel, setMcp, listMcp, refreshMcp, reconnectMcp,
@@ -825,7 +941,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     activeTab,
     setDraft,
     addAttachments, removeAttachment, pickAttachments,
-    openSession, newSession, deleteSession, send, interrupt, respondPermission, answerQuestion,
+    openSession, newSession, deleteSession, send, dequeue, interrupt, respondPermission, answerQuestion,
   ]);
   return la;
 }

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { CodeBlock, PreBlock, mdRehypePlugins } from './codeBlock';
@@ -45,17 +45,17 @@ import LoginPage from './LoginPage';
 import { useI18n, t } from '../i18n';
 import {
   IconAgentCode, IconAgentDoc, IconAgentPainter, IconAgentPrimary,
-  IconAttach, IconChat, IconGallery, IconGear, IconKB, IconTerminal,
+  IconAttach, IconChat, IconTeahouse, IconGallery, IconGear, IconKB, IconTerminal,
   IconPlus, IconSend, IconSidebar,
-  IconChevron, IconAspect, IconModel,
+  IconAspect, IconModel,
   IconEdit, IconRevert, IconQuote,
   IconCopy, IconCheck,
 } from './icons';
 import { getLLMConfigs, type LLMConfigFromDB } from '../services/llmApi';
-import { updateSessionLLMConfig } from '../services/chat';
+import { updateSessionLLMConfig, getSessionMessages } from '../services/chat';
 import { updateRoleProfile } from '../services/roleApi';
 import { mcpApi, type MCPServer } from '../services/integrationsApi';
-import { LocalAgentTree, LocalAgentConversation } from './LocalAgentView';
+import { LocalAgentTree, LocalAgentConversation, PROVIDER_LABELS, ForeignPaneContext } from './LocalAgentView';
 import { useLocalAgent } from './useLocalAgent';
 import { isLocalAgentAvailable } from './services/localAgent';
 import { TopTabs } from './TopTabs';
@@ -139,6 +139,12 @@ const ShellInner: React.FC = () => {
   // 未登录且本地 CLI 可用 → 默认落到本地视图（免登录即可用）；否则默认聊天。
   const [activeNav, setActiveNav] = useState<NavKey>(() =>
     (!api.isLoggedIn() && isLocalAgentAvailable()) ? 'local' : 'chat');
+  // keep-alive：记录访问过的功能视图。重的视图（kb/gallery/cli）首次进入后常驻
+  // （切走时 hidden 而非卸载），切回不再整树重挂 → 切换不卡。
+  const [visitedNav, setVisitedNav] = useState<Set<NavKey>>(() => new Set([activeNav]));
+  useEffect(() => {
+    setVisitedNav((prev) => (prev.has(activeNav) ? prev : new Set(prev).add(activeNav)));
+  }, [activeNav]);
   // 进入主界面后若未登录，温和提示一次登录（可关闭，不挡本地功能）。
   useEffect(() => { if (!api.isLoggedIn()) setLoginOpen(true); }, []);
   const [mode, setMode] = useState<Mode>('chat');
@@ -285,6 +291,13 @@ const ShellInner: React.FC = () => {
     setActiveNav('kb');
   }, [topTabs, tr]);
 
+  // 固定到侧栏的 CLI tab 集合（按 cwd）——左栏 pin 行与内联 CLI 条共用：
+  // 内联条据此隐藏，左栏据此常驻。CLI 为本地能力，不受 authed 门禁。
+  const pinnedLocalCwds = useMemo(
+    () => new Set(topTabs.tabs.filter((t) => t.pinned && t.kind === 'local' && t.cwd).map((t) => t.cwd as string)),
+    [topTabs.tabs],
+  );
+
   const activateTopTab = useCallback((t: TopTab) => {
     topTabs.setActiveId(t.id);
     topTabs.clearUnread(t.id);
@@ -298,6 +311,19 @@ const ShellInner: React.FC = () => {
       setActiveSessionId(t.sessionId);
     }
   }, [topTabs, la, setActiveSessionId]);
+
+  // 分屏里异类窗格的渲染器（见 ForeignPaneContext）：wiki → 知识库（自包含/无流式）；
+  // chat:<sid> → 只读会话面板（拉历史并渲染，不接 WS，不占额外流式开销，性能安全）。
+  const renderForeignPane = useCallback((id: string): React.ReactNode => {
+    if (id === 'wiki') return <KnowledgeViewPane />;
+    if (id.startsWith('chat:')) return <ChatSessionPane sessionId={id.slice('chat:'.length)} />;
+    return null;
+  }, []);
+  // 分屏聊天窗格的后端通道：注入唯一的 useChatBackend（被聚焦者实时，其余静态历史）。
+  const chatPaneCtx = useMemo(
+    () => ({ activeSessionId, messages, stream, sendMessage, setActiveSessionId }),
+    [activeSessionId, messages, stream, sendMessage, setActiveSessionId],
+  );
 
   const closeTopTab = useCallback((t: TopTab) => {
     if (t.kind === 'local' && t.cwd) {
@@ -433,10 +459,6 @@ const ShellInner: React.FC = () => {
   }, [settingsOpen /* refresh after settings */]);
 
   const create = useCreateMode();
-  // Create-mode extension panel collapsed state. Default open so the user can
-  // configure their first turn; once they hit send we auto-collapse so the
-  // generated images aren't pushed off-screen.
-  const [cbarOpen, setCbarOpen] = useState(true);
 
   // First time we see an LLM config list, if create-mode has no model picked
   // yet, default it to the user's chosen default LLM config so generation
@@ -676,7 +698,6 @@ const ShellInner: React.FC = () => {
       provider: create.cfg.provider,
     };
     setDraft('');
-    setCbarOpen(false);
     await runCreationBatchRef.current(text, specSnapshot, activeSessionId);
     return;
   }, [draft, mode, sending, generating, activeRecord, sendMessage, create, activeSessionId, quoted, clearQuote, pickedDomains, authed, requireLogin]);
@@ -933,7 +954,6 @@ const ShellInner: React.FC = () => {
       create.setAspect(spec.aspect);
       create.setCount(spec.count);
       create.replaceRefs(refs);
-      setCbarOpen(true);
       // Wipe the historical spec + everything after it. revertToMessage
       // deletes the anchor itself too — that's fine, runCreationBatch
       // re-persists a fresh user spec with identical content.
@@ -1073,23 +1093,68 @@ const ShellInner: React.FC = () => {
     <div className="chaya-v2" data-mode={resolvedMode} data-theme={theme} data-glass={glassAttr} data-glass-i={glassIntensity} onDragOver={swallowDragOver} onDrop={onDrop}>
       <div className="v2-tb"><div className="v2-dots"><i /><i /><i /></div></div>
 
-      {/* Sidebar toggle: lives permanently to the right of the macOS traffic
-       *  lights, regardless of sidebar state. Click toggles collapse. */}
-      <button
-        className="v2-shell-toggle"
-        title={collapsed ? tr('shell.expandSidebar') : tr('shell.collapseSidebar')}
-        onClick={() => setCollapsed((v) => !v)}
-        aria-label="toggle sidebar"
-      >
-        <IconSidebar />
-      </button>
-
       <div className={`v2-app${collapsed ? ' collapsed' : ''}`}>
         {/* ===== 功能轨（图标+文字）：唯一一层全局导航。点一个功能 → 右侧是该功能自己的
              「列表 + 内容」（见 view-frame 里的 v2-feat），不再出现两层侧栏。 ===== */}
         {/* ===== 统一侧栏：icon+文字横排导航 + 当前功能列表 + 底部账号，单栏同底色；
              白卡片只裹右侧内容（对话 / 画廊 / 知识库）。 ===== */}
         <aside className="v2-side v2-sidebar">
+          {/* 标题栏一行：交通灯右侧 4 个固定功能图标（聊天 / 知识库 / CLI / 折叠），
+              不可取消；换行后是用户自定义置顶（圆角方块 + 首字 + 按类型描边，右键取消）。 */}
+          <div className="v2-rail-pins">
+            <span className="v2-rail-lights-gap" aria-hidden />
+            {/* 顺序与下方文字导航一致：chat · cli · wiki */}
+            <button
+              className={`v2-pin v2-pin-fn${activeNav === 'chat' ? ' active' : ''}`}
+              title={tr('shell.nav.chat')}
+              aria-label={tr('shell.nav.chat')}
+              onClick={() => { if (!authed) { requireLogin(); return; } setActiveNav('chat'); setMode('chat'); }}
+            ><IconChat /></button>
+            {isLocalAgentAvailable() && (
+              <button
+                className={`v2-pin v2-pin-fn${activeNav === 'local' ? ' active' : ''}`}
+                title={tr('shell.nav.localCli')}
+                aria-label={tr('shell.nav.localCli')}
+                onClick={enterLocal}
+              ><IconTerminal /></button>
+            )}
+            <button
+              className={`v2-pin v2-pin-fn${activeNav === 'kb' ? ' active' : ''}`}
+              title={tr('shell.nav.kb')}
+              aria-label={tr('shell.nav.kb')}
+              onClick={() => { if (!authed) { requireLogin(); return; } openKBTab(); }}
+            ><IconKB /></button>
+            <button
+              className="v2-pin v2-pin-fn v2-rail-collapse"
+              title={tr('shell.collapseSidebar')}
+              aria-label={tr('shell.collapseSidebar')}
+              onClick={() => setCollapsed(true)}
+            ><IconSidebar /></button>
+
+            {/* wrap → 自定义置顶 */}
+            <span className="v2-rail-break" aria-hidden />
+            {topTabs.tabs.filter((t) => t.pinned && (t.kind === 'local' || authed)).map((t) => {
+              const typeKey = t.kind === 'chat' && (t.isPrimary || t.sessionType === 'agent') ? 'agent' : t.kind;
+              const ch = (Array.from((t.label || '').trim())[0] || '·').toUpperCase();
+              return (
+                <button
+                  key={t.id}
+                  className={`v2-pin v2-pin-chip${topTabs.activeId === t.id ? ' active' : ''}${t.attn ? ' attn' : ''}`}
+                  data-kind={typeKey}
+                  title={tr('tabs.pinnedTitle', { label: t.label })}
+                  aria-label={t.label}
+                  onClick={() => activateTopTab(t)}
+                  onContextMenu={(e) => { e.preventDefault(); topTabs.togglePin(t.id); }}
+                >
+                  <span className="ch" aria-hidden>{ch}</span>
+                  {t.unread && topTabs.activeId !== t.id && <span className="dot" aria-hidden />}
+                  {t.attn && <span className="attn-mark" aria-hidden>!</span>}
+                </button>
+              );
+            })}
+          </div>
+          {/* 原有的功能入口（带文字标签）保留：标题栏的 4 个图标是「常驻置顶」快捷，
+              这里仍是完整导航。画廊不进置顶图标，但作为非核心功能在此展示。 */}
           <nav className="v2-rail-nav">
             <button
               className={`v2-railbtn${activeNav === 'chat' ? ' active' : ''}`}
@@ -1099,10 +1164,27 @@ const ShellInner: React.FC = () => {
 
             {isLocalAgentAvailable() && (
               <button
-                className={`v2-railbtn${activeNav === 'local' ? ' active' : ''}`}
+                className={`v2-railbtn v2-railbtn-cli${activeNav === 'local' ? ' active' : ''}`}
                 onClick={enterLocal}
                 title={tr('shell.nav.localCli')}
-              ><span className="ic"><IconTerminal /></span><span className="lb">CLI</span></button>
+              >
+                <span className="ic"><IconTerminal /></span>
+                <span className="lb">CLI</span>
+                {/* provider 徽标移上来：单击循环切换 claude → codex → gemini（阻止冒泡，不触发进入）。 */}
+                <span
+                  className={`v2-la-badge prov-${la.provider}${(!la.detecting && !!la.current?.installed && !!la.current?.live) ? ' ready' : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => { e.stopPropagation(); cycleLocalAgentProvider(); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); cycleLocalAgentProvider(); } }}
+                  title={tr('local.tree.providerBadge', { provider: PROVIDER_LABELS[la.provider] })}
+                >
+                  <span className="ic">
+                    {la.detecting ? <span className="v2-la-spinner sm" /> : (!!la.current?.installed && !!la.current?.live) ? <span className="ck">✓</span> : null}
+                  </span>
+                  {PROVIDER_LABELS[la.provider]}
+                </span>
+              </button>
             )}
 
             <button
@@ -1118,14 +1200,26 @@ const ShellInner: React.FC = () => {
             ><span className="ic"><IconGallery /></span><span className="lb">{tr('shell.nav.gallery')}</span></button>
           </nav>
 
-          {/* 当前功能自己的列表，并入同一条侧栏（导航之下）。白卡片只裹右侧内容。 */}
+          {/* 子目录列表随顶部主功能切换（参考 design 的 .sb-list 面板切换）：
+              对话 → Agents + Chats · CLI → Projects · 知识库 → Wikis · 画廊 → 相册。 */}
           <div className="v2-side-list">
+            {/* 对话：基础动作（新对话）置顶 + 我的 Agent + 最近会话 */}
             {activeNav === 'chat' && (
               authed ? (
                 <>
+                  <button
+                    className="v2-side-action"
+                    onClick={() => {
+                      // 新对话只进「草稿态」：不立刻 POST /api/conversations，否则会在后端
+                      // 留下没产生过对话（无 llm 回答）的空会话。真正的创建延后到首条消息
+                      // 发送时（onSend 的 !activeSessionId 分支 → createTopicAndOpen(text)）。
+                      setActiveNav('chat'); setMode('chat'); setActiveSessionId(null);
+                    }}
+                  >
+                    <IconPlus /><span>{tr('shell.newChat')}</span>
+                  </button>
                   <div className="v2-sec">
                     <span>Agents</span>
-                    <button className="v2-add" title={tr('shell.new')}><IconPlus /></button>
                   </div>
                   <div className="v2-agents">
                     {loadingMeta && agents.length === 0 && <SkeletonRows n={2} />}
@@ -1151,8 +1245,37 @@ const ShellInner: React.FC = () => {
                 <div className="v2-feat-empty">{tr('shell.signInToSeeAgents')}</div>
               )
             )}
+
+            {/* CLI：基础动作（打开新项目）置顶 + 本地 Agent 项目树 */}
             {activeNav === 'local' && isLocalAgentAvailable() && (
-              <LocalAgentTree la={la} onEnter={enterLocal} onCycleProvider={cycleLocalAgentProvider} />
+              <>
+                <button className="v2-side-action" onClick={() => { void la.addProject(); }}>
+                  <IconPlus /><span>{tr('shell.cliNewProject')}</span>
+                </button>
+                <LocalAgentTree la={la} onEnter={enterLocal} />
+              </>
+            )}
+
+            {/* 知识库：Wikis 完整面板（搜索 / 笔记 / 全部 / 记忆 / 知识域 / 上传）由
+                KnowledgeView 通过 portal 注入此槽位 —— 统一进单侧栏，右侧只留文档。
+                槽位与 KnowledgeViewKA 同为 keep-alive（visitedNav）：KnowledgeView 只在挂载时
+                getElementById 一次并缓存该节点；若槽位按 activeNav 卸载，离开再回到 wiki 时
+                portal 会指向已脱离文档的旧节点 → 侧栏树消失。故这里也用 visitedNav + hidden，
+                保持节点稳定。 */}
+            {visitedNav.has('kb') && (
+              <div className="v2-kb-tree-slot" id="v2-kb-tree-slot" hidden={activeNav !== 'kb'} />
+            )}
+
+            {/* 画廊：相册 */}
+            {activeNav === 'gallery' && (
+              <>
+                <div className="v2-sec"><span>{tr('shell.gallery.albums')}</span></div>
+                <div className="v2-wikis">
+                  <button className="v2-wiki active" onClick={openGalleryTab}>
+                    <span className="nm">{tr('shell.gallery.all')}</span>
+                  </button>
+                </div>
+              </>
             )}
           </div>
 
@@ -1173,6 +1296,38 @@ const ShellInner: React.FC = () => {
         {/* ===== main ===== */}
         <main className="v2-main">
           <div className="v2-topbar v2-topbar-tabs">
+            {/* When the sidebar collapses, its pin row slides off-screen and this
+                rail (expand control + pinned tabs) slides into the tab bar's left.
+                Always mounted so the slide animates both ways — `.on` drives it. */}
+            <div className={`v2-topbar-rail${collapsed ? ' on' : ''}`} aria-hidden={!collapsed}>
+              <button
+                className="v2-pin v2-rail-collapse"
+                title={tr('shell.expandSidebar')}
+                aria-label={tr('shell.expandSidebar')}
+                tabIndex={collapsed ? 0 : -1}
+                onClick={() => setCollapsed(false)}
+              ><IconSidebar /></button>
+              {topTabs.tabs.filter((t) => t.pinned && (t.kind === 'local' || authed)).map((t) => {
+                const typeKey = t.kind === 'chat' && (t.isPrimary || t.sessionType === 'agent') ? 'agent' : t.kind;
+                const ch = (Array.from((t.label || '').trim())[0] || '·').toUpperCase();
+                return (
+                  <button
+                    key={t.id}
+                    className={`v2-pin v2-pin-chip${topTabs.activeId === t.id ? ' active' : ''}${t.attn ? ' attn' : ''}`}
+                    data-kind={typeKey}
+                    title={tr('tabs.pinnedTitle', { label: t.label })}
+                    aria-label={t.label}
+                    tabIndex={collapsed ? 0 : -1}
+                    onClick={() => activateTopTab(t)}
+                    onContextMenu={(e) => { e.preventDefault(); topTabs.togglePin(t.id); }}
+                  >
+                    <span className="ch" aria-hidden>{ch}</span>
+                    {t.unread && topTabs.activeId !== t.id && <span className="dot" aria-hidden />}
+                    {t.attn && <span className="attn-mark" aria-hidden>!</span>}
+                  </button>
+                );
+              })}
+            </div>
             <TopTabs
               la={la}
               // 未登录：顶栏只保留本地（CLI）tab，隐藏云端 tab（聊天/画廊/知识库）——
@@ -1183,18 +1338,34 @@ const ShellInner: React.FC = () => {
               onActivate={activateTopTab}
               onClose={closeTopTab}
               onTogglePin={(t) => topTabs.togglePin(t.id)}
+              pinnedLocalCwds={pinnedLocalCwds}
+              onLocalTogglePin={(cwd) => topTabs.togglePin(localTabId(cwd))}
             />
             <div className="v2-grow" />
           </div>
 
-          {/* key={activeNav} 让视图切换时 React 重挂载内部子树，配合 .v2-view-frame 的
-             v2-view-in 透明度入场，给 nav 切换一个 160ms 安静的过场（不动 layout）。 */}
-          <div className="v2-view-frame" key={activeNav}>
-          {activeNav === 'gallery' && <GalleryView />}
-          {activeNav === 'kb' && <KnowledgeView />}
-          {activeNav === 'local' && (
-            <div className="v2-feat">
-              <div className="v2-feat-main"><LocalAgentConversation la={la} /></div>
+          {/* keep-alive：重的视图首访后常驻、用 hidden 切显隐（不再 key={activeNav} 整树
+             重挂）。切换=切 CSS 显隐，瞬时；首访仍挂载一次。chat 是首页/较轻，仍走条件渲染。 */}
+          <div className="v2-view-frame">
+          {visitedNav.has('gallery') && (
+            <div className="v2-view-slot" hidden={activeNav !== 'gallery'}><GalleryViewKA /></div>
+          )}
+          {visitedNav.has('kb') && (
+            <div className="v2-view-slot" hidden={activeNav !== 'kb'}><KnowledgeViewKA /></div>
+          )}
+          {visitedNav.has('local') && (
+            <div className="v2-view-slot" hidden={activeNav !== 'local'}>
+              <div className="v2-feat">
+                <div className="v2-feat-main">
+                  {/* 分屏里的异类窗格由这里渲染：wiki → 知识库（自包含、无流式）；
+                      chat:<sid> → 只读会话面板（不接 WS，性能安全）。 */}
+                  <ChatPaneContext.Provider value={chatPaneCtx}>
+                    <ForeignPaneContext.Provider value={renderForeignPane}>
+                      <LocalAgentConversation la={la} />
+                    </ForeignPaneContext.Provider>
+                  </ChatPaneContext.Provider>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1235,54 +1406,18 @@ const ShellInner: React.FC = () => {
 
           <div className="v2-composer-wrap">
             <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={onFiles} />
-            <div className={`v2-composer${mode === 'create' && !cbarOpen ? ' cbar-collapsed' : ''}`} data-mode={mode}>
-              <div className="v2-cbar">
-                <div className="v2-cbar-inner">
-                  <div className="v2-hd">
-                    <span className="v2-t">{tr('shell.create.title')}</span>
-                    <span className="v2-h">{tr('shell.create.hint')}</span>
-                    <span className="v2-h-warn" title={tr('shell.create.noPersonaTip')}>{tr('shell.create.noPersona')}</span>
-                    {/* Collapsed strip mirrors the sent CreateSpecCard chips so config stays visible. */}
-                    {!cbarOpen && (
-                      <span className="v2-cbar-summary">
-                        <span className="v2-spec-chip"><IconAspect />{create.cfg.aspect}</span>
-                        <span className="v2-spec-chip">× {create.cfg.count}</span>
-                        {create.cfg.style.trim() && (
-                          <span className="v2-spec-chip" title={create.cfg.style}>{tr('shell.create.styleChip')} · {styleLabel}</span>
-                        )}
-                        {create.cfg.negative.trim() && (
-                          <span className="v2-spec-chip" title={create.cfg.negative}>{tr('shell.create.negativeChip')} · {negativeLabel}</span>
-                        )}
-                        {create.refs.length > 0 && (
-                          <span className="v2-spec-chip">{tr('shell.create.refChip')} × {create.refs.length}</span>
-                        )}
-                      </span>
-                    )}
-                    <button
-                      className={`v2-cbar-toggle${cbarOpen ? ' open' : ''}`}
-                      title={cbarOpen ? tr('shell.collapse') : tr('shell.expand')}
-                      aria-label={cbarOpen ? tr('shell.create.collapsePanel') : tr('shell.create.expandPanel')}
-                      aria-expanded={cbarOpen}
-                      onClick={() => setCbarOpen((v) => !v)}
-                    ><IconChevron /></button>
-                    <button className="v2-x" title={tr('shell.create.exit')} aria-label={tr('shell.create.exit')} onClick={() => setMode('chat')}>✕</button>
-                  </div>
-                  <div className="v2-chips">
-                    <button className={`v2-chip${openChip === 'style' ? ' active' : ''}`} onClick={() => toggleChip('style')}>
-                      <span className="v2-k">{tr('shell.create.style')}</span><span>{styleLabel}</span>
-                    </button>
-                    <button className={`v2-chip${openChip === 'aspect' ? ' active' : ''}`} onClick={() => toggleChip('aspect')}>
-                      <span className="v2-k">{tr('shell.create.aspect')}</span><span>{create.cfg.aspect}</span>
-                    </button>
-                    <button className={`v2-chip${openChip === 'count' ? ' active' : ''}`} onClick={() => toggleChip('count')}>
-                      <span className="v2-k">{tr('shell.create.count')}</span><span>{create.cfg.count}</span>
-                    </button>
-                    <button className={`v2-chip${openChip === 'negative' ? ' active' : ''}`} onClick={() => toggleChip('negative')}>
-                      <span className="v2-k">{tr('shell.create.negative')}</span><span>{negativeLabel}</span>
-                    </button>
-                  </div>
-
-                  {openChip && (
+            <div className="v2-composer" data-mode={mode}>
+              {/* Chat / 创作 mode toggle — sits above the box (prototype layout). */}
+              <div className="v2-modepills" ref={pillsRef}>
+                <span className="v2-indicator" ref={indicatorRef} />
+                <button ref={chatBtnRef}   className={mode === 'chat'   ? 'on' : ''} onClick={() => setMode('chat')}>{tr('shell.modeChat')}</button>
+                <button ref={createBtnRef} className={mode === 'create' ? 'on' : ''} onClick={() => setMode('create')}>{tr('shell.modeCreate')}</button>
+              </div>
+              <div className="v2-box">
+                {/* Create-mode config picker — floats above the box (like the
+                    @域 mention popover) so the prompt + tools stay in one box. */}
+                {mode === 'create' && openChip && (
+                  <div className="v2-create-pop">
                     <ChipPanel
                       which={openChip}
                       cfg={create.cfg}
@@ -1295,8 +1430,11 @@ const ShellInner: React.FC = () => {
                       aspectHint={create.caps.hint}
                       close={() => setOpenChip(null)}
                     />
-                  )}
-
+                  </div>
+                )}
+                {/* Create-mode reference images — sit inside the box, above the
+                    prompt, like attachments do in chat. */}
+                {mode === 'create' && create.refs.length > 0 && (
                   <div className="v2-refs">
                     {create.refs.map((r, i) => (
                       <RefPill
@@ -1309,10 +1447,7 @@ const ShellInner: React.FC = () => {
                     ))}
                     <div className="v2-ref add" onClick={onPickFiles}>{tr('shell.create.addRef')}</div>
                   </div>
-                </div>
-              </div>
-
-              <div className="v2-box">
+                )}
                 {mode === 'chat' && quoted && (
                   <div className="v2-quote-bar">
                     <span className="v2-quote-tag">{quoted.role === 'assistant' ? tr('shell.quote.reply') : tr('shell.quote.you')}</span>
@@ -1404,11 +1539,24 @@ const ShellInner: React.FC = () => {
                     >
                       <IconModel />
                     </button>
-                    <div className="v2-modepills" ref={pillsRef}>
-                      <span className="v2-indicator" ref={indicatorRef} />
-                      <button ref={chatBtnRef}   className={mode === 'chat'   ? 'on' : ''} onClick={() => setMode('chat')}>{tr('shell.modeChat')}</button>
-                      <button ref={createBtnRef} className={mode === 'create' ? 'on' : ''} onClick={() => setMode('create')}>{tr('shell.modeCreate')}</button>
-                    </div>
+                    {/* Create-mode config chips, arranged inline inside the box. */}
+                    {mode === 'create' && (
+                      <div className="v2-create-chips">
+                        <button className={`v2-chip${openChip === 'style' ? ' active' : ''}`} onClick={() => toggleChip('style')}>
+                          <span className="v2-k">{tr('shell.create.style')}</span><span>{styleLabel}</span>
+                        </button>
+                        <button className={`v2-chip${openChip === 'aspect' ? ' active' : ''}`} onClick={() => toggleChip('aspect')}>
+                          <span className="v2-k">{tr('shell.create.aspect')}</span><span>{create.cfg.aspect}</span>
+                        </button>
+                        <button className={`v2-chip${openChip === 'count' ? ' active' : ''}`} onClick={() => toggleChip('count')}>
+                          <span className="v2-k">{tr('shell.create.count')}</span><span>{create.cfg.count}</span>
+                        </button>
+                        <button className={`v2-chip${openChip === 'negative' ? ' active' : ''}`} onClick={() => toggleChip('negative')}>
+                          <span className="v2-k">{tr('shell.create.negative')}</span><span>{negativeLabel}</span>
+                        </button>
+                        <span className="v2-create-note" title={tr('shell.create.noPersonaTip')}>{tr('shell.create.noPersona')}</span>
+                      </div>
+                    )}
                   </div>
                   <ModelBadge
                     mode={mode}
@@ -2459,14 +2607,16 @@ const RefPill: React.FC<{ idx: number; r: RefImage; onChange: (v: string) => voi
   const { t: tr } = useI18n();
   return (
   <div className="v2-ref">
-    <div className="v2-th"><img src={`data:${r.mimeType};base64,${r.data}`} alt={`#${idx}`} /></div>
+    <div className="v2-th">
+      <img src={`data:${r.mimeType};base64,${r.data}`} alt={`#${idx}`} />
+      <button className="v2-rm" onClick={onRemove} title={tr('common.delete')} aria-label={tr('common.delete')}>✕</button>
+    </div>
     <input
       className="v2-dir"
       placeholder={tr('shell.refPill.placeholder', { idx })}
       value={r.directive}
       onChange={(e) => onChange(e.target.value)}
     />
-    <span className="v2-x" onClick={onRemove}>✕</span>
   </div>
   );
 };
@@ -3484,11 +3634,89 @@ const ChatRow = React.memo<{
       onClick={() => onOpen(r)}
       title={r.name || r.title}
     >
+      <span className="v2-ic" aria-hidden>{tea ? <IconTeahouse /> : <IconChat />}</span>
       <span className="v2-t">{r.name || r.title || r.preview_text || (tea ? tr('shell.newTeahouse') : tr('shell.emptySession'))}</span>
       <span className="v2-more" onClick={(e) => onMore(r, e)}>⋯</span>
     </div>
   );
 });
 ChatRow.displayName = 'ChatRow';
+
+// keep-alive 包装：无 props 的视图 memo 化，常驻挂载后不随 ClientShell 每次重渲（如
+// 聊天流式）而重渲；只在自身内部状态变化时重渲。避免「常驻」引入隐藏视图空转的回归。
+const KnowledgeViewKA = React.memo(KnowledgeView);
+const GalleryViewKA = React.memo(GalleryView);
+// 分屏 wiki 窗格：standalone（自带左树、不抢主侧栏 portal 槽位），memo 避免随父重渲。
+const KnowledgeViewPane = React.memo(() => <KnowledgeView standalone />);
+KnowledgeViewPane.displayName = 'KnowledgeViewPane';
+
+/** 分屏聊天窗格用的最小后端通道（由 ClientShell 注入唯一的 useChatBackend）。
+ *  单 WS：被「聚焦/接管」的那个会话才实时（= 主后端的 activeSessionId），其余静态历史。 */
+type ChatPaneCtx = {
+  activeSessionId: string | null;
+  messages: Message[];
+  stream: { id: string; content: string; reasoning: string } | null;
+  sendMessage: (text: string, opts?: { agentId?: string; ext?: Record<string, unknown> }) => Promise<boolean> | void;
+  setActiveSessionId: (sid: string) => void;
+};
+const ChatPaneContext = React.createContext<ChatPaneCtx | null>(null);
+
+/** 分屏里的云端会话窗格：聚焦/点击 → 接管唯一 WS（成为 activeSessionId）= 实时 + 可输入；
+ *  未聚焦 → 拉一页历史只读展示（不占第二路流）。即「性能安全版」交互聊天。 */
+const ChatSessionPane: React.FC<{ sessionId: string }> = React.memo(({ sessionId }) => {
+  const ctx = useContext(ChatPaneContext);
+  const isActive = !!ctx && ctx.activeSessionId === sessionId;
+  const [loaded, setLoaded] = useState<Message[] | null>(null);
+  const [draft, setDraft] = useState('');
+  const [preview, setPreview] = useState<string | null>(null);
+  useEffect(() => {
+    if (isActive) return;                 // 接管后用主后端 messages，不必自拉
+    let alive = true; setLoaded(null);
+    getSessionMessages(sessionId, 1, 50)
+      .then((r) => { if (alive) setLoaded(r.messages); })
+      .catch(() => { if (alive) setLoaded([]); });
+    return () => { alive = false; };
+  }, [sessionId, isActive]);
+  const msgs = isActive ? ctx!.messages : loaded;
+  const noop = () => {};
+  const activate = () => { if (ctx && !isActive) ctx.setActiveSessionId(sessionId); };
+  const onSend = () => {
+    const t = draft.trim(); if (!t || !ctx) return;
+    if (!isActive) ctx.setActiveSessionId(sessionId);
+    void ctx.sendMessage(t);
+    setDraft('');
+  };
+  return (
+    <div className="v2-foreign-chat" onMouseDown={activate}>
+      <section className="v2-stream v2-foreign-stream">
+        <div className="v2-msgs">
+          {!msgs && <div className="v2-feat-empty">{'加载会话…'}</div>}
+          {msgs && msgs.length === 0 && <div className="v2-feat-empty">{'空会话'}</div>}
+          {msgs && msgs.map((m) => (
+            <MessageView key={m.message_id} m={m} showTokens={false}
+              onPreviewImage={setPreview} onRevert={noop} onEdit={noop} onQuote={noop}
+              onRerunCreation={noop} onOpenSpec={noop} />
+          ))}
+          {isActive && ctx!.stream && ctx!.stream.content && (
+            <div className="v2-msg assistant"><div className="v2-body"><div className="v2-md"><p style={{ whiteSpace: 'pre-wrap' }}>{ctx!.stream.content}</p></div></div></div>
+          )}
+        </div>
+      </section>
+      <div className="v2-foreign-composer">
+        <textarea
+          value={draft}
+          onFocus={activate}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
+          placeholder={isActive ? 'Ask anything…' : '点此接管会话并发消息…'}
+          rows={1}
+        />
+        <button className="v2-foreign-send" onClick={onSend} disabled={!draft.trim()} title="发送 (Enter)">↑</button>
+      </div>
+      {preview && <div className="v2-imgpreview" onClick={() => setPreview(null)}><img src={preview} alt="" /></div>}
+    </div>
+  );
+});
+ChatSessionPane.displayName = 'ChatSessionPane';
 
 export default ClientShell;

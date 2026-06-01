@@ -11,6 +11,8 @@ const DEV_URL = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5177';
 // v2 is the only shell now; root renders it directly (no router).
 const ENTRY_PATH = process.env.CHAYA_ENTRY || '/';
 const IS_MAC = process.platform === 'darwin';
+// 全局 UI 缩放档位（1 = 原始，0.9 ≈ 小一号）。整体瘦身，分屏能显示更多单会话内容。
+const UI_ZOOM = Number(process.env.CHAYA_UI_ZOOM || 0.9);
 // Master PNG (transparent corners, black squircle, white triangle). Packaged
 // macOS builds use build/icon.icns via electron-builder; this drives the dev
 // dock icon and the win/linux window icon.
@@ -28,11 +30,15 @@ function createWindow() {
     // take it for the title bar / taskbar.
     icon: IS_MAC ? undefined : ICON_PNG,
     titleBarStyle: IS_MAC ? 'hiddenInset' : 'default',
-    // Lights are 12px circles → center y = 16+6 = 22. The in-app shell-toggle
-    // and topbar crumb are both sized so their optical centers land on the
-    // same y=22 axis. (Default y avoided so we don't need an Electron restart
-    // to see correct alignment.)
-    trafficLightPosition: IS_MAC ? { x: 14, y: 16 } : undefined,
+    // Lights are 12px circles; the in-app shell-toggle and topbar crumb optical
+    // centers sit on the y=22 content axis (x≈14 inset). But the OS-drawn lights
+    // do NOT scale with the page zoom (UI_ZOOM) — content scales from the origin,
+    // so the y=22 axis lands at device 22*UI_ZOOM. Pre-scale the light position by
+    // UI_ZOOM so lights re-center on the zoomed in-app row:
+    //   y = (content center 22) * UI_ZOOM − radius 6 ;  x = inset 14 * UI_ZOOM.
+    trafficLightPosition: IS_MAC
+      ? { x: Math.round(14 * UI_ZOOM), y: Math.round(22 * UI_ZOOM - 6) }
+      : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -44,6 +50,11 @@ function createWindow() {
 
   // 页面加载后：标记 Electron 环境 + macOS 红绿灯避让
   win.webContents.on('did-finish-load', () => {
+    // 整体 UX 缩小一档（页面级缩放，等价 Cmd+-）：分屏视图能塞下更多单会话内容。
+    // 用页面缩放而非 CSS zoom —— 后者会让按 getBoundingClientRect 定位的 fixed 菜单
+    // （侧栏 ⋯ 菜单、模式指示器等）二次缩放而错位；页面缩放则保持坐标系一致、无视口空隙。
+    try { win.webContents.setZoomFactor(UI_ZOOM); } catch { /* */ }
+
     win.webContents.executeJavaScript(`
       document.documentElement.setAttribute('data-electron', 'true');
       document.documentElement.setAttribute('data-electron-platform', '${process.platform}');

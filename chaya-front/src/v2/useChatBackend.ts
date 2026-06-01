@@ -201,7 +201,20 @@ export function useChatBackend(typewriter: TypewriterConfig = DEFAULT_TYPEWRITER
         listTeahouses().catch(() => [] as Session[]),
       ]);
       const agentList = agents || [];
-      const recents = (sessions || []).filter((x) => x.session_type === 'topic_general');
+      // 后端 `GET /api/conversations` 的 Conversation 行只有 `type`（private/group），
+      // 不带 `session_type`——create 也吞掉了前端发的 `session_type: 'topic_general'`。
+      // 所以不能按 `=== 'topic_general'` 过滤（永远空）。真正要排除的是 Agent 绑定的
+      // 会话（已在 Agents 区展示，其 conversation_id 即 session_id）和茶话会话，其余
+      // 都是普通 Chat。
+      const agentConvIds = new Set(
+        agentList
+          .map((a) => (a as any).conversation_id || a.session_id)
+          .filter(Boolean) as string[]
+      );
+      const teahouseSids = new Set((teahouses || []).map((t) => t.session_id));
+      const recents = (sessions || []).filter(
+        (x) => x.session_id && !agentConvIds.has(x.session_id) && !teahouseSids.has(x.session_id)
+      );
       setS((p) => {
         const fallback = selectIfEmpty && !p.activeSessionId
           ? (agentList.find((a) => a.is_primary)?.session_id || agentList[0]?.session_id || null)
