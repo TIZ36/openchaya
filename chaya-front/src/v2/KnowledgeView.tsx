@@ -408,6 +408,7 @@ const KbTree: React.FC<{
             >
               <span className="ic"><IconEdit /></span>
               <span className="nm">{noteTitle(f)}</span>
+              {f.mtimeMs ? <span className="meta">{fmtRelTime(f.mtimeMs, tr)}</span> : null}
             </button>
           ))}
         </div>
@@ -459,6 +460,17 @@ function byDocName(a: Document, b: Document): number {
 }
 function byNoteName(a: LocalNoteFile, b: LocalNoteFile): number {
   return a.name.localeCompare(b.name, 'zh-Hans-CN');
+}
+/** Compact relative age for note rows, via the shared local.time.* dictionary. */
+function fmtRelTime(ms: number, tr: (k: string, v?: Record<string, string | number>) => string): string {
+  if (!ms) return '';
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return tr('local.time.justNow');
+  if (diff < 3600_000) return tr('local.time.minutes', { n: Math.floor(diff / 60_000) });
+  if (diff < 86400_000) return tr('local.time.hours', { n: Math.floor(diff / 3600_000) });
+  if (diff < 30 * 86400_000) return tr('local.time.days', { n: Math.floor(diff / 86400_000) });
+  if (diff < 365 * 86400_000) return tr('local.time.months', { n: Math.floor(diff / (30 * 86400_000)) });
+  return tr('local.time.years', { n: Math.floor(diff / (365 * 86400_000)) });
 }
 
 /* ============ Right canvas (router) ============ */

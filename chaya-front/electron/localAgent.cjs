@@ -510,6 +510,7 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, 
   // 发事件给渲染层（按 runKey 路由）；帧已销毁（渲染进程崩溃/重载）则中断会话并停发，
   // 避免对着死帧疯狂 send 刷屏报错、也让孤儿 SDK 进程及时收尾。
   const emit = (ev) => {
+    const s = sessions.get(key); if (s) s.touched = Date.now();   // 任意流量 = 活跃，重置闲置计时
     if (sender.isDestroyed()) { try { ac.abort(); } catch { /* */ } return false; }
     try { sender.send('localAgent:event', { cwd: key, ev }); return true; }
     catch { try { ac.abort(); } catch { /* */ } return false; }
@@ -540,7 +541,7 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, 
   });
 
   const mcpServers = resolveMcp(cwd, mcp);
-  const session = { input, ac, query: null, model: model || null, mcp: Array.isArray(mcp) ? mcp.slice() : [] };
+  const session = { input, ac, query: null, model: model || null, mcp: Array.isArray(mcp) ? mcp.slice() : [], touched: Date.now() };
   sessions.set(key, session);
 
   (async () => {
@@ -732,6 +733,17 @@ async function sessionInterrupt({ cwd, lane }) {
   return { ok: false };
 }
 
+/** 真正回收一条常驻 claude 会话：关输入流(EOF→子进程退出) + abort(SIGTERM 兜底)。 */
+function killSessionByKey(key, reason) {
+  const s = sessions.get(key);
+  if (!s) return false;
+  sessions.delete(key);
+  clearPerms(key, reason || '已切换');
+  try { s.input.close(); } catch { /* */ }   // 结束输入迭代 → claude 子进程收到 stdin EOF 自行退出
+  try { s.ac.abort(); } catch { /* */ }       // 兜底：SDK abort → SIGTERM 子进程
+  return true;
+}
+
 /** 关闭某标签/车道的常驻会话，回收进程（切会话/新建/关标签/换 provider/关衍生卡片时调）。 */
 function sessionClose({ cwd, lane }) {
   if (!lane) {
@@ -743,14 +755,40 @@ function sessionClose({ cwd, lane }) {
       return { ok: true };
     }
   }
-  const key = runKey(cwd, lane);
-  const s = sessions.get(key);
-  if (!s) return { ok: false };
-  sessions.delete(key);
-  clearPerms(key, '已切换');
-  try { s.input.close(); } catch { /* */ }
-  try { s.ac.abort(); } catch { /* */ }
-  return { ok: true };
+  return { ok: killSessionByKey(runKey(cwd, lane)) };
+}
+
+/** 全部回收：渲染进程重载/崩溃/退出时调——否则旧会话的 claude 子进程会变孤儿常驻
+ *  （实测一天下来累积了 9 条、共 ~500MB、最久 20h+）。幂等。 */
+function killAllSessions() {
+  const n = sessions.size + cursorSessions.size;
+  for (const key of [...sessions.keys()]) killSessionByKey(key, '已重置');
+  for (const [cwd, cu] of [...cursorSessions]) {
+    cursorSessions.delete(cwd);
+    try { if (cu.ac) cu.ac.abort(); } catch { /* */ }
+    try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ }
+  }
+  // Backstop: the claude CLI children (direct children of this main process)
+  // ignore SIGTERM, so abort()/stdin-EOF can leave them resident (observed: 20h+
+  // orphans after renderer reloads). On full teardown SIGKILL every one of ours.
+  try {
+    require('child_process').execFile('pkill', ['-9', '-P', String(process.pid), '-f', 'output-format stream-json'], () => {});
+  } catch { /* pkill unavailable (non-unix) — graceful close above still applies */ }
+  if (n) console.log('[localAgent] killAllSessions · reaped %d resident session(s)', n);
+  return n;
+}
+
+/** 闲置回收：超过 IDLE_MS 没有任何流量(发送/流式)的常驻会话被收掉，下次发送自动重新冷启。
+ *  防止后台多会话/预热会话长期占着 ~60MB/条 的 claude 子进程。 */
+const SESSION_IDLE_MS = 15 * 60 * 1000;
+function reapIdleSessions() {
+  const now = Date.now();
+  for (const [key, s] of sessions) {
+    if (now - (s.touched || 0) > SESSION_IDLE_MS) {
+      console.log('[localAgent] reap idle session · %s (idle %dm)', key, Math.round((now - s.touched) / 60000));
+      killSessionByKey(key, '闲置回收');
+    }
+  }
 }
 
 /** 会话进行中切换权限模式（Tab 切档即时生效）。 */
@@ -990,8 +1028,11 @@ async function cursorDeleteSession(cwd, sessionId) {
 /* ------------------------------------------------------------------ *
  * IPC 注册
  * ------------------------------------------------------------------ */
+let _reaperTimer = null;
 function registerLocalAgent(ipcMain, dialog) {
   console.log('[localAgent] ready · multi-session lane routing (runKey=cwd#@#lane)');
+  // 每 60s 扫一遍，收掉闲置 >15min 的常驻会话（防多会话/预热进程长期占内存）。
+  if (!_reaperTimer) { _reaperTimer = setInterval(reapIdleSessions, 60_000); if (_reaperTimer.unref) _reaperTimer.unref(); }
   ipcMain.handle('localAgent:detect', () => detect());
   ipcMain.handle('localAgent:pickFolder', async () => {
     const res = await dialog.showOpenDialog({
@@ -1041,6 +1082,7 @@ function registerLocalAgent(ipcMain, dialog) {
 
 module.exports = {
   registerLocalAgent,
+  killAllSessions,   // main.cjs 在渲染进程重载/崩溃/退出时调，回收孤儿 claude 子进程
   // 仅供本地冒烟测试，不在渲染进程使用。
   _internals: { detect, findProjectDir, listSessions, readSession, listCommands, deleteSession },
 };

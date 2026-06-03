@@ -3,7 +3,7 @@
  */
 const { app, BrowserWindow, shell, ipcMain, dialog, nativeImage } = require('electron');
 const path = require('path');
-const { registerLocalAgent } = require('./localAgent.cjs');
+const { registerLocalAgent, killAllSessions } = require('./localAgent.cjs');
 const { registerNotes } = require('./notes.cjs');
 
 const isDev = !app.isPackaged;
@@ -101,10 +101,16 @@ function createWindow() {
     goneStreak = (now - lastGoneAt < 8000) ? goneStreak + 1 : 1;
     lastGoneAt = now;
     console.error('[main] render-process-gone:', JSON.stringify(details), `streak=${goneStreak}`);
+    try { killAllSessions(); } catch { /* */ }   // 旧渲染没了 → 它开的 claude 常驻进程全成孤儿，回收
     if (goneStreak >= 3) { console.error('[main] renderer crashed 3× in a row — stopping auto-reload to break the loop'); return; }
     if (!win.isDestroyed()) { try { win.webContents.reload(); } catch { /* */ } }
   });
   win.webContents.on('unresponsive', () => console.warn('[main] renderer unresponsive'));
+  // 整页重载（Cmd+R / HMR full reload）也会让旧会话进程变孤儿：导航开始即回收。
+  // 首屏加载时 sessions 为空 → 无副作用；in-place(SPA pushState) 不触发。
+  win.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) { try { killAllSessions(); } catch { /* */ } }
+  });
 }
 
 // 本地 Agent 桥：纯本地功能，与后端无关。仅注册一次。
@@ -125,6 +131,9 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (!IS_MAC) app.quit();
 });
+
+// 退出前回收所有常驻 claude 会话，别留孤儿进程在系统里。
+app.on('before-quit', () => { try { killAllSessions(); } catch { /* */ } });
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();

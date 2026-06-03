@@ -6,6 +6,12 @@
 @import url('https://fonts.googleapis.com/css2?family=Architects+Daughter&family=Kalam:wght@400;700&display=swap');
 
 .chaya-v2 {
+  /* Single source of truth for the left sidebar width — both the sidebar and the
+     main card's left offset derive from it, so they can never drift apart.
+     Responsive: caps at 390px (the requested +100) on wide windows, but scales
+     down on narrow ones so it never crowds the main card to a sliver. */
+  --sidebar-w: clamp(300px, 30vw, 390px);
+  --sidebar-gap: 6px;
   /* Drives Shiki's light-dark() dual theme (see codeBlock.tsx). Dark mode is
      an attribute, not a class/media query, so color-scheme is set per mode. */
   color-scheme: light;
@@ -561,7 +567,7 @@ html[data-electron="true"] .chaya-v2 .v2-tb .v2-dots { display: none; }
 }
 /* ===== 统一侧栏：v2-side 一条 212px 的导航 + 当前功能列表 + 底部账号，整条 --c-sidebar
    底色；白卡片只裹右侧内容。导航为 icon+文字「水平」排列。 ===== */
-.chaya-v2 .v2-side.v2-sidebar { width: 290px; align-items: stretch; padding: 8px 8px 10px; }
+.chaya-v2 .v2-side.v2-sidebar { width: var(--sidebar-w); align-items: stretch; padding: 8px 8px 10px; }
 /* 顶部控制条：折叠按钮（最左）+ 固定 tab 小图标，与右侧顶栏 tab 同处标题栏一行，
    下方一道与功能列表同款细分隔。 */
 .chaya-v2 .v2-rail-pins {
@@ -636,7 +642,13 @@ html[data-electron-platform="darwin"] .chaya-v2 .v2-rail-lights-gap { width: 70p
   transition: background 140ms var(--c-ease), color 140ms var(--c-ease);
 }
 .chaya-v2 .v2-railbtn:hover { background: var(--c-hover-soft); color: var(--c-ink); }
-.chaya-v2 .v2-railbtn.active { background: var(--c-hover); color: var(--c-ink); }
+/* selected nav = same selection language as the KB tree / CLI sessions: soft bg +
+   pressed-in ink rail + accent icon, so "where am I" reads consistently sidebar-wide. */
+.chaya-v2 .v2-railbtn.active {
+  background: var(--c-hover); color: var(--c-ink);
+  box-shadow: inset 2px 0 0 color-mix(in oklab, var(--c-ink) 70%, transparent);
+  transition: background 140ms var(--c-ease), color 140ms var(--c-ease), box-shadow 140ms var(--c-ease);
+}
 .chaya-v2 .v2-railbtn .ic { display: inline-flex; flex: 0 0 auto; }
 .chaya-v2 .v2-railbtn .ic svg { width: 18px; height: 18px; }
 .chaya-v2 .v2-railbtn .lb { font-size: 13px; font-weight: 500; letter-spacing: 0.01em; }
@@ -889,7 +901,7 @@ html[data-electron-platform="darwin"] .chaya-v2 .v2-rail-lights-gap { width: 70p
   /* Card sits high — its top-tab bar lives in the title strip alongside the
      macOS lights (right of them, the card starts at x≈218). The sidebar lifts
      its pin row to the same strip so left + right top bars align, no dead band. */
-  margin: 4px 6px 6px 296px;   /* 留出左侧 290px 统一侧栏 + 6px 间隙 */
+  margin: 4px 6px 6px calc(var(--sidebar-w) + var(--sidebar-gap));   /* 左侧统一侧栏 + 间隙，宽度同源于 --sidebar-w 不会错位 */
   overflow: hidden;
   /* 阴影：inset 顶高光 + 短焦贴底 + 中焦微浮，所有过渡都在 ≤16px 内收住，
      避免长焦糊化边缘。 */
@@ -2620,24 +2632,33 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-kb-snbar.tone-down .hint { color: var(--c-danger); }
 .chaya-v2 .v2-kb-snbar.tone-probing .hint { color: var(--c-warn); }
 .chaya-v2 .v2-kb-snbar.tone-nokey .sn .st { background: var(--c-ink-4); }
-.chaya-v2 .v2-kb-tree-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 4px 12px; display: flex; flex-direction: column; gap: 1px; }
+.chaya-v2 .v2-kb-tree-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 4px 12px; display: flex; flex-direction: column; gap: 2px; }
 .chaya-v2 .v2-kb-node {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 7px 10px; border-radius: var(--c-radius-md);
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 7px 12px; border-radius: var(--c-radius-md);
   text-align: left; cursor: pointer; color: var(--c-ink-2);
-  transition: background 140ms var(--c-ease), color 140ms var(--c-ease);
+  transition: background 140ms var(--c-ease), color 140ms var(--c-ease), box-shadow 140ms var(--c-ease);
 }
 .chaya-v2 .v2-kb-node:hover { background: var(--c-hover-soft); color: var(--c-ink); }
-.chaya-v2 .v2-kb-node.active { background: var(--c-hover); color: var(--c-ink); }
+/* selected = soft bg + a pressed-in INK rail (letterpress deboss, same language as
+   the CLI session rows) + an accent icon as the single sparing color cue. */
+.chaya-v2 .v2-kb-node.active {
+  background: var(--c-hover); color: var(--c-ink);
+  box-shadow: inset 2px 0 0 color-mix(in oklab, var(--c-ink) 70%, transparent);
+}
 .chaya-v2 .v2-kb-node .ic { width: 16px; height: 16px; display: grid; place-items: center; color: var(--c-ink-4); flex: 0 0 auto; }
-.chaya-v2 .v2-kb-node:hover .ic, .chaya-v2 .v2-kb-node.active .ic { color: var(--c-ink-3); }
+.chaya-v2 .v2-kb-node:hover .ic { color: var(--c-ink-3); }
+.chaya-v2 .v2-kb-node.active .ic { color: var(--c-accent-strong); }
 .chaya-v2 .v2-kb-node .ic svg { width: 15px; height: 15px; }
 .chaya-v2 .v2-kb-node .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.chaya-v2 .v2-kb-node .cnt { font-size: 10.5px; color: var(--c-ink-4); font-variant-numeric: tabular-nums; }
+.chaya-v2 .v2-kb-node .cnt { flex: 0 0 auto; font-size: 10.5px; color: var(--c-ink-4); font-variant-numeric: tabular-nums; }
 .chaya-v2 .v2-kb-node.top { font-size: 13px; }
-.chaya-v2 .v2-kb-node.leaf { padding-left: 30px; color: var(--c-ink-2); }
+.chaya-v2 .v2-kb-node.leaf { padding-left: 34px; color: var(--c-ink-2); }
 .chaya-v2 .v2-kb-node.leaf .ic { width: 14px; height: 14px; }
 .chaya-v2 .v2-kb-node.leaf .ic svg { width: 13px; height: 13px; }
+/* note row recency — muted mono on the right, the extra sidebar width put to use. */
+.chaya-v2 .v2-kb-node.leaf .meta { flex: 0 0 auto; font-size: 10px; color: var(--c-ink-4); font-family: var(--c-mono); font-variant-numeric: tabular-nums; letter-spacing: 0.01em; opacity: 0.8; transition: opacity 140ms var(--c-ease); }
+.chaya-v2 .v2-kb-node.leaf:hover .meta, .chaya-v2 .v2-kb-node.leaf.active .meta { opacity: 1; }
 
 /* 段头 + 分组 */
 .chaya-v2 .v2-kb-tree-sec { display: flex; align-items: center; justify-content: space-between; padding: 16px 10px 6px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--c-ink-4); }
