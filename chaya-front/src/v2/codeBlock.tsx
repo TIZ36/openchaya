@@ -34,6 +34,12 @@ export const mdRehypePlugins = [rehypeInlineCodeProperty];
 
 const THEME = { light: 'vitesse-light', dark: 'vitesse-dark' } as const;
 
+// Shiki tokenizes the whole block synchronously; on a very large block (agent
+// dumping a big file or long command output) that can spike memory enough to take
+// the renderer down (render-process-gone: oom). Past this size, skip highlighting
+// and render a plain scrollable <pre> — readable, cheap, crash-proof.
+const SHIKI_MAX_CHARS = 40_000;
+
 type CodeProps = {
   node?: Element;
   inline?: boolean;
@@ -58,10 +64,19 @@ export const CodeBlock = React.memo<CodeProps>(({ node, inline, className, child
   }
   const lang = /language-(\w[\w-]*)/.exec(className || '')?.[1] ?? 'text';
   const raw = String(children ?? '').replace(/\n$/, '');
-  if (lang === 'mermaid') {
+  if (lang === 'mermaid' && raw.length <= SHIKI_MAX_CHARS) {
     return (
       <div className="v2-code-wrap">
         <MermaidBlock source={raw} />
+        <CopyButton text={raw} lang={lang} />
+      </div>
+    );
+  }
+  // Oversized block → plain <pre>, no Shiki/Mermaid (avoids renderer OOM).
+  if (raw.length > SHIKI_MAX_CHARS) {
+    return (
+      <div className="v2-code-wrap">
+        <pre className="v2-code v2-code-plain" data-lang={lang}><code>{raw}</code></pre>
         <CopyButton text={raw} lang={lang} />
       </div>
     );

@@ -195,6 +195,14 @@ export const IconTrash = () => (
   </svg>
 );
 
+export const IconDownload = () => (
+  <svg viewBox="0 0 24 24" {...stroke}>
+    <path d="M12 4v11" />
+    <path d="M8 11l4 4 4-4" />
+    <path d="M5 19h14" />
+  </svg>
+);
+
 export const IconDoc = () => (
   <svg viewBox="0 0 24 24" {...stroke}>
     <path d="M6 3h7l5 5v13H6z" />

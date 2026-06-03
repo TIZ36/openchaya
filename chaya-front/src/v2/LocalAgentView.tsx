@@ -13,15 +13,16 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { basename, PERM_META, permModesFor, defaultPermMode, type TranscriptMessage, type SlashCommand, type SessionSummary, type PermissionRequest, type QuestionRequest, type TabGroup as TabGroupT, type McpAvailable, type ModelInfo, type Attachment } from './services/localAgent';
 import type { LocalAgentState, LayoutNode, DropSide, Tab, QueuedMsg } from './useLocalAgent';
-import { TAB_COLORS, isForeignLeaf } from './useLocalAgent';
+import { TAB_COLORS, isForeignLeaf, realDir } from './useLocalAgent';
 
 // 异类窗格渲染器：由 ClientShell 注入（wiki → 知识库；chat:<sid> → 聊天会话）。分屏树叶子
 // 若是异类 id（见 isForeignLeaf），就走这个渲染器，从而把 CLI 之外的页装进同一分屏。
 export type ForeignPaneRender = (id: string) => React.ReactNode;
 export const ForeignPaneContext = React.createContext<ForeignPaneRender | null>(null);
-import { IconSend, IconAgentCode, IconPlus, IconChevron, IconTrash, IconSkill, IconModel } from './icons';
+import { IconSend, IconAgentCode, IconPlus, IconChevron, IconTrash, IconModel } from './icons';
 import { CodeBlock, PreBlock, mdRehypePlugins } from './codeBlock';
 import { useI18n, t } from '../i18n';
+import { useNotes, SelectionToolbar, LocalNotes } from './NotesLayer';
 
 // 公共组件：链接新窗口打开、宽表格局部横滚。
 const MD_COMMON = {
@@ -84,15 +85,25 @@ function groupModelsByVendor(models: ModelInfo[]): [string, ModelInfo[]][] {
   );
 }
 
-const MD: React.FC<{ text: string; live?: boolean }> = React.memo(({ text, live }) => (
-  <div className="v2-md">
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      rehypePlugins={live ? [] : mdRehypePlugins}
-      components={live ? MD_PLAIN : MD_RICH}
-    >{text}</ReactMarkdown>
-  </div>
-));
+// While streaming, the live buffer is re-parsed as markdown on every revealed
+// frame. Past this size that per-frame reparse spikes memory/CPU enough to risk
+// taking the renderer down — so a huge live buffer renders as plain text (cheap),
+// and the finalized message reparses to full markdown exactly once.
+const LIVE_MD_MAX = 18_000;
+const MD: React.FC<{ text: string; live?: boolean }> = React.memo(({ text, live }) => {
+  if (live && text.length > LIVE_MD_MAX) {
+    return <div className="v2-md v2-md-livelong"><pre>{text}</pre></div>;
+  }
+  return (
+    <div className="v2-md">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={live ? [] : mdRehypePlugins}
+        components={live ? MD_PLAIN : MD_RICH}
+      >{text}</ReactMarkdown>
+    </div>
+  );
+});
 
 export const PROVIDER_LABELS: Record<string, string> = {
   claude: 'Claude Code',
@@ -126,6 +137,7 @@ const IconFileGeneric = () => (
     <path d="M4 1.5h5l3 3v9a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5Z" /><path d="M9 1.5v3h3" />
   </svg>
 );
+
 
 /** 把拖入/粘贴的 File 列表转成附件（图片读成 dataUrl 走视觉；其它按 path 让 agent 读取）。
  *  ≤8MB 的图片才内联 dataUrl，否则退化成按路径引用（与主进程 pickFiles 规则一致）。 */
@@ -184,7 +196,7 @@ export const LocalAgentTree: React.FC<{
           const ss = la.sessionsByPath[p.path];
           return (
             <div key={p.id} className="v2-la-proj">
-              <div className={`v2-la-proj-row${la.activeCwd === p.path ? ' active' : ''}`} onClick={() => la.toggleProject(p)}>
+              <div className={`v2-la-proj-row${realDir(la.activeCwd || '') === p.path ? ' active' : ''}`} onClick={() => la.toggleProject(p)}>
                 <span className={`v2-la-caret${open ? ' open' : ''}`}><IconChevron /></span>
                 <span className="v2-la-proj-ic"><IconFolder /></span>
                 <span className="v2-la-proj-nm" title={p.path}>{p.name}</span>
@@ -201,8 +213,8 @@ export const LocalAgentTree: React.FC<{
                     <SessionRow
                       key={s.sessionId}
                       s={s}
-                      active={la.activeSessionId === s.sessionId && la.activeCwd === p.path}
-                      open={la.tabs.some((t) => t.cwd === p.path && t.sessionId === s.sessionId)}
+                      active={la.activeSessionId === s.sessionId && realDir(la.activeCwd || '') === p.path}
+                      open={la.tabs.some((t) => realDir(t.cwd) === p.path && t.sessionId === s.sessionId)}
                       onOpen={() => openSess(p.path, s.sessionId, s.title || s.preview || tr('local.untitledSession'))}
                       onDelete={() => la.deleteSession(p.path, s.sessionId)}
                     />
@@ -224,7 +236,7 @@ type MenuState = { x: number; y: number; kind: 'tab' | 'group'; id: string };
 /** 单个标签 chip：点击切主区内容、可拖到右侧平铺、右键唤出分组菜单。 */
 const TabChip: React.FC<{ la: LocalAgentState; t: Tab; grouped?: boolean; dimmed?: boolean; onMenu: (e: React.MouseEvent, kind: 'tab', id: string) => void; dropProps?: React.HTMLAttributes<HTMLDivElement>; dropBefore?: boolean; onActivate?: (cwd: string) => void; activeCwd?: string | null }> = ({ la, t, grouped, dimmed, onMenu, dropProps, dropBefore, onActivate, activeCwd }) => {
   const { t: tr } = useI18n();
-  const proj = la.projects.find((p) => p.path === t.cwd);
+  const proj = la.projects.find((p) => p.path === realDir(t.cwd));
   // 高亮判断：上层（TopTabs）提供 activeCwd 覆盖时，以它为准 —— 这样当全局 activeId
   // 是一个 chat tab 时，本地 tab 不会还残留 hairline；未提供则回退到 la.activeCwd
   // （非 inline 模式下旧行为）。
@@ -240,7 +252,7 @@ const TabChip: React.FC<{ la: LocalAgentState; t: Tab; grouped?: boolean; dimmed
       title={`${t.cwd}\n${tr('local.tab.chipHint')}`}
       {...(dimmed ? {} : dropProps)}
     >
-      <span className="proj">{proj?.name || basename(t.cwd)}</span>
+      <span className="proj">{proj?.name || basename(realDir(t.cwd))}</span>
       <span className="sep">/</span>
       <span className="sess">{t.sessionId ? t.title : tr('local.newSession')}</span>
       {t.running && <span className="rundot" title={tr('local.running')} />}
@@ -641,6 +653,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const [cfgOpen, setCfgOpen] = useState(false);
   const [cfgTab, setCfgTab] = useState<'model' | 'mcp'>('model');
   const [mcpList, setMcpList] = useState<McpAvailable[] | null>(null);
+  const notes = useNotes(cwd);   // 目录唯一笔记（选区"添加到笔记" + composer pill）
 
   const attachments = tab?.attachments ?? NO_ATTS;
   const queue = tab?.queue ?? NO_QUEUE;
@@ -785,7 +798,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   // chunk re-render. `la.projects` / `la.groups` references only change when
   // structural metadata mutates — well below token frequency.
   const proj = useMemo(
-    () => la.projects.find((p) => p.path === cwd),
+    () => la.projects.find((p) => p.path === realDir(cwd)),
     [la.projects, cwd],
   );
   const group = useMemo(
@@ -861,7 +874,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
           title={tr('local.pane.dragToRearrange')}
         >
           <span className="dot" />
-          <b>{proj?.name || basename(cwd)}</b>
+          <b>{proj?.name || basename(realDir(cwd))}</b>
           <span className="sess">{sessionId ? tab.title : tr('local.newSession')}</span>
           {running && <span className="run" title={tr('local.running')} />}
           <div className="v2-grow" />
@@ -884,6 +897,17 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
         />
       </section>
 
+      {/* 选区延伸：在本窗会话里选中文字 → 浮出「展开讲讲 / 笔记」工具条。 */}
+      <SelectionToolbar
+        containerRef={streamRef}
+        onNote={(text, kind) => notes.add(text, kind)}
+        onPrewarm={() => la.prewarmDerive(cwd)}
+        onDerive={(text) => {
+          const q = text.replace(/\s+/g, ' ').slice(0, 600);
+          la.forkSendText(cwd, `> ${q}\n\n${tr('local.derive.firstAsk')}`);
+        }}
+      />
+
       <div className="v2-composer-wrap v2-la-composer-wrap">
         {/* 需要你介入的事（权限/选择）锚定在本窗输入框上方——绝不随对话流滚走。 */}
         {question && (
@@ -905,11 +929,11 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
             />
           </div>
         )}
-        <div className={`v2-composer${inGrid ? ' v2-la-slim' : ''}`} data-mode="chat">
+        {/* Split-screen reuses the SAME composer as full mode (notes pill, model
+            picker, the works) — just scaled down via .v2-la-mini (zoom), instead
+            of a bespoke slim layout. One component, one set of behaviours. */}
+        <div className={`v2-composer${inGrid ? ' v2-la-mini' : ''}`} data-mode="chat">
           <div className="v2-box">
-            {inGrid && (current?.live
-              ? <button className="v2-la-tri" onClick={openCfg} title={tr('local.cfg.modelMcp')}>▷</button>
-              : <span className="v2-la-prompt" aria-hidden><IconSkill /></span>)}
             {slashOpen && (
               <div className="v2-la-slash">
                 <div className="v2-la-slash-hd">{tr('local.slash.header')}</div>
@@ -967,7 +991,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
               placeholder={
                 !current?.live ? tr('local.composer.unsupported', { provider: current?.label || la.provider })
                   : running ? tr('local.composer.queuePlaceholder')
-                  : sessionId ? '' : inGrid ? tr('local.composer.placeholderSlim') : tr('local.composer.placeholder')
+                  : sessionId ? '' : tr('local.composer.placeholder')
               }
               value={draft}
               disabled={!current?.live}
@@ -977,6 +1001,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
             />
             <div className="v2-row">
               <div className="v2-l">
+                <LocalNotes api={notes} projectName={proj?.name || basename(realDir(cwd))} />
                 {proj && (
                   <span className="v2-la-ctx" title={proj.path}><IconFolder />{proj.name}</span>
                 )}
@@ -992,7 +1017,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                     title={tr('local.att.addHint')}
                   ><IconPaperclip />{attachments.length > 0 && <span className="n">{attachments.length}</span>}</button>
                 )}
-                {!inGrid && current?.live && (
+                {current?.live && (
                   <button className="v2-la-cfg" onClick={openCfg} title={tr('local.cfg.modelMcp')}>
                     <span className="tri" aria-hidden><IconModel /></span>
                     <span className="m">{(la.modelOptions.find((m) => m.value === tab.model)?.displayName) || (tab.model || tr('local.cfg.defaultModel'))}</span>
@@ -1407,8 +1432,95 @@ AgentBlockView.displayName = 'AgentBlockView';
 
 type ToolStatus = 'pending' | 'ok' | 'err';
 
-/** 把一个 tool block 归一成：动词 + 细节(单行) + 可展开的正文。 */
-function describeTool(b: Extract<Block, { k: 'tool' }>, tr: (key: string, vars?: Record<string, string | number>) => string): { verb: string; detail?: string; sub?: string; body: React.ReactNode } {
+/* ---------------------------------------------------------------- *
+ * Git-style line diff for Edit / MultiEdit tool calls.
+ * LCS over lines → aligned side-by-side rows. Hunks are small (old/new are the
+ * snippets the agent passed), so the O(n·m) table is cheap; a size cap guards
+ * the rare giant edit (falls back to plain new-content preview).
+ * ---------------------------------------------------------------- */
+type DiffRow = { type: 'same' | 'add' | 'del' | 'mod'; l?: string; r?: string; ln?: number; rn?: number };
+const DIFF_MAX_CHARS = 16_000;
+
+function diffLines(oldS: string, newS: string, startLn: number, startRn: number): { rows: DiffRow[]; ln: number; rn: number; adds: number; dels: number } {
+  const a = oldS.split('\n');
+  const b = newS.split('\n');
+  const n = a.length, m = b.length;
+  // LCS length table (suffix form) → backtrack into ops.
+  const dp: Int32Array[] = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const ops: { t: 'same' | 'del' | 'add'; s: string }[] = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { ops.push({ t: 'same', s: a[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push({ t: 'del', s: a[i] }); i++; }
+    else { ops.push({ t: 'add', s: b[j] }); j++; }
+  }
+  while (i < n) ops.push({ t: 'del', s: a[i++] });
+  while (j < m) ops.push({ t: 'add', s: b[j++] });
+  // Pair consecutive del/add runs into side-by-side "mod" rows for tidy alignment.
+  const rows: DiffRow[] = [];
+  let ln = startLn, rn = startRn, adds = 0, dels = 0;
+  for (let k = 0; k < ops.length;) {
+    if (ops[k].t === 'same') { rows.push({ type: 'same', l: ops[k].s, r: ops[k].s, ln: ++ln, rn: ++rn }); k++; continue; }
+    const dd: string[] = [], aa: string[] = [];
+    while (k < ops.length && ops[k].t === 'del') { dd.push(ops[k].s); k++; }
+    while (k < ops.length && ops[k].t === 'add') { aa.push(ops[k].s); k++; }
+    const max = Math.max(dd.length, aa.length);
+    for (let x = 0; x < max; x++) {
+      const l = dd[x], r = aa[x];
+      if (l !== undefined && r !== undefined) { rows.push({ type: 'mod', l, r, ln: ++ln, rn: ++rn }); dels++; adds++; }
+      else if (l !== undefined) { rows.push({ type: 'del', l, ln: ++ln }); dels++; }
+      else { rows.push({ type: 'add', r, rn: ++rn }); adds++; }
+    }
+  }
+  return { rows, ln, rn, adds, dels };
+}
+
+/** Side-by-side git diff. `hunks` = one entry for Edit, many for MultiEdit. */
+const DiffView: React.FC<{ hunks: { old: string; neu: string }[]; fileName: string }> = ({ hunks, fileName }) => {
+  const { t: tr } = useI18n();
+  const total = hunks.reduce((s, h) => s + h.old.length + h.neu.length, 0);
+  // Giant edit → don't build a diff table; show the new content plainly.
+  if (total > DIFF_MAX_CHARS) {
+    return <CodePreview code={hunks.map((h) => h.neu).join('\n…\n')} lang={langOf(fileName)} />;
+  }
+  let ln = 0, rn = 0, adds = 0, dels = 0;
+  const blocks: DiffRow[][] = [];
+  for (const h of hunks) {
+    const d = diffLines(h.old, h.neu, ln, rn);
+    blocks.push(d.rows); ln = d.ln; rn = d.rn; adds += d.adds; dels += d.dels;
+  }
+  return (
+    <div className="v2-diff">
+      <div className="v2-diff-hd">
+        <span className="fn">{fileName}</span>
+        <span className="grow" />
+        <span className="stat add">+{adds}</span>
+        <span className="stat del">−{dels}</span>
+      </div>
+      <div className="v2-diff-grid">
+        {blocks.map((rows, bi) => (
+          <React.Fragment key={bi}>
+            {bi > 0 && <div className="v2-diff-sep" aria-hidden>{tr('local.diff.hunk', { n: bi + 1 })}</div>}
+            {rows.map((row, i) => (
+              <div key={i} className={`v2-diff-row ${row.type}`}>
+                <span className="no old">{row.ln ?? ''}</span>
+                <code className="cell old">{row.l ?? ''}</code>
+                <span className="no new">{row.rn ?? ''}</span>
+                <code className="cell new">{row.r ?? ''}</code>
+              </div>
+            ))}
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+/** 把一个 tool block 归一成：动词 + 细节(单行) + 可展开的正文。expand: 该类工具默认展开。 */
+function describeTool(b: Extract<Block, { k: 'tool' }>, tr: (key: string, vars?: Record<string, string | number>) => string): { verb: string; detail?: string; sub?: string; body: React.ReactNode; expand?: boolean } {
   const name = b.name || 'tool';
   const input = b.input || {};
   const lower = name.toLowerCase();
@@ -1429,12 +1541,20 @@ function describeTool(b: Extract<Block, { k: 'tool' }>, tr: (key: string, vars?:
   }
   if (lower === 'edit' || lower === 'write' || lower === 'multiedit' || lower === 'notebookedit') {
     const file = input.file_path || input.notebook_path || '';
-    const code = lower === 'write' ? (input.content || '')
-      : lower === 'multiedit' ? (input.edits || []).map((e: any) => e.new_string).join('\n…\n')
-        : (input.new_string ?? input.content ?? '');
     const verb = lower === 'write' ? 'Write' : lower === 'multiedit' ? 'MultiEdit' : 'Edit';
+    // Edit / MultiEdit carry old→new → render a git-style side-by-side diff.
+    const hunks: { old: string; neu: string }[] =
+      lower === 'multiedit' ? (input.edits || []).map((e: any) => ({ old: String(e.old_string ?? ''), neu: String(e.new_string ?? '') }))
+        : (lower === 'edit') ? [{ old: String(input.old_string ?? ''), neu: String(input.new_string ?? '') }]
+          : [];
+    if (hunks.length && hunks.some((h) => h.old || h.neu)) {
+      const adds = hunks.reduce((s, h) => s + (h.neu ? h.neu.split('\n').length : 0), 0);
+      return { verb, detail: basename(file), sub: tr('local.tool.lines', { n: adds }), body: <DiffView hunks={hunks} fileName={basename(file)} />, expand: true };
+    }
+    // Write (and notebookedit): no prior text → just the new content, default-open.
+    const code = lower === 'write' ? (input.content || '') : (input.new_string ?? input.content ?? '');
     const lines = code ? String(code).split('\n').length : 0;
-    return { verb, detail: basename(file), sub: lines > 0 ? tr('local.tool.lines', { n: lines }) : undefined, body: code ? <CodePreview code={String(code)} lang={langOf(file)} /> : null };
+    return { verb, detail: basename(file), sub: lines > 0 ? tr('local.tool.lines', { n: lines }) : undefined, body: code ? <CodePreview code={String(code)} lang={langOf(file)} /> : null, expand: !!code };
   }
   if (lower === 'todowrite') {
     const todos = Array.isArray(input.todos) ? input.todos : [];
@@ -1499,10 +1619,18 @@ const SubagentCard: React.FC<{ b: Extract<Block, { k: 'tool' }> }> = ({ b }) => 
 const ToolCard: React.FC<{ b: Extract<Block, { k: 'tool' }> }> = ({ b }) => {
   const { t: tr } = useI18n();
   const status: ToolStatus = b.pending ? 'pending' : (b.isError && (b.name || '').toLowerCase() !== 'askuserquestion') ? 'err' : 'ok';
-  const [open, setOpen] = useState(status === 'err');   // 失败默认展开，其余折叠
   // Task / 任何带子活动的工具 → 子 agent 分组卡片
   if ((b.name || '').toLowerCase() === 'task' || (b.children && b.children.length > 0)) return <SubagentCard b={b} />;
-  const { verb, detail, sub, body } = describeTool(b, tr);
+  const { verb, detail, sub, body, expand } = describeTool(b, tr);
+  return <ToolCardBody b={b} status={status} verb={verb} detail={detail} sub={sub} body={body} defaultOpen={status === 'err' || !!expand} />;
+};
+
+/** Tool 卡片正文：失败 / 代码编辑(diff) 默认展开，其余折叠。拆出来让 hooks 顺序稳定
+ *  （上面的 SubagentCard 早退在任何 hook 之前）。 */
+const ToolCardBody: React.FC<{
+  b: Extract<Block, { k: 'tool' }>; status: ToolStatus; verb: string; detail?: string; sub?: string; body: React.ReactNode; defaultOpen: boolean;
+}> = ({ b, status, verb, detail, sub, body, defaultOpen }) => {
+  const [open, setOpen] = useState(defaultOpen);
   const hasBody = !!body;
   // 过程默认可见但「弱」：折叠态也在行内给一句结果预览，不必点开就能扫读。
   const preview = !open && b.result ? firstLine(b.result) : '';

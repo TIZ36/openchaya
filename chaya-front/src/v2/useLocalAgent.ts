@@ -149,6 +149,21 @@ interface Smooth {
 // 首屏只渲染尾部 N 条历史，余量后台补齐（见 setHistory）。
 const HISTORY_TAIL = 20;
 
+/* ------------------------------------------------------------------ *
+ * paneKey：一个窗格(标签)的唯一身份。主会话 paneKey = 项目目录(cwd) 本身；
+ * 同一目录的额外会话(分屏/衍生) paneKey = `${dir}${PANE_SEP}${laneId}`。
+ * PANE_SEP 用 '#@#'（真实路径几乎不可能含它），与主进程 runKey 分隔一致 → 事件路由零解析。
+ *   realDir(paneKey) = 真实工作目录（传 SDK / 列会话 / 关联项目用）
+ *   paneLane(paneKey) = 车道 id（undefined = 主会话）
+ * 全 app 仍按 paneKey(cwd) 寻址 tab/布局/拖拽；只在调用 localAgent 时翻译成 (dir, lane)。
+ * ------------------------------------------------------------------ */
+const PANE_SEP = '#@#';
+export const realDir = (paneKey: string): string => { const i = paneKey.indexOf(PANE_SEP); return i < 0 ? paneKey : paneKey.slice(0, i); };
+export const paneLane = (paneKey: string): string | undefined => { const i = paneKey.indexOf(PANE_SEP); return i < 0 ? undefined : paneKey.slice(i + PANE_SEP.length); };
+export const makePaneKey = (dir: string, lane: string): string => `${dir}${PANE_SEP}${lane}`;
+let _paneSeq = 0;
+const nextLaneId = (): string => `p${Date.now().toString(36)}${(_paneSeq++).toString(36)}`;
+
 export function useLocalAgent(active: boolean, provider: ProviderId, typewriter: TypewriterConfig = DEFAULT_TYPEWRITER) {
   const { t: tr } = useI18n();
   // Live typewriter config (toggle + speed) read by the rAF pump without re-binding it.
@@ -213,7 +228,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
 
   const current = providers.find((p) => p.id === provider);
   const activeTab = tabs.find((t) => t.cwd === activeCwd) || null;
-  const activeProject = projects.find((p) => p.path === activeCwd) || null;
+  const activeProject = projects.find((p) => p.path === realDir(activeCwd || '')) || null;
 
   /** 按 cwd 局部更新某标签。 */
   const patchTab = useCallback((cwd: string, patch: Partial<Tab> | ((t: Tab) => Partial<Tab>)) => {
@@ -305,7 +320,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   useEffect(() => {
     if (!active) return;
     let alive = true;
-    localAgent.listCommands(provider, activeCwd || '').then((c) => { if (alive) setCommands(c); });
+    localAgent.listCommands(provider, realDir(activeCwd || '')).then((c) => { if (alive) setCommands(c); });
     return () => { alive = false; };
   }, [active, activeCwd, provider]);
 
@@ -322,7 +337,9 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     cursorKeyRef.current = null;   // 换 provider → 失效缓存的 cursor key（再进 cursor 重拉）
     smoothRef.current.clear();
     if (rafRef.current != null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-    for (const t of tabs) void localAgent.sessionClose(t.cwd);   // 关掉所有常驻进程
+    for (const t of tabs) void localAgent.sessionClose(realDir(t.cwd), paneLane(t.cwd));   // 关掉所有常驻进程
+    for (const [d, l] of specLaneRef.current) void localAgent.sessionClose(d, l);          // 关掉预热的待衍生会话
+    specLaneRef.current.clear();
     setSessionsByPath({});
     // 注意：不清 expanded —— 项目目录跨 provider 保留，展开记忆也应保留（否则换 provider
     // 或带 provider 切换的启动时序会把持久化的展开态冲成空）。会话列表由下方 restore 副作用
@@ -341,7 +358,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       if (t.cwd !== cwd) return t;
       const i = list.indexOf(t.permMode);
       const next = i < 0 ? defaultPermMode(provider) : list[(i + 1) % list.length];   // 当前档不属于该 provider → 回默认档
-      void localAgent.setPermMode(cwd, next);   // 进行中的常驻会话即时切档
+      void localAgent.setPermMode(realDir(cwd), next, paneLane(cwd));   // 进行中的常驻会话即时切档
       return { ...t, permMode: next };
     }));
   }, [provider]);
@@ -349,7 +366,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   // 选模型（/model 等价）：实时切——常驻会话即刻 setModel 生效；它注入的「Set model to …」
   // 回显被渲染层过滤掉，不进对话。空 = provider 默认。按会话记忆。
   const setModel = useCallback((cwd: string, model: string) => {
-    void localAgent.setModel(cwd, model);
+    void localAgent.setModel(realDir(cwd), model, paneLane(cwd));
     patchTab(cwd, { model: model || undefined });
     const sid = pendingByCwd.current.get(cwd) || tabs.find((t) => t.cwd === cwd)?.sessionId;
     if (sid) { if (model) modelMemRef.current[sid] = model; else delete modelMemRef.current[sid]; saveModelBySession(modelMemRef.current); }
@@ -360,15 +377,15 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     patchTab(cwd, { mcp: names });
     const sid = pendingByCwd.current.get(cwd) || tabs.find((t) => t.cwd === cwd)?.sessionId;
     if (sid) { if (names.length) mcpMemRef.current[sid] = names; else delete mcpMemRef.current[sid]; saveMcpBySession(mcpMemRef.current); }
-    void localAgent.setMcp(cwd, names).then((r) => { if (r && Array.isArray(r.servers)) patchTab(cwd, { mcpStatus: r.servers }); });
+    void localAgent.setMcp(realDir(cwd), names, paneLane(cwd)).then((r) => { if (r && Array.isArray(r.servers)) patchTab(cwd, { mcpStatus: r.servers }); });
   }, [tabs, patchTab]);
   const listMcp = useCallback((cwd: string) => localAgent.listMcp(cwd), []);
   // 探测 MCP 状态；重连不通的 server。
   const refreshMcp = useCallback((cwd: string) => {
-    void localAgent.mcpStatus(cwd).then((r) => { if (r && Array.isArray(r.servers)) patchTab(cwd, { mcpStatus: r.servers }); });
+    void localAgent.mcpStatus(realDir(cwd), paneLane(cwd)).then((r) => { if (r && Array.isArray(r.servers)) patchTab(cwd, { mcpStatus: r.servers }); });
   }, [patchTab]);
   const reconnectMcp = useCallback((cwd: string, name: string) => {
-    void localAgent.reconnectMcp(cwd, name).then((r) => { if (r && Array.isArray(r.servers)) patchTab(cwd, { mcpStatus: r.servers }); });
+    void localAgent.reconnectMcp(realDir(cwd), name, paneLane(cwd)).then((r) => { if (r && Array.isArray(r.servers)) patchTab(cwd, { mcpStatus: r.servers }); });
   }, [patchTab]);
 
   /* ---- 实时事件订阅（常驻会话按 cwd 路由到对应标签） ---- */
@@ -379,9 +396,10 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   }, []);
 
   const loadSessionsFor = useCallback(async (path: string) => {
-    setSessionsByPath((m) => ({ ...m, [path]: 'loading' }));
-    const ss = await localAgent.listSessions(provider, path);
-    setSessionsByPath((m) => ({ ...m, [path]: ss }));
+    const dir = realDir(path);
+    setSessionsByPath((m) => ({ ...m, [dir]: 'loading' }));
+    const ss = await localAgent.listSessions(provider, dir);
+    setSessionsByPath((m) => ({ ...m, [dir]: ss }));
   }, [provider]);
 
   const toggleProject = useCallback((p: LocalProject) => {
@@ -404,7 +422,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   }, [active, projects, provider]);
 
   const expandProject = useCallback((cwd: string) => {
-    const p = projects.find((x) => x.path === cwd);
+    const p = projects.find((x) => x.path === realDir(cwd));
     if (p) setExpanded((cur) => (cur.has(p.id) ? cur : new Set(cur).add(p.id)));
   }, [projects]);
 
@@ -418,35 +436,48 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   }, [loadSessionsFor]);
 
   const removeProject = useCallback((id: string, path: string) => {
+    const dir = realDir(path);
     setProjects(removeProjectStore(id));
-    dropSmooth(path);
-    void localAgent.sessionClose(path);
-    pendingByCwd.current.delete(path);
-    setTabs((ts) => ts.filter((t) => t.cwd !== path));
-    setActiveCwd((c) => (c === path ? null : c));
-  }, [dropSmooth]);
+    // 关掉该项目的所有会话窗格（裸 dir + 各 lane），一并回收常驻进程。
+    for (const t of tabs) {
+      if (realDir(t.cwd) !== dir) continue;
+      dropSmooth(t.cwd);
+      void localAgent.sessionClose(dir, paneLane(t.cwd));
+      pendingByCwd.current.delete(t.cwd);
+    }
+    setTabs((ts) => ts.filter((t) => realDir(t.cwd) !== dir));
+    setActiveCwd((c) => (c && realDir(c) === dir ? null : c));
+  }, [dropSmooth, tabs]);
 
-  /* ---- 标签操作：每个 cwd 最多一个标签；同项目开新会话替换该项目的标签 ---- */
-  const upsertTab = useCallback((cwd: string, sessionId: string | null, title: string): boolean => {
-    let existed = false;
-    const defPerm = defaultPermMode(provider);   // 新标签默认权限档（cursor=force, claude=default）
-    dropSmooth(cwd);  // 换会话 → 丢弃旧标签的平滑状态
-    void localAgent.sessionClose(cwd);   // 切到新会话 → 关掉旧的常驻进程，下次发送按新 sid 重起
-    pendingByCwd.current.delete(cwd);
+  /* ---- 标签操作：每个 session 一个独立窗格(pane)；同项目多个 session 并存同时跑 ----
+   * 给项目分配 paneKey：项目还没开过 → 裸 dir；已开过 → 新 lane(dir#@#lane)。 */
+  const paneKeyForDir = useCallback((dir: string): string =>
+    tabs.some((t) => t.cwd === dir) ? makePaneKey(dir, nextLaneId()) : dir
+  , [tabs]);
+
+  /* 新增一个会话窗格：紧挨触发它的标签插入、继承其分组；不 sessionClose 旧会话
+   * （这是同项目多会话并行的关键——旧实现是替换+关进程，只能一个）。
+   * paneKey 已存在（裸 dir 首会话复用）→ 替换该标签并保留偏好色。 */
+  const addPaneTab = useCallback((paneKey: string, sessionId: string | null, title: string, sourceCwd?: string): void => {
+    const defPerm = defaultPermMode(provider);
+    dropSmooth(paneKey);
+    pendingByCwd.current.delete(paneKey);
     setTabs((ts) => {
-      const i = ts.findIndex((t) => t.cwd === cwd);
+      const i = ts.findIndex((t) => t.cwd === paneKey);
       if (i >= 0) {
-        existed = true;
-        // 同项目换会话：替换该标签（保留其偏好色）
         const next = [...ts];
-        next[i] = emptyTab(cwd, sessionId, title, ts[i].color, defPerm);
+        next[i] = emptyTab(paneKey, sessionId, title, ts[i].color, defPerm);
         return next;
       }
-      return [...ts, emptyTab(cwd, sessionId, title, undefined, defPerm)];
+      const src = sourceCwd ?? activeCwd ?? undefined;
+      const srcIdx = src ? ts.findIndex((t) => t.cwd === src) : -1;
+      const srcTab = srcIdx >= 0 ? ts[srcIdx] : undefined;
+      const fresh: Tab = { ...emptyTab(paneKey, sessionId, title, undefined, defPerm), groupId: srcTab?.groupId ?? null };
+      const arr = srcIdx >= 0 ? [...ts.slice(0, srcIdx + 1), fresh, ...ts.slice(srcIdx + 1)] : [...ts, fresh];
+      return clusterTabs(arr);
     });
-    setActiveCwd(cwd);
-    return existed;
-  }, [dropSmooth, provider]);
+    setActiveCwd(paneKey);
+  }, [provider, dropSmooth, activeCwd]);
 
   // 落历史：大会话先放尾部 N 条 → 首屏立刻可读，整段历史让出一帧后在后台补齐
   // （buildBlocks/groupTurns 的全量处理推到首屏之后；渲染由 .v2-la-turn 的
@@ -462,30 +493,39 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     }
   }, [patchTab]);
 
-  const openSession = useCallback(async (cwd: string, sid: string, title: string) => {
-    upsertTab(cwd, sid, title);
+  // 打开历史会话：每次都开成**独立新窗格**（同项目可并存多个）。若该会话已开 → 聚焦它，
+  // 不重复开。sourceCwd = 触发它的标签（新标签紧挨其后插入）。
+  const openSession = useCallback(async (projPath: string, sid: string, title: string, sourceCwd?: string) => {
+    const dir = realDir(projPath);
+    const existing = tabs.find((t) => realDir(t.cwd) === dir && t.sessionId === sid);
+    if (existing) { setActiveCwd(existing.cwd); return; }
+    const paneKey = paneKeyForDir(dir);
+    addPaneTab(paneKey, sid, title, sourceCwd);
     const remembered = permMemRef.current[sid];
     const pm = (remembered && permModesFor(provider).includes(remembered)) ? remembered : defaultPermMode(provider);
     const md = modelMemRef.current[sid] || undefined;
     const mc = mcpMemRef.current[sid] || undefined;
     // 回显：默认切到该会话上次记住的权限级别 + 模型 + MCP。
-    patchTab(cwd, { loading: true, permMode: pm, model: md, mcp: mc });
+    patchTab(paneKey, { loading: true, permMode: pm, model: md, mcp: mc });
     // 预热：立刻起常驻进程（含 resume 读盘）；冷启在「载入会话…」期间付掉，发送时已暖。
     // cursor 无常驻进程，warm 只登记状态 + 拉模型；apiKey 注入（已预拉则同步可得）。
-    if (current?.live) void localAgent.warm({ provider, cwd, sessionId: sid, permMode: pm, model: md, mcp: mc, apiKey: provider === 'cursor' ? cursorKeyRef.current : undefined });
-    const { messages: msgs } = await localAgent.readSession(provider, cwd, sid);
-    setHistory(cwd, sid, msgs);
-  }, [provider, current, upsertTab, patchTab, setHistory]);
+    if (current?.live) void localAgent.warm({ provider, cwd: dir, lane: paneLane(paneKey), sessionId: sid, permMode: pm, model: md, mcp: mc, apiKey: provider === 'cursor' ? cursorKeyRef.current : undefined });
+    const { messages: msgs } = await localAgent.readSession(provider, dir, sid);
+    setHistory(paneKey, sid, msgs);
+  }, [provider, current, tabs, paneKeyForDir, addPaneTab, patchTab, setHistory]);
 
-  const newSession = useCallback((cwd: string) => {
-    upsertTab(cwd, null, tr('local.newSession'));
+  // 新建会话：同样开成独立新窗格，紧挨触发它的标签。
+  const newSession = useCallback((projPath: string, sourceCwd?: string) => {
+    const dir = realDir(projPath);
+    const paneKey = paneKeyForDir(dir);
+    addPaneTab(paneKey, null, tr('local.newSession'), sourceCwd);
     // 预热新会话：先把进程起好，首条消息即暖。
-    if (current?.live) void localAgent.warm({ provider, cwd, sessionId: null, permMode: defaultPermMode(provider), apiKey: provider === 'cursor' ? cursorKeyRef.current : undefined });
-  }, [provider, current, upsertTab, tr]);
+    if (current?.live) void localAgent.warm({ provider, cwd: dir, lane: paneLane(paneKey), sessionId: null, permMode: defaultPermMode(provider), apiKey: provider === 'cursor' ? cursorKeyRef.current : undefined });
+  }, [provider, current, paneKeyForDir, addPaneTab, tr]);
 
   const closeTab = useCallback((cwd: string) => {
     dropSmooth(cwd);
-    void localAgent.sessionClose(cwd);   // 关标签 → 回收常驻进程
+    void localAgent.sessionClose(realDir(cwd), paneLane(cwd));   // 关标签 → 回收常驻进程
     pendingByCwd.current.delete(cwd);
     setTabs((ts) => {
       const next = ts.filter((t) => t.cwd !== cwd);
@@ -516,7 +556,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (!tab || !tab.pendingLoad || !tab.sessionId || tab.loading) return;
     patchTab(activeCwd, { loading: true, pendingLoad: false });
     const sid = tab.sessionId;
-    localAgent.readSession(provider, activeCwd, sid).then(({ messages: msgs }) => setHistory(activeCwd, sid, msgs));
+    localAgent.readSession(provider, realDir(activeCwd), sid).then(({ messages: msgs }) => setHistory(activeCwd, sid, msgs));
   }, [active, activeCwd, tabs, provider, patchTab, setHistory]);
 
   const setActiveTab = useCallback((cwd: string) => setActiveCwd(cwd), []);
@@ -622,7 +662,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (permMemRef.current[sid]) { delete permMemRef.current[sid]; savePermBySession(permMemRef.current); }
     if (modelMemRef.current[sid]) { delete modelMemRef.current[sid]; saveModelBySession(modelMemRef.current); }
     if (mcpMemRef.current[sid]) { delete mcpMemRef.current[sid]; saveMcpBySession(mcpMemRef.current); }
-    const res = await localAgent.deleteSession(provider, cwd, sid);
+    const res = await localAgent.deleteSession(provider, realDir(cwd), sid);
     if (!res.ok) void loadSessionsFor(cwd);
     return res;
   }, [provider, loadSessionsFor, dropSmooth, tr]);
@@ -751,7 +791,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       messages: [...t.messages, { role: 'user', parts: [{ kind: 'text', text: text + attNote }], ts: null, uuid: null }],
       liveMsgs: [], livePreview: '', running: true, status: tr('local.status.processingShort'), perm: null, question: null,
     }));
-    const res = await localAgent.send({ provider, cwd, sessionId: sid, prompt: text, permMode: tab.permMode, model: tab.model, mcp: tab.mcp, apiKey, attachments });
+    const res = await localAgent.send({ provider, cwd: realDir(cwd), lane: paneLane(cwd), sessionId: sid, prompt: text, permMode: tab.permMode, model: tab.model, mcp: tab.mcp, apiKey, attachments });
     if (!res.ok) patchTab(cwd, (t) => ({ running: false, status: t.status.startsWith('⚠') ? t.status : `⚠ ${tr('local.status.startFailed')}` }));
   }, [tabs, current, provider, patchTab, dropSmooth, fetchCursorKey, tr]);
 
@@ -774,6 +814,59 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     }
     await dispatchTurn(cwd, text, attachments, true);
   }, [tabs, patchTab, dispatchTurn]);
+
+  /** 衍生：在当前 cwd 新开一个全新 session，并立刻把 text 作为首条发出。
+   *  与原 session 地位一致（普通会话、进项目树、可再次衍生）。必须先 sessionClose 关掉
+   *  当前常驻进程——否则带 sessionId:null 的 send 会被复用到旧会话，而非新建。 */
+  // 预热：选中 AI 文本时就为该目录后台冷启一条「待衍生」会话（每目录至多 1 条）；
+  // 用户点「展开讲讲」时直接消费它 → 跳过大半冷启，首 token 快很多。dir → 预热 laneId。
+  const specLaneRef = useRef<Map<string, string>>(new Map());
+
+  /** 选中 AI 回答时调用：后台预热一条衍生会话（claude 才有常驻进程可预热）。 */
+  const prewarmDerive = useCallback((cwd: string) => {
+    if (provider !== 'claude' || !current?.live) return;
+    const dir = realDir(cwd);
+    if (specLaneRef.current.has(dir)) return;        // 已有预热中 → 不重复
+    const lane = nextLaneId();
+    specLaneRef.current.set(dir, lane);
+    const src = tabs.find((t) => t.cwd === cwd);
+    void localAgent.warm({ provider, cwd: dir, lane, sessionId: null, permMode: src?.permMode ?? defaultPermMode(provider), model: src?.model, mcp: src?.mcp });
+  }, [provider, current, tabs]);
+
+  /** 衍生：在当前 cwd 下新开一个**独立会话窗格**（新 lane = 同目录并行常驻会话），
+   *  作为新标签紧挨源标签插入并立刻把 text 作为首条发出。与普通会话地位一致；想并排看
+   *  自行把标签拖去分屏。性能：优先消费 prewarmDerive 预热好的会话；send（冷启）提前 kick off。 */
+  const forkSendText = useCallback(async (cwd: string, rawText: string) => {
+    const text = (rawText || '').trim();
+    if (!cwd || !text) return;
+    if (!current?.installed || !current?.live) { patchTab(cwd, { status: `⚠ ${tr('local.status.unavailable', { provider: current?.label || provider })}` }); return; }
+    const dir = realDir(cwd);
+    const spec = specLaneRef.current.get(dir);       // 已预热的会话 → 直接用，跳过大半冷启
+    const lane = spec ?? nextLaneId();
+    if (spec) specLaneRef.current.delete(dir);
+    const paneKey = makePaneKey(dir, lane);
+    const src = tabs.find((t) => t.cwd === cwd);     // 继承当前窗格的 model/mcp/perm + 分组
+    const permMode = src?.permMode ?? defaultPermMode(provider);
+    const apiKey = provider === 'cursor' ? (cursorKeyRef.current || await fetchCursorKey()) : undefined;
+    // 先 kick off send（预热则瞬时；冷启也尽早开始），与下面建窗格/渲染并行。
+    const sendP = localAgent.send({ provider, cwd: dir, lane, sessionId: null, prompt: text, permMode, model: src?.model, mcp: src?.mcp, apiKey });
+    // 直接建窗格紧挨源标签插入（不走 addPaneTab —— 这里要预填用户消息 + running 态）。
+    setTabs((ts) => {
+      if (ts.some((t) => t.cwd === paneKey)) return ts;
+      const newTab: Tab = {
+        ...emptyTab(paneKey, null, tr('local.newSession'), undefined, permMode),
+        model: src?.model, mcp: src?.mcp, groupId: src?.groupId ?? null,
+        messages: [{ role: 'user', parts: [{ kind: 'text', text }], ts: null, uuid: null }],
+        running: true, status: tr('local.status.processingShort'),
+      };
+      const idx = ts.findIndex((t) => t.cwd === cwd);
+      const arr = idx >= 0 ? [...ts.slice(0, idx + 1), newTab, ...ts.slice(idx + 1)] : [...ts, newTab];
+      return clusterTabs(arr);
+    });
+    setActiveCwd(paneKey);
+    const res = await sendP;
+    if (!res.ok) patchTab(paneKey, (t) => ({ running: false, status: t.status.startsWith('⚠') ? t.status : `⚠ ${tr('local.status.startFailed')}` }));
+  }, [tabs, current, provider, patchTab, fetchCursorKey, tr]);
 
   /** 从队列移除一条（用户在 flush 前反悔）。 */
   const dequeue = useCallback((cwd: string, id: string) => {
@@ -821,7 +914,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       for (const a of q.flatMap((i) => i.attachments || [])) { if (!seen.has(a.id)) { seen.add(a.id); attachments.push(a); } }
       return { queue: [], draft, attachments };
     });
-    void localAgent.interrupt(cwd);
+    void localAgent.interrupt(realDir(cwd), paneLane(cwd));
   }, [patchTab]);
 
   /* ---- 多窗格：二叉分屏树（类 Wave）。把标签拖到某个窗格 → 该窗格一分为二，
@@ -929,7 +1022,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     question: activeTab?.question ?? null,
     setDraft,
     addAttachments, removeAttachment, pickAttachments,
-    openSession, newSession, deleteSession, send, dequeue, interrupt, respondPermission, answerQuestion,
+    openSession, newSession, deleteSession, send, forkSendText, prewarmDerive, dequeue, interrupt, respondPermission, answerQuestion,
   }), [
     providers, provider, current, detecting,
     cyclePermMode, commands, modelOptions, setModel, setMcp, listMcp, refreshMcp, reconnectMcp,
@@ -941,7 +1034,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     activeTab,
     setDraft,
     addAttachments, removeAttachment, pickAttachments,
-    openSession, newSession, deleteSession, send, dequeue, interrupt, respondPermission, answerQuestion,
+    openSession, newSession, deleteSession, send, forkSendText, prewarmDerive, dequeue, interrupt, respondPermission, answerQuestion,
   ]);
   return la;
 }
@@ -958,7 +1051,7 @@ function isLocalCommandNoise(parts: MsgPart[]): boolean {
   return parts.every((p) => p.kind === 'text' && /^\s*<(local-command-(stdout|stderr)|command-(name|message|args|stdout|stderr))>/.test(p.text));
 }
 
-function normalizeParts(message: any): MsgPart[] {
+export function normalizeParts(message: any): MsgPart[] {
   if (!message) return [];
   const c = message.content;
   if (typeof c === 'string') return c.trim() ? [{ kind: 'text', text: c }] : [];

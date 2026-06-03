@@ -92,8 +92,16 @@ function createWindow() {
   });
 
   // 渲染进程崩溃（OOM 等）→ 别留黑屏，自动重载恢复（标签/分组/分屏从 localStorage 回显）。
+  // 记全 details（reason + exitCode）：reason='oom' → 内存爆掉（大代码块 Shiki/超大输出渲染）；
+  // 'crashed' → V8 abort/原生崩溃。连续短时间内反复崩则不再自动重载，避免崩溃循环。
+  let lastGoneAt = 0;
+  let goneStreak = 0;
   win.webContents.on('render-process-gone', (_e, details) => {
-    console.error('[main] render-process-gone:', details && details.reason);
+    const now = Date.now();
+    goneStreak = (now - lastGoneAt < 8000) ? goneStreak + 1 : 1;
+    lastGoneAt = now;
+    console.error('[main] render-process-gone:', JSON.stringify(details), `streak=${goneStreak}`);
+    if (goneStreak >= 3) { console.error('[main] renderer crashed 3× in a row — stopping auto-reload to break the loop'); return; }
     if (!win.isDestroyed()) { try { win.webContents.reload(); } catch { /* */ } }
   });
   win.webContents.on('unresponsive', () => console.warn('[main] renderer unresponsive'));

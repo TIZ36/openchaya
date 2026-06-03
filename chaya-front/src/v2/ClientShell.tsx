@@ -49,7 +49,7 @@ import {
   IconPlus, IconSend, IconSidebar,
   IconAspect, IconModel,
   IconEdit, IconRevert, IconQuote,
-  IconCopy, IconCheck,
+  IconCopy, IconCheck, IconDownload,
 } from './icons';
 import { getLLMConfigs, type LLMConfigFromDB } from '../services/llmApi';
 import { updateSessionLLMConfig, getSessionMessages } from '../services/chat';
@@ -529,8 +529,33 @@ const ShellInner: React.FC = () => {
    *      上一个会话的 scrollTop 对新会话没意义；不强制就会留在"看起来空白"
    *      的顶部（旧 bug）。等会话内有消息真正渲染完才把 ref 推进。 */
   const streamRef = useRef<HTMLDivElement | null>(null);
+  const composerWrapRef = useRef<HTMLDivElement | null>(null);
   const scrollRafRef = useRef<number | null>(null);
   const lastScrolledSidRef = useRef<string | null>(null);
+  // The composer floats (position:absolute) over the bottom of the stream, and
+  // its height is variable — create-mode ref strips, chat attachments, domain
+  // chips and textarea autogrow all change it. A fixed padding-bottom would let
+  // the newest messages hide behind a tall composer. Measure the real height
+  // and feed it back as the stream's --composer-h so content always clears it.
+  useEffect(() => {
+    const composer = composerWrapRef.current;
+    const stream = streamRef.current;
+    if (!composer || !stream || typeof ResizeObserver === 'undefined') return;
+    const apply = () => {
+      const nearBottom =
+        stream.scrollHeight - stream.scrollTop - stream.clientHeight < 200;
+      const h = composer.offsetHeight;
+      // +14px = composer's bottom offset, +18px breathing room above it.
+      stream.style.setProperty('--composer-h', `${h + 32}px`);
+      // Growing the composer enlarges scrollHeight; if we were pinned to the
+      // bottom, stay pinned so the newest message doesn't slide under it.
+      if (nearBottom) stream.scrollTop = stream.scrollHeight;
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(composer);
+    return () => ro.disconnect();
+  }, [activeSessionId, mode]);
   useEffect(() => {
     if (scrollRafRef.current != null) return;
     scrollRafRef.current = requestAnimationFrame(() => {
@@ -1404,7 +1429,7 @@ const ShellInner: React.FC = () => {
             </div>
           </section>
 
-          <div className="v2-composer-wrap">
+          <div className="v2-composer-wrap" ref={composerWrapRef}>
             <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={onFiles} />
             <div className="v2-composer" data-mode={mode}>
               {/* Chat / 创作 mode toggle — sits above the box (prototype layout). */}
@@ -1443,6 +1468,7 @@ const ShellInner: React.FC = () => {
                         r={r}
                         onChange={(v) => create.setRefDirective(r.id, v)}
                         onRemove={() => create.removeRef(r.id)}
+                        onPreview={() => setPreviewSrc(`data:${r.mimeType};base64,${r.data}`)}
                       />
                     ))}
                     <div className="v2-ref add" onClick={onPickFiles}>{tr('shell.create.addRef')}</div>
@@ -2285,12 +2311,18 @@ const ImagePreview: React.FC<{ src: string; onClose: () => void }> = ({ src, onC
   };
   return (
     <div className="v2-imgpreview" onClick={onClose}>
-      <button className="v2-imgpreview-close" title={tr('shell.preview.close')} onClick={onClose}>✕</button>
-      <button
-        className="v2-imgpreview-dl"
-        title={tr('shell.preview.download')}
-        onClick={(e) => { e.stopPropagation(); download(); }}
-      >{tr('shell.preview.download')}</button>
+      {/* Controls grouped in one top-right toolbar — both easy to find and hit,
+          clear of the centered image so a click on the backdrop still closes. */}
+      <div className="v2-imgpreview-bar" onClick={(e) => e.stopPropagation()}>
+        <button
+          className="v2-imgpreview-dl"
+          title={tr('shell.preview.download')}
+          onClick={(e) => { e.stopPropagation(); download(); }}
+        >
+          <IconDownload /><span>{tr('shell.preview.download')}</span>
+        </button>
+        <button className="v2-imgpreview-close" title={tr('shell.preview.close')} onClick={onClose}>✕</button>
+      </div>
       <img src={src} alt="" onClick={(e) => e.stopPropagation()} />
     </div>
   );
@@ -2603,14 +2635,15 @@ const BatchView: React.FC<{ b: Batch; onPreviewImage?: (src: string) => void }> 
 });
 BatchView.displayName = 'BatchView';
 
-const RefPill: React.FC<{ idx: number; r: RefImage; onChange: (v: string) => void; onRemove: () => void }> = ({ idx, r, onChange, onRemove }) => {
+const RefPill: React.FC<{ idx: number; r: RefImage; onChange: (v: string) => void; onRemove: () => void; onPreview?: () => void }> = ({ idx, r, onChange, onRemove, onPreview }) => {
   const { t: tr } = useI18n();
   return (
   <div className="v2-ref">
     <div className="v2-th">
-      <img src={`data:${r.mimeType};base64,${r.data}`} alt={`#${idx}`} />
-      <button className="v2-rm" onClick={onRemove} title={tr('common.delete')} aria-label={tr('common.delete')}>✕</button>
+      <img src={`data:${r.mimeType};base64,${r.data}`} alt={`#${idx}`} onClick={onPreview} />
+      <span className="v2-th-idx">#{idx}</span>
     </div>
+    <button className="v2-rm" onClick={onRemove} title={tr('common.delete')} aria-label={tr('common.delete')}>✕</button>
     <input
       className="v2-dir"
       placeholder={tr('shell.refPill.placeholder', { idx })}

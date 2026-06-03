@@ -22,8 +22,9 @@ export interface SmoothParams {
 export const TYPEWRITER_PRESETS: Record<TypeSpeed, SmoothParams> = {
   // 慢：从容的打字机手感，明显能看到逐字。
   slow:   { drainSec: 0.5,  minRate: 55,  maxRate: 6000, holdMs: 420 },
-  // 适中：默认。延迟≈一两帧，跟手又不突兀（沿用 CLI 原默认）。
-  normal: { drainSec: 0.16, minRate: 240, maxRate: 6000, holdMs: 350 },
+  // 适中：默认。延迟≈一两帧，跟手又不突兀。holdMs 调短 → 速率重估更频繁、突发块
+  // 过渡更顺；minRate 略升避免长背压时拖沓——整体更"丝滑渐进"。
+  normal: { drainSec: 0.15, minRate: 280, maxRate: 6000, holdMs: 260 },
   // 快：几乎贴着到达速率，仅抹掉「整段突然蹦出」的突兀。
   fast:   { drainSec: 0.06, minRate: 800, maxRate: 6000, holdMs: 240 },
 };

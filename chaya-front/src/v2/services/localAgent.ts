@@ -126,6 +126,7 @@ interface SendPayload {
   mcp?: string[];
   apiKey?: string | null;   // cursor headless 必需（从后端凭据拉到、由 useLocalAgent 注入）
   attachments?: Attachment[];
+  lane?: string;            // 并行车道（如 'derive'）：同一 cwd 起独立常驻会话，事件按 cwd+lane 路由
 }
 type WarmPayload = Omit<SendPayload, 'prompt'>;
 
@@ -140,14 +141,14 @@ interface LocalAgentBridge {
   send(payload: SendPayload): Promise<{ ok: boolean }>;
   warm(payload: WarmPayload): Promise<{ ok: boolean }>;
   permissionRespond(permId: string, decision: PermissionDecision): Promise<{ ok: boolean }>;
-  interrupt(cwd: string): Promise<{ ok: boolean }>;
-  sessionClose(cwd: string): Promise<{ ok: boolean }>;
-  setPermMode(cwd: string, permMode: PermMode): Promise<{ ok: boolean }>;
-  setModel(cwd: string, model: string): Promise<{ ok: boolean }>;
+  interrupt(cwd: string, lane?: string): Promise<{ ok: boolean }>;
+  sessionClose(cwd: string, lane?: string): Promise<{ ok: boolean }>;
+  setPermMode(cwd: string, permMode: PermMode, lane?: string): Promise<{ ok: boolean }>;
+  setModel(cwd: string, model: string, lane?: string): Promise<{ ok: boolean }>;
   listMcp(cwd: string): Promise<McpAvailable[]>;
-  setMcp(cwd: string, mcp: string[]): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
-  mcpStatus(cwd: string): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
-  reconnectMcp(cwd: string, name: string): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
+  setMcp(cwd: string, mcp: string[], lane?: string): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
+  mcpStatus(cwd: string, lane?: string): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
+  reconnectMcp(cwd: string, name: string, lane?: string): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
   onEvent(cb: (data: LocalAgentEvent) => void): () => void;
 }
 
@@ -177,14 +178,14 @@ export const localAgent = {
   warm: (payload: WarmPayload) => bridge()?.warm(payload) ?? Promise.resolve({ ok: false }),
   permissionRespond: (permId: string, decision: PermissionDecision) =>
     bridge()?.permissionRespond(permId, decision) ?? Promise.resolve({ ok: false }),
-  interrupt: (cwd: string) => bridge()?.interrupt(cwd) ?? Promise.resolve({ ok: false }),
-  sessionClose: (cwd: string) => bridge()?.sessionClose(cwd) ?? Promise.resolve({ ok: false }),
-  setPermMode: (cwd: string, permMode: PermMode) => bridge()?.setPermMode(cwd, permMode) ?? Promise.resolve({ ok: false }),
-  setModel: (cwd: string, model: string) => bridge()?.setModel(cwd, model) ?? Promise.resolve({ ok: false }),
+  interrupt: (cwd: string, lane?: string) => bridge()?.interrupt(cwd, lane) ?? Promise.resolve({ ok: false }),
+  sessionClose: (cwd: string, lane?: string) => bridge()?.sessionClose(cwd, lane) ?? Promise.resolve({ ok: false }),
+  setPermMode: (cwd: string, permMode: PermMode, lane?: string) => bridge()?.setPermMode(cwd, permMode, lane) ?? Promise.resolve({ ok: false }),
+  setModel: (cwd: string, model: string, lane?: string) => bridge()?.setModel(cwd, model, lane) ?? Promise.resolve({ ok: false }),
   listMcp: (cwd: string) => bridge()?.listMcp(cwd) ?? Promise.resolve([] as McpAvailable[]),
-  setMcp: (cwd: string, mcp: string[]) => bridge()?.setMcp(cwd, mcp) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),
-  mcpStatus: (cwd: string) => bridge()?.mcpStatus(cwd) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),
-  reconnectMcp: (cwd: string, name: string) => bridge()?.reconnectMcp(cwd, name) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),
+  setMcp: (cwd: string, mcp: string[], lane?: string) => bridge()?.setMcp(cwd, mcp, lane) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),
+  mcpStatus: (cwd: string, lane?: string) => bridge()?.mcpStatus(cwd, lane) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),
+  reconnectMcp: (cwd: string, name: string, lane?: string) => bridge()?.reconnectMcp(cwd, name, lane) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),
   onEvent: (cb: (data: LocalAgentEvent) => void) => bridge()?.onEvent(cb) ?? (() => {}),
 };
 
@@ -321,4 +322,46 @@ export function loadMcpBySession(): Record<string, string[]> {
 }
 export function saveMcpBySession(map: Record<string, string[]>): void {
   try { localStorage.setItem(MCP_BY_SESSION_KEY, JSON.stringify(map)); } catch { /* quota */ }
+}
+
+/* 目录唯一笔记（按 cwd）。一条 = 用户在问答过程中随手存下的短语/AI 回答片段。
+   现走 localStorage（与上面同模式）；未来可加 Electron IPC 落盘到 cwd 的 .chaya/notes.md。 */
+export type NoteKind = 'doc' | 'ai' | 'manual';
+export interface NoteItem { id: string; text: string; kind: NoteKind; at: number; }
+const NOTES_BY_CWD_KEY = 'chaya.localAgent.notesByCwd';
+export function loadNotesByCwd(): Record<string, NoteItem[]> {
+  try { const raw = localStorage.getItem(NOTES_BY_CWD_KEY); const o = raw ? JSON.parse(raw) : null; return (o && typeof o === 'object') ? o : {}; }
+  catch { return {}; }
+}
+export function saveNotesByCwd(map: Record<string, NoteItem[]>): void {
+  try { localStorage.setItem(NOTES_BY_CWD_KEY, JSON.stringify(map)); } catch { /* quota */ }
+}
+
+/* 衍生(derive)会话的 sessionId 登记（按 cwd）。衍生在 ~/.claude 留下真实 transcript，会被
+   listSessions 扫到；登记后侧栏会话列表把它们过滤掉——衍生只活在卡片里，不污染项目根。 */
+const DERIVE_SIDS_KEY = 'chaya.localAgent.deriveSids';
+export function loadDeriveSids(): Record<string, string[]> {
+  try { const raw = localStorage.getItem(DERIVE_SIDS_KEY); const o = raw ? JSON.parse(raw) : null; return (o && typeof o === 'object') ? o : {}; }
+  catch { return {}; }
+}
+export function addDeriveSid(cwd: string, sid: string): void {
+  if (!cwd || !sid) return;
+  try {
+    const map = loadDeriveSids();
+    const arr = map[cwd] || [];
+    if (!arr.includes(sid)) { map[cwd] = [...arr, sid]; localStorage.setItem(DERIVE_SIDS_KEY, JSON.stringify(map)); }
+  } catch { /* quota */ }
+}
+
+/* 衍生卡片状态持久化（按 cwd）：刷新后能恢复挂在触发 session 下的衍生。
+   只存元数据；会话正文按需用 readSession(sessionId) 拉。parentSid = 触发时的主会话 id。 */
+export interface DerivMeta { id: string; n: number; sessionId: string | null; quote: string; title: string; parentSid: string | null; }
+const DERIVATIONS_KEY = 'chaya.localAgent.derivations';
+export function loadDerivations(): Record<string, DerivMeta[]> {
+  try { const raw = localStorage.getItem(DERIVATIONS_KEY); const o = raw ? JSON.parse(raw) : null; return (o && typeof o === 'object') ? o : {}; }
+  catch { return {}; }
+}
+export function saveDerivations(cwd: string, metas: DerivMeta[]): void {
+  try { const map = loadDerivations(); if (metas.length) map[cwd] = metas; else delete map[cwd]; localStorage.setItem(DERIVATIONS_KEY, JSON.stringify(map)); }
+  catch { /* quota */ }
 }

@@ -23,6 +23,11 @@
   --c-accent:       #0d0d0d;
   --c-accent-strong:#000000;
   --c-accent-bg:    #f0f0f0;
+  /* 笔记 = marginalia 暖 ochre（铅笔批注；语义色，跨主题保持"暖纸高亮"，与 accent 区分） */
+  --c-note:         #a8862e;
+  --c-note-strong:  #7a611f;
+  --c-note-bg:      #f3edda;
+  --c-note-card:    #fffdf6;
   --c-danger:       #c2410c;
   --c-danger-bg:    #fff7ed;
   --c-success:      #2e7d52;
@@ -118,6 +123,7 @@
   --c-ink: #ececec; --c-ink-2: #c4c4c4; --c-ink-3: #969696; --c-ink-4: #6e6e6e;
   --c-hover: #2a2a2a; --c-hover-soft: #232323; --c-selected: #343434; --c-rule: #2e2e2e;
   --c-surface: #232323; --c-accent: #ececec; --c-accent-strong: #ffffff; --c-accent-bg: #2b2b2b;
+  --c-note: #d8b066; --c-note-strong: #ecca85; --c-note-bg: #2e2a1d; --c-note-card: #211f17;
   /* 状态色：深色模式下浅底色（#fff7ed 等）会变成「贴脸的小灯」，必须重定。
      前景色也提亮——#c2410c / #b45309 在 #1a1a1a 上对比度只有 ~3:1，低于 WCAG。
      现在所有 status pill / danger button / warn chip 在两个模式下都过得了 AA。 */
@@ -138,12 +144,14 @@
   --c-ink: #141413; --c-ink-2: #46443d; --c-ink-3: #87867f; --c-ink-4: #b0aea5;
   --c-hover: #ebe8de; --c-hover-soft: #f3f1e8; --c-selected: #f0e3d9; --c-rule: #e6e3d6;
   --c-surface: #f0eee6; --c-accent: #d97757; --c-accent-strong: #c15f3c; --c-accent-bg: #f5e5de;
+  --c-note: #ab8c4f; --c-note-strong: #7d6129; --c-note-bg: #ece3cd; --c-note-card: #fdfaf0;
 }
 .chaya-v2[data-theme="anthropic"][data-mode="dark"] {
   --c-bg: #1c1b19; --c-sidebar: #232220;
   --c-ink: #faf9f5; --c-ink-2: #c2c0b6; --c-ink-3: #908e84; --c-ink-4: #6b695f;
   --c-hover: #2c2a27; --c-hover-soft: #252420; --c-selected: #3a2d26; --c-rule: #34322e;
   --c-surface: #252420; --c-accent: #e08a6e; --c-accent-strong: #d97757; --c-accent-bg: #3a2a24;
+  --c-note: #cdaa6a; --c-note-strong: #e2c488; --c-note-bg: #322b1c; --c-note-card: #24221b;
 }
 /* Anthropic-only card elevation. In other themes the card defines itself by
    stronger color contrast; here Cloud and Bone are intentionally close, so
@@ -192,6 +200,10 @@
   --c-accent:       #0b9389;
   --c-accent-strong:#076b62;
   --c-accent-bg:    #d6ece9;
+  --c-note:         #a98a3e;
+  --c-note-strong:  #7a6020;
+  --c-note-bg:      #efe9d6;
+  --c-note-card:    #fdfcf6;
   --c-ink-deep:     #000;
   --c-danger:       #dc2626; --c-danger-bg: #fde8e8;
   --c-warn:         #b45309; --c-warn-bg:   #fef3c7;
@@ -211,6 +223,7 @@
   --c-selected:     #173432;
   --c-rule:         #1f2126;
   --c-surface:      #15161a;
+  --c-note:         #d4b878; --c-note-strong: #e8cf92; --c-note-bg: #272318; --c-note-card: #191712;
   --c-accent:       #7eede0;          /* Cursor 标志的 clean teal */
   --c-accent-strong:#b4f0e7;
   --c-accent-bg:    #162e2b;
@@ -312,7 +325,7 @@
 }
 /* 权限模式：cursor 主体下用 tonal accent，差异通过深浅档区分语义 */
 .chaya-v2[data-theme="cursor"] .v2-la-mode.tone-default {
-  background: var(--c-surface); color: var(--c-ink-2);
+  background: transparent; color: var(--c-ink-3);
 }
 .chaya-v2[data-theme="cursor"] .v2-la-mode.tone-plan {
   background: color-mix(in oklab, var(--c-accent) 18%, var(--c-bg));
@@ -361,7 +374,7 @@
   color: #fff;
 }
 .chaya-v2[data-theme="anthropic"] .v2-la-mode.tone-default {
-  background: var(--c-surface); color: var(--c-ink-2);
+  background: transparent; color: var(--c-ink-3);
 }
 .chaya-v2[data-theme="anthropic"] .v2-la-mode.tone-plan {
   background: color-mix(in oklab, var(--c-accent) 16%, var(--c-bg));
@@ -985,7 +998,10 @@ html[data-electron-platform="darwin"] .chaya-v2 .v2-app.collapsed .v2-topbar { p
 .chaya-v2 .v2-tbtn:active { transform: translateY(0.5px); }
 .chaya-v2 .v2-tbtn svg { width: 16px; height: 16px; }
 
-.chaya-v2 .v2-stream { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 0 140px; }
+/* padding-bottom tracks the floating composer's real height (set from JS as
+   --composer-h); falls back to 140px before the first measure. Keeps the newest
+   message clear of a tall create-mode composer (ref strip / attachments). */
+.chaya-v2 .v2-stream { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 0 var(--composer-h, 140px); }
 .chaya-v2 .v2-stream::-webkit-scrollbar { width: 10px; }
 .chaya-v2 .v2-stream::-webkit-scrollbar-thumb { background: transparent; border-radius: var(--c-radius-sm); }
 .chaya-v2 .v2-stream:hover::-webkit-scrollbar-thumb { background: var(--c-scrollbar); }
@@ -1058,6 +1074,12 @@ html[data-electron="true"] .chaya-v2 .v2-msgs { max-width: 920px; }
   background: transparent;
   padding: 0;
   font-family: var(--c-mono);
+}
+/* Oversized-block fallback (no Shiki): plain mono, scrolls both axes and caps
+   its height so a giant dump can't build an enormous DOM column. */
+.chaya-v2 .v2-md .v2-code-plain {
+  white-space: pre; color: var(--c-ink-2);
+  max-height: 60vh; overflow: auto;
 }
 /* Quick-copy 包裹层：把上下外边距从 .v2-code 转移到这里（避免按钮和代码块重叠），
    按钮位置以 .v2-code-wrap 为基准，对所有 markdown 表面（chat / local agent）通用。 */
@@ -1582,21 +1604,27 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 }
 @keyframes v2-imgpreview-fade { from { opacity: 0; } to { opacity: 1; } }
 .chaya-v2 .v2-imgpreview img { max-width: 92vw; max-height: 86vh; object-fit: contain; border-radius: var(--c-radius-lg); box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+/* Both controls live in one toolbar at the top-right — grouped, predictable,
+   and clear of the centered image so the rest of the backdrop closes on click. */
+.chaya-v2 .v2-imgpreview-bar {
+  position: absolute; top: 16px; right: 16px; z-index: 2;
+  display: flex; align-items: center; gap: 10px;
+}
 .chaya-v2 .v2-imgpreview-close {
-  position: absolute; top: 18px; right: 18px;
-  width: 36px; height: 36px; border-radius: 50%;
+  width: 40px; height: 40px; border-radius: 50%;
   background: rgba(255,255,255,0.14); color: #fff; font-size: 16px;
   display: grid; place-items: center; cursor: pointer;
   transition: background 140ms var(--c-ease);
 }
-.chaya-v2 .v2-imgpreview-close:hover { background: rgba(255,255,255,0.24); }
+.chaya-v2 .v2-imgpreview-close:hover { background: rgba(255,255,255,0.26); }
 .chaya-v2 .v2-imgpreview-dl {
-  position: absolute; top: 18px; left: 18px;
-  padding: 8px 16px; border-radius: 999px;
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 40px; padding: 0 16px; border-radius: 999px;
   background: rgba(255,255,255,0.92); color: #1a1a1a;
   font-size: 13px; font-weight: 500; cursor: pointer;
   transition: background 140ms var(--c-ease), transform 120ms var(--c-ease);
 }
+.chaya-v2 .v2-imgpreview-dl svg { width: 16px; height: 16px; }
 .chaya-v2 .v2-imgpreview-dl:hover { background: #fff; transform: translateY(-1px); }
 /* Config chip — pill button carrying a label + current value (风格/比例/数量/负面). */
 .chaya-v2 .v2-chip { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 12px; border-radius: var(--c-radius-pill); background: var(--c-surface); color: var(--c-ink); font-size: 12px; cursor: pointer; transition: background 140ms var(--c-ease); }
@@ -1609,20 +1637,32 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
    slim optional directive caption beneath it (our per-ref instruction) — quiet
    enough that blank ones read as plain thumbnails like the prototype. */
 .chaya-v2 .v2-refs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-.chaya-v2 .v2-ref { display: flex; flex-direction: column; gap: 4px; width: 92px; }
+/* position: relative so the remove button anchors to the pill (not the clipped
+   thumbnail) — otherwise the corner ✕ gets cut off by .v2-th's overflow:hidden.
+   padding-top leaves room for the button that overhangs the top-right corner. */
+.chaya-v2 .v2-ref { position: relative; display: flex; flex-direction: column; gap: 4px; width: 92px; padding-top: 4px; }
 .chaya-v2 .v2-ref .v2-th { position: relative; width: 92px; height: 92px; border-radius: var(--c-radius-md); border: 1px solid var(--c-rule); background: var(--c-surface); overflow: hidden; }
-.chaya-v2 .v2-ref .v2-th img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
+/* contain (not cover) so the whole reference image is visible — portrait/landscape
+   refs no longer get center-cropped. A subtle checkerboard hints at letterboxing. */
+.chaya-v2 .v2-ref .v2-th img { width: 100%; height: 100%; object-fit: contain; display: block; cursor: zoom-in; }
+.chaya-v2 .v2-ref .v2-th-idx {
+  position: absolute; left: 4px; bottom: 4px; pointer-events: none;
+  padding: 1px 5px; border-radius: 6px; font-size: 9px; line-height: 1.4; font-weight: 600;
+  color: var(--c-bg); background: color-mix(in oklab, var(--c-ink) 62%, transparent);
+  letter-spacing: 0.02em;
+}
 .chaya-v2 .v2-ref .v2-rm {
-  position: absolute; top: -6px; right: -6px;
+  position: absolute; top: -2px; right: -2px; z-index: 3;
   width: 18px; height: 18px; border-radius: 50%;
   background: var(--c-ink); color: var(--c-bg);
   display: grid; place-items: center; font-size: 10px; line-height: 1; cursor: pointer;
+  border: 1.5px solid var(--c-bg);
   box-shadow: 0 1px 3px rgba(0,0,0,0.22);
   opacity: 0; transform: scale(0.8);
   transition: opacity 140ms var(--c-ease), transform 140ms var(--c-ease-spring), background 140ms var(--c-ease);
 }
-.chaya-v2 .v2-ref:hover .v2-rm, .chaya-v2 .v2-ref .v2-th:focus-within .v2-rm { opacity: 1; transform: scale(1); }
-.chaya-v2 .v2-ref .v2-rm:hover { background: var(--c-ink-deep); }
+.chaya-v2 .v2-ref:hover .v2-rm, .chaya-v2 .v2-ref:focus-within .v2-rm { opacity: 1; transform: scale(1); }
+.chaya-v2 .v2-ref .v2-rm:hover { background: var(--c-ink-deep); transform: scale(1.1); }
 .chaya-v2 .v2-ref input.v2-dir {
   width: 92px; font-size: 11px; color: var(--c-ink-2);
   padding: 3px 7px; border-radius: var(--c-radius-sm);
@@ -2429,7 +2469,7 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
   border-color: color-mix(in oklab, var(--c-ink) 22%, var(--c-rule));
   box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 10px 30px rgba(0,0,0,0.07);
 }
-.chaya-v2 .v2-box textarea { width: 100%; resize: none; min-height: 36px; max-height: 220px; font-size: 15px; line-height: 1.55; color: var(--c-ink); display: block; }
+.chaya-v2 .v2-box textarea { width: 100%; resize: none; min-height: 30px; max-height: 220px; font-size: 15px; line-height: 1.55; color: var(--c-ink); display: block; }
 .chaya-v2 .v2-box textarea::placeholder { color: var(--c-ink-4); }
 .chaya-v2 .v2-attaches { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .chaya-v2 .v2-att { position: relative; width: 48px; height: 48px; border-radius: var(--c-radius-md); overflow: hidden; background: var(--c-surface); }
@@ -4053,13 +4093,14 @@ body.v2-la-resizing { user-select: none; }
 
 /* 附件按钮（输入框工具行）：与权限档/模型按钮同款 ghost 风；有附件时点亮 + 角标计数。 */
 .chaya-v2 .v2-la-attach {
-  display: inline-flex; align-items: center; gap: 3px; padding: 3px 6px;
-  background: transparent; border: 1px solid transparent; border-radius: var(--c-radius-sm, 8px);
-  color: var(--c-ink-3); cursor: pointer; transition: color 120ms var(--c-ease), background 120ms var(--c-ease);
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  height: 26px; min-width: 26px; padding: 0 7px;
+  background: transparent; border: 1px solid transparent; border-radius: var(--c-radius-pill);
+  color: var(--c-ink-3); cursor: pointer; transition: color 140ms var(--c-ease), background 140ms var(--c-ease);
 }
 .chaya-v2 .v2-la-attach svg { width: 15px; height: 15px; }
-.chaya-v2 .v2-la-attach:hover { color: var(--c-ink-1); background: color-mix(in oklab, var(--c-ink) 6%, transparent); }
-.chaya-v2 .v2-la-attach.on { color: var(--c-accent); }
+.chaya-v2 .v2-la-attach:hover { color: var(--c-ink-1); background: var(--c-hover); }
+.chaya-v2 .v2-la-attach.on { color: var(--c-accent); background: var(--c-accent-bg); }
 .chaya-v2 .v2-la-attach .n { font-size: 10.5px; font-weight: 700; }
 
 /* 已平铺标记：会话名走 italic（handmade 的「附注 / 已搬走」语气），不再单纯调透明。 */
@@ -4069,44 +4110,13 @@ body.v2-la-resizing { user-select: none; }
 /* ---- 分屏窗格里的「命令行」式精简输入条：单行、低噪、贴合终端气质，
         把竖向空间留给会话。细条不要厚阴影，焦点描边跟随窗格分组色。 ---- */
 .chaya-v2 .v2-la-pane.ingrid .v2-composer-wrap { padding: 2px 10px 8px; }
-.chaya-v2 .v2-la-slim .v2-box {
-  display: flex; align-items: flex-end; gap: 6px; min-height: 0;
-  padding: 5px 6px 5px 7px; border-radius: var(--c-radius-md);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
-}
-.chaya-v2 .v2-la-slim .v2-box:focus-within {
-  border-color: color-mix(in oklab, var(--pane, var(--c-ink)) 40%, var(--c-rule));
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 14px rgba(0, 0, 0, 0.045);
-}
-/* 提示符（▷ 或技能图标）：定在首行，安静的方形小按钮，hover 才显形。 */
-.chaya-v2 .v2-la-slim .v2-la-tri,
-.chaya-v2 .v2-la-slim .v2-la-prompt {
-  flex: 0 0 auto; align-self: flex-start;
-  width: 22px; height: 22px; padding: 0;
-  display: grid; place-items: center;
-  border-radius: var(--c-radius-sm);
-  color: var(--c-ink-4); font-size: 11px; line-height: 1;
-  transition: color 140ms var(--c-ease), background 140ms var(--c-ease);
-}
-.chaya-v2 .v2-la-slim .v2-la-tri { cursor: pointer; }
-.chaya-v2 .v2-la-slim .v2-la-tri:hover {
-  background: rgba(var(--glass-hairline), 0.07);
-  color: color-mix(in oklab, var(--pane, var(--c-ink-2)) 65%, var(--c-ink-2));
-}
-.chaya-v2 .v2-la-slim .v2-la-prompt svg { width: 13px; height: 13px; }
-/* 单行高度，不随内容增高（多行则在这一行内纵向滚动）。与按钮等高居中。 */
-.chaya-v2 .v2-la-slim textarea {
-  flex: 1 1 auto; min-height: 22px; max-height: 120px;
-  padding: 2px 0; font-size: 12.5px; line-height: 18px; overflow-y: auto;
-}
-.chaya-v2 .v2-la-slim .v2-row { flex: 0 0 auto; width: auto; margin: 0; gap: 4px; align-self: flex-end; }
-/* 精简态：上下文收起，模式 pill 与发送按钮同高，整体压成一条线。 */
-.chaya-v2 .v2-la-slim .v2-row .v2-la-ctx { display: none; }
-.chaya-v2 .v2-la-slim .v2-row .v2-la-mode { height: 22px; padding: 0 9px; font-size: 10.5px; line-height: 22px; }
-.chaya-v2 .v2-la-slim .v2-send { width: 22px; height: 22px; border-radius: var(--c-radius-sm); }
-.chaya-v2 .v2-la-slim .v2-send svg { width: 14px; height: 14px; }
-/* 精简态斜杠弹层浮在细条上方，不撑高输入条。 */
-.chaya-v2 .v2-la-slim .v2-la-slash { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); margin: 0; z-index: 20; }
+/* Split-screen composer = the full composer, just zoomed down. zoom (not
+   transform) so the smaller footprint also reflows layout — no bespoke slim
+   styling, so the notes pill, model picker and every state come for free. */
+.chaya-v2 .v2-la-mini { zoom: 0.88; }
+/* The growing textarea is the one thing worth re-capping so a long draft can't
+   eat a small pane's height. */
+.chaya-v2 .v2-la-mini textarea { max-height: 120px; }
 
 /* agent 权限/批准弹窗 —— 安静但醒目，accent 描边提示“需要你” */
 .chaya-v2 .v2-la-perm { margin: 6px 0 14px; border: 1px solid var(--c-accent); border-radius: var(--c-radius-lg); background: var(--c-accent-bg); padding: 12px 14px; animation: v2-fadeUp 200ms var(--c-ease) both; }
@@ -4234,6 +4244,51 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .v2-la-code .v2-md .v2-code { margin: 0; }
 .chaya-v2 .v2-la-tool, .chaya-v2 .v2-la-io { min-width: 0; max-width: 100%; }
 
+/* Streaming overflow fallback (huge live buffer rendered as plain text). */
+.chaya-v2 .v2-md-livelong pre {
+  font-family: var(--c-mono); font-size: 12.5px; line-height: 1.55; color: var(--c-ink-2);
+  white-space: pre-wrap; word-break: break-word; margin: 0;
+}
+
+/* ---- git-style side-by-side diff (Edit / MultiEdit) ---- */
+.chaya-v2 .v2-diff {
+  margin-top: 6px; border: 1px solid var(--c-rule); border-radius: var(--c-radius-md);
+  overflow: hidden; background: var(--c-bg);
+}
+.chaya-v2 .v2-diff-hd {
+  display: flex; align-items: center; gap: 8px; padding: 5px 10px;
+  border-bottom: 1px solid var(--c-rule); background: var(--c-sidebar);
+  font-size: 11px; font-family: var(--c-mono); color: var(--c-ink-3);
+}
+.chaya-v2 .v2-diff-hd .fn { color: var(--c-ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-diff-hd .grow { flex: 1; }
+.chaya-v2 .v2-diff-hd .stat { font-weight: 600; }
+.chaya-v2 .v2-diff-hd .stat.add { color: var(--c-success); }
+.chaya-v2 .v2-diff-hd .stat.del { color: var(--c-danger); }
+.chaya-v2 .v2-diff-grid { max-height: 420px; overflow: auto; }
+.chaya-v2 .v2-diff-sep {
+  padding: 2px 10px; font-size: 10px; font-family: var(--c-mono); letter-spacing: 0.04em;
+  color: var(--c-ink-4); background: var(--c-hover-soft); border-top: 1px solid var(--c-rule); border-bottom: 1px solid var(--c-rule);
+}
+.chaya-v2 .v2-diff-row {
+  display: grid; grid-template-columns: 4ch minmax(0, 1fr) 4ch minmax(0, 1fr);
+  font-family: var(--c-mono); font-size: 12px; line-height: 1.5;
+}
+.chaya-v2 .v2-diff-row .no {
+  text-align: right; padding: 0 6px; color: var(--c-ink-4); user-select: none;
+  border-right: 1px solid color-mix(in oklab, var(--c-rule) 60%, transparent);
+}
+.chaya-v2 .v2-diff-row .cell {
+  padding: 0 8px; white-space: pre-wrap; word-break: break-word; color: var(--c-ink); min-height: 1.5em;
+}
+.chaya-v2 .v2-diff-row .cell.old { border-right: 1px solid var(--c-rule); }
+/* del = left tinted; add = right tinted; mod = both. Soft brand tints, no glow. */
+.chaya-v2 .v2-diff-row.del .old, .chaya-v2 .v2-diff-row.mod .old { background: color-mix(in oklab, var(--c-danger) 12%, transparent); }
+.chaya-v2 .v2-diff-row.add .new, .chaya-v2 .v2-diff-row.mod .new { background: color-mix(in oklab, var(--c-success) 13%, transparent); }
+.chaya-v2 .v2-diff-row.del .no.old, .chaya-v2 .v2-diff-row.mod .no.old { color: var(--c-danger); background: color-mix(in oklab, var(--c-danger) 8%, transparent); }
+.chaya-v2 .v2-diff-row.add .no.new, .chaya-v2 .v2-diff-row.mod .no.new { color: var(--c-success); background: color-mix(in oklab, var(--c-success) 9%, transparent); }
+.chaya-v2 .v2-diff-row.same .cell { color: var(--c-ink-2); }
+
 /* 宽表格：包一层横向滚动容器，局部滑动，不外溢 */
 .chaya-v2 .v2-la-xscroll { max-width: 100%; overflow-x: auto; margin: 8px 0 12px; }
 .chaya-v2 .v2-la-xscroll > table { margin: 0; width: max-content; min-width: 100%; }
@@ -4252,33 +4307,38 @@ body.v2-la-resizing { user-select: none; }
    CLI 输入面板 chip 行 ——
    ctx / mode / cfg / model 都是 24px 高的 pill，font 11.5px，padding 4/10，
    gap 6。视觉上是同一组兄弟控件，节奏统一。 */
+/* 输入框底栏控件统一为一族「安静 ghost chip」：同高(26)、默认透明、hover 才浮出
+   底色。唯一带状态色的是权限档(mode)。calm + sparing-accent + 一致呼吸。 */
 .chaya-v2 .v2-la-ctx,
 .chaya-v2 .v2-la-mode,
 .chaya-v2 .v2-la-cfg,
 .chaya-v2 .v2-la-model {
   display: inline-flex; align-items: center;
-  height: 24px; padding: 0 10px; gap: 6px;
-  border-radius: var(--c-radius-pill);
-  font-size: 11.5px; line-height: 1;
+  height: 26px; padding: 0 9px; gap: 6px;
+  border-radius: var(--c-radius-pill); border: 1px solid transparent;
+  background: transparent; color: var(--c-ink-3);
+  font-size: 12px; line-height: 1;
   cursor: pointer;
-  transition: background 140ms var(--c-ease), color 140ms var(--c-ease), filter 140ms var(--c-ease);
+  transition: background 140ms var(--c-ease), color 140ms var(--c-ease), filter 140ms var(--c-ease), border-color 140ms var(--c-ease);
 }
 
-/* 项目上下文（ctx）：只读 breadcrumb 显示当前 cwd */
-.chaya-v2 .v2-la-ctx { color: var(--c-ink-3); background: var(--c-surface); cursor: default; }
+/* 项目上下文（ctx）：只读 breadcrumb —— 最安静，永不填充，像页边批注 */
+.chaya-v2 .v2-la-ctx { color: var(--c-ink-4); cursor: default; padding: 0 4px; gap: 5px; }
 .chaya-v2 .v2-la-ctx svg { width: 12px; height: 12px; color: var(--c-ink-4); flex: 0 0 auto; }
 
 /* danger bg is a constant dark red in both modes, so its glyph stays light
  * (var(--c-bg) would turn dark-on-dark in dark mode). */
 .chaya-v2 .v2-send.stop { background: var(--c-danger); color: #fff; }
 
-/* 权限模式 pill（Tab 切换；按模式上色，500 字重以示状态） */
+/* 权限模式 pill（Tab 切换；唯一带状态色的 chip，500 字重以示状态）。Default 走 ghost，
+   其余档位才上柔和底色——「一屏只有该看的地方有色」。 */
 .chaya-v2 .v2-la-mode { font-weight: 500; }
-.chaya-v2 .v2-la-mode:hover { filter: brightness(0.97); }
-.chaya-v2 .v2-la-mode.tone-default { background: var(--c-surface); color: var(--c-ink-2); }                  /* Default 灰 */
-.chaya-v2 .v2-la-mode.tone-plan   { background: rgba(59,130,246,0.16); color: #2f6fed; }                    /* Plan 蓝 */
-.chaya-v2 .v2-la-mode.tone-edit   { background: rgba(217,119,87,0.18); color: #c2562f; }                    /* Accept Edits 橙 */
-.chaya-v2 .v2-la-mode.tone-bypass { background: rgba(216,120,150,0.20); color: #b05a7a; }                   /* Bypass 雾粉 */
+.chaya-v2 .v2-la-mode.tone-default { color: var(--c-ink-3); }                                                /* Default 安静 ghost */
+.chaya-v2 .v2-la-mode.tone-default:hover { background: var(--c-hover); color: var(--c-ink-2); }
+.chaya-v2 .v2-la-mode.tone-plan   { background: rgba(59,130,246,0.14); color: #2f6fed; }                    /* Plan 蓝 */
+.chaya-v2 .v2-la-mode.tone-edit   { background: rgba(217,119,87,0.16); color: #c2562f; }                    /* Accept Edits 橙 */
+.chaya-v2 .v2-la-mode.tone-bypass { background: rgba(216,120,150,0.16); color: #b05a7a; }                   /* Bypass 雾粉 */
+.chaya-v2 .v2-la-mode.tone-plan:hover, .chaya-v2 .v2-la-mode.tone-edit:hover, .chaya-v2 .v2-la-mode.tone-bypass:hover { filter: brightness(0.97); }
 .chaya-v2 .v2-la-mode:focus-visible { outline: 1.5px solid var(--c-accent); outline-offset: 1.5px; }
 
 /* 模型选择器（/model 等价）：输入框旁的安静 pill + 向上弹出的列表 */
@@ -4306,13 +4366,11 @@ body.v2-la-resizing { user-select: none; }
 }
 /* 第一个分组（紧贴在「默认模型」按钮下面）顶部空气略小，避免割裂感。 */
 .chaya-v2 .v2-la-model-group:first-of-type .v2-la-model-vendor { padding-top: 8px; }
-/* 精简（分屏）态：模型 pill 更小 */
-.chaya-v2 .v2-la-slim .v2-la-model { padding: 1px 6px; font-size: 10.5px; max-width: 130px; }
 
 /* 合一的「模型 / MCP」触发器：模型名 + 可选 MCP 计数。
    尺寸与上面 ctx/mode/model 一组对齐（24px / 11.5px / padding 0 10），
    三角字形 ▷ 调成 10.5px optical（unicode 字号实际偏小）+ 沉色，作为"打开列表"暗示。 */
-.chaya-v2 .v2-la-cfg { background: var(--c-surface); color: var(--c-ink-3); max-width: 260px; }
+.chaya-v2 .v2-la-cfg { color: var(--c-ink-3); max-width: 260px; }
 .chaya-v2 .v2-la-cfg:hover { background: var(--c-hover); color: var(--c-ink-2); }
 .chaya-v2 .v2-la-cfg .tri {
   width: 13px; height: 13px;
@@ -4341,9 +4399,6 @@ body.v2-la-resizing { user-select: none; }
   flex: 0 0 auto;
 }
 .chaya-v2 .v2-la-cfg:focus-visible { outline: 1.5px solid var(--c-accent); outline-offset: 1.5px; }
-/* 分屏态：输入框左侧的空心三角形触发器（取代 prompt 字形，承载模型/MCP） */
-.chaya-v2 .v2-la-tri { flex: 0 0 auto; font-size: 12px; line-height: 1; color: var(--c-ink-4); cursor: pointer; padding: 0 2px; transition: color 140ms var(--c-ease); }
-.chaya-v2 .v2-la-tri:hover { color: color-mix(in oklab, var(--pane) 70%, var(--c-ink-2)); }
 /* ===== 「模型 / MCP」对话框 — Codex 风格磨砂玻璃浮层 =====
    面板本身上玻璃（高不透明度保正文清晰）+ 分段控件 + 干净留白列表。
    玻璃 token 常驻 .chaya-v2，无需 data-glass 即生效。 */
@@ -4681,3 +4736,347 @@ body.v2-la-resizing { user-select: none; }
   /* 模型/MCP 玻璃浮层始终启用，故无条件回退为实色 */
   .chaya-v2 .v2-la-cfgmodal { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--c-bg); }
 }
+
+/* ============================================================
+   选区延伸：笔记 + 衍生触发（NotesLayer.tsx）
+   配色全走 token（--c-note* 为暖 ochre 批注色，已在六个主题/模式块定义；
+   衍生用既有 --c-accent*）。明暗双主题自动适配。
+   ============================================================ */
+/* ---- 选区工具条（fixed，portal 到 .chaya-v2 根）---- */
+.chaya-v2 .v2-sel-bar {
+  position: fixed; z-index: 60; display: inline-flex; align-items: stretch;
+  height: 32px; padding: 3px; gap: 1px;
+  background: var(--c-bg); border: 1px solid var(--c-rule); border-radius: var(--c-radius-pill);
+  box-shadow: var(--c-shadow-menu); white-space: nowrap; user-select: none;
+  transform: translateY(4px) scale(0.96); opacity: 0; pointer-events: none;
+  transition: opacity var(--m-fast, 160ms) var(--c-ease), transform var(--m-fast, 160ms) var(--c-ease-spring, var(--c-ease));
+}
+.chaya-v2 .v2-sel-bar.show { opacity: 1; transform: none; pointer-events: auto; }
+.chaya-v2 .v2-sel-act {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 11px;
+  border: 0; background: transparent; border-radius: var(--c-radius-pill); cursor: pointer;
+  font-size: 12.5px; font-weight: 540; color: var(--c-ink-2); font-family: var(--c-sans);
+  transition: background var(--m-fast, 160ms) var(--c-ease), color var(--m-fast, 160ms) var(--c-ease);
+}
+.chaya-v2 .v2-sel-act svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-sel-act.derive:hover { background: var(--c-accent-bg); color: var(--c-accent-strong); }
+.chaya-v2 .v2-sel-act.note:hover { background: var(--c-note-bg); color: var(--c-note-strong); }
+.chaya-v2 .v2-sel-act:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 1px; }
+.chaya-v2 .v2-sel-sep { width: 1px; background: var(--c-rule); margin: 3px 0; }
+
+/* ---- 注脚 [N]：某段在衍生 N 里展开问过（衍生阶段用）---- */
+.chaya-v2 .v2-fn {
+  font-family: var(--c-mono); font-size: 0.62em; font-weight: 600; vertical-align: super; line-height: 0;
+  color: var(--c-accent-strong); cursor: pointer; margin: 0 1px; padding: 0 1px; border-radius: 3px;
+  transition: background var(--m-fast, 160ms) var(--c-ease);
+}
+.chaya-v2 .v2-fn::before { content: "["; opacity: 0.55; }
+.chaya-v2 .v2-fn::after { content: "]"; opacity: 0.55; }
+.chaya-v2 .v2-fn:hover, .chaya-v2 .v2-fn.on { background: var(--c-accent-bg); }
+.chaya-v2 .v2-srcmark { background: color-mix(in oklab, var(--c-accent-bg) 50%, transparent); border-radius: 2px;
+  -webkit-box-decoration-break: clone; box-decoration-break: clone; cursor: pointer; }
+.chaya-v2 .v2-srcmark.active { background: var(--c-accent-bg); }
+
+/* ---- 笔记 pill（composer 内）---- */
+.chaya-v2 .v2-note { position: relative; display: inline-flex; }
+.chaya-v2 .v2-note-pill {
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px;
+  border: 1px solid transparent; border-radius: var(--c-radius-pill);
+  background: transparent; color: var(--c-note-strong); cursor: pointer;
+  font-size: 12px; font-family: var(--c-sans);
+  transition: background var(--m-fast, 160ms) var(--c-ease), border-color var(--m-fast, 160ms) var(--c-ease);
+}
+.chaya-v2 .v2-note-pill svg { width: 13px; height: 13px; }
+.chaya-v2 .v2-note-pill:hover { background: var(--c-note-bg); }
+.chaya-v2 .v2-note-pill.on { background: var(--c-note-bg); border-color: color-mix(in oklab, var(--c-note) 35%, transparent); }
+.chaya-v2 .v2-note-pill:focus-visible { outline: 2px solid var(--c-note); outline-offset: 1px; }
+.chaya-v2 .v2-note-pill .badge {
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: var(--c-radius-pill);
+  background: var(--c-note-bg); color: var(--c-note-strong); font-size: 10px; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center; font-family: var(--c-mono); margin-left: 1px;
+}
+
+/* ---- 笔记弹层（锚定 .v2-box，向上展开）---- */
+.chaya-v2 .v2-note-pop {
+  position: absolute; left: 0; bottom: calc(100% + 10px); z-index: 40;
+  width: min(420px, 72vw); max-height: 52vh; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--c-note-card); border: 1px solid color-mix(in oklab, var(--c-note) 30%, var(--c-rule));
+  border-radius: var(--c-radius-xl);
+  box-shadow: var(--c-shadow-menu);
+  transform-origin: 0 100%; animation: v2NotePop 220ms var(--c-ease-spring, var(--c-ease));
+}
+@keyframes v2NotePop { from { opacity: 0; transform: translateY(8px) scale(0.985); } to { opacity: 1; transform: none; } }
+.chaya-v2 .v2-note-pop::before {
+  content: ""; position: absolute; left: 18px; bottom: -7px; transform: rotate(45deg);
+  width: 13px; height: 13px; background: var(--c-note-card);
+  border-right: 1px solid color-mix(in oklab, var(--c-note) 30%, var(--c-rule));
+  border-bottom: 1px solid color-mix(in oklab, var(--c-note) 30%, var(--c-rule)); border-bottom-right-radius: 3px;
+}
+.chaya-v2 .v2-note-pop-hd {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 7px; padding: 9px 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--c-note) 18%, var(--c-rule));
+  background: color-mix(in oklab, var(--c-note) 7%, transparent);
+}
+.chaya-v2 .v2-note-pop-hd .ic { color: var(--c-note-strong); display: inline-flex; }
+.chaya-v2 .v2-note-pop-hd .ic svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-note-pop-hd .ttl { font-size: 13px; color: var(--c-ink-2); }
+.chaya-v2 .v2-note-pop-hd .ttl b { color: var(--c-ink); font-weight: 600; }
+.chaya-v2 .v2-note-pop-hd .cnt { font-size: 11px; color: var(--c-note-strong); background: var(--c-note-bg);
+  padding: 1px 7px; border-radius: var(--c-radius-pill); font-family: var(--c-mono); }
+.chaya-v2 .v2-note-pop-hd .grow { flex: 1; }
+.chaya-v2 .v2-note-pop-hd .meta { font-size: 10.5px; color: var(--c-ink-4); font-family: var(--c-mono); }
+.chaya-v2 .v2-note-body { flex: 1; overflow-y: auto; padding: 10px 12px; max-height: 34vh; }
+.chaya-v2 .v2-note-empty { color: var(--c-ink-3); font-size: 12.5px; line-height: 1.6; padding: 10px 4px; text-align: center; }
+.chaya-v2 .v2-note-list { display: flex; flex-direction: column; gap: 8px; }
+.chaya-v2 .v2-note-item {
+  position: relative; background: var(--c-bg); border: 1px solid var(--c-rule);
+  border-left: 2px solid var(--c-note); border-radius: var(--c-radius-md); padding: 8px 11px 9px;
+  font-size: 13px; line-height: 1.55; color: var(--c-ink);
+  transition: border-color 180ms var(--c-ease), box-shadow 180ms var(--c-ease), background 180ms var(--c-ease);
+}
+.chaya-v2 .v2-note-item:hover {
+  border-color: color-mix(in oklab, var(--c-note) 26%, var(--c-rule));
+  border-left-color: var(--c-note-strong);
+  box-shadow: 0 1px 6px color-mix(in oklab, var(--c-note) 12%, transparent);
+}
+/* top rail: kind + age on the left, actions on the right (revealed on hover). */
+.chaya-v2 .v2-note-meta { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; }
+.chaya-v2 .v2-note-meta .grow { flex: 1; }
+.chaya-v2 .v2-note-item .kind { display: inline-block; font-size: 10px; letter-spacing: 0.03em; color: var(--c-note-strong);
+  background: var(--c-note-bg); padding: 1px 6px; border-radius: 4px; font-family: var(--c-mono); }
+.chaya-v2 .v2-note-item .time { font-size: 10.5px; color: var(--c-ink-4); font-family: var(--c-mono); letter-spacing: 0.01em; }
+.chaya-v2 .v2-note-item .act {
+  width: 22px; height: 22px; display: grid; place-items: center; flex: 0 0 auto;
+  border: 0; background: transparent; color: var(--c-ink-4); border-radius: 6px; cursor: pointer; font-size: 12px;
+  opacity: 0; transform: translateY(-1px);
+  transition: opacity 160ms var(--c-ease), background 160ms var(--c-ease), color 160ms var(--c-ease), transform 160ms var(--c-ease);
+}
+.chaya-v2 .v2-note-item .act svg { width: 14px; height: 14px; }
+.chaya-v2 .v2-note-item:hover .act,
+.chaya-v2 .v2-note-item:focus-within .act { opacity: 1; transform: none; }
+.chaya-v2 .v2-note-item .act:hover { background: var(--c-hover); color: var(--c-ink-2); }
+.chaya-v2 .v2-note-item .act.rm:hover { color: var(--c-danger); }
+/* clamped preview — fixed height with a fade hint; "展开全文" opens the reader. */
+.chaya-v2 .v2-note-clamp { position: relative; overflow: hidden; }
+.chaya-v2 .v2-note-fade {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 34px; pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--c-bg) 92%);
+}
+.chaya-v2 .v2-note-more {
+  display: inline-flex; align-items: center; gap: 4px; margin-top: 5px;
+  border: 0; background: transparent; padding: 2px 6px; margin-left: -6px; border-radius: 5px;
+  font-size: 11.5px; color: var(--c-note-strong); cursor: pointer; font-family: var(--c-mono);
+  transition: background 160ms var(--c-ease), color 160ms var(--c-ease);
+}
+.chaya-v2 .v2-note-more:hover { background: var(--c-note-bg); }
+.chaya-v2 .v2-note-more svg { width: 12px; height: 12px; }
+.chaya-v2 .v2-note-item .tx { display: block; word-break: break-word; }
+@media (prefers-reduced-motion: reduce) {
+  .chaya-v2 .v2-note-item .act, .chaya-v2 .v2-note-panel, .chaya-v2 .v2-note-panel-card { animation: none; transition: none; }
+}
+/* Compact markdown inside a captured note — readable but dense enough for the
+   narrow popover. First/last children shed their margins so the card stays tight. */
+.chaya-v2 .v2-note-md { font-size: 13px; line-height: 1.55; color: var(--c-ink); }
+.chaya-v2 .v2-note-md > :first-child { margin-top: 0; }
+.chaya-v2 .v2-note-md > :last-child { margin-bottom: 0; }
+.chaya-v2 .v2-note-md p { margin: 0 0 6px; }
+.chaya-v2 .v2-note-md h1, .chaya-v2 .v2-note-md h2, .chaya-v2 .v2-note-md h3,
+.chaya-v2 .v2-note-md h4, .chaya-v2 .v2-note-md h5, .chaya-v2 .v2-note-md h6 {
+  margin: 8px 0 4px; font-size: 13px; font-weight: 650; line-height: 1.35; color: var(--c-ink);
+}
+.chaya-v2 .v2-note-md h1 { font-size: 14.5px; }
+.chaya-v2 .v2-note-md h2 { font-size: 14px; }
+.chaya-v2 .v2-note-md ul, .chaya-v2 .v2-note-md ol { margin: 4px 0 6px; padding-left: 18px; }
+.chaya-v2 .v2-note-md li { margin: 2px 0; }
+.chaya-v2 .v2-note-md li > p { margin: 0; }
+.chaya-v2 .v2-note-md a { color: var(--c-accent); text-decoration: underline; text-underline-offset: 2px; }
+.chaya-v2 .v2-note-md strong { font-weight: 650; }
+.chaya-v2 .v2-note-md code {
+  font-family: var(--c-mono); font-size: 11.5px; padding: 1px 4px; border-radius: 4px;
+  background: var(--c-note-bg); color: var(--c-note-strong); word-break: break-word;
+}
+.chaya-v2 .v2-note-md pre {
+  margin: 6px 0; padding: 8px 10px; border-radius: var(--c-radius-sm);
+  background: var(--c-surface); border: 1px solid var(--c-rule); overflow-x: auto;
+}
+.chaya-v2 .v2-note-md pre code { background: none; padding: 0; color: var(--c-ink-2); font-size: 11.5px; line-height: 1.5; }
+.chaya-v2 .v2-note-md blockquote {
+  margin: 6px 0; padding: 2px 0 2px 10px; border-left: 2px solid var(--c-note);
+  color: var(--c-ink-2); font-style: italic;
+}
+.chaya-v2 .v2-note-md hr { border: 0; border-top: 1px solid var(--c-rule); margin: 8px 0; }
+.chaya-v2 .v2-note-xscroll { overflow-x: auto; margin: 6px 0; }
+.chaya-v2 .v2-note-md table { border-collapse: collapse; font-size: 11.5px; }
+.chaya-v2 .v2-note-md th, .chaya-v2 .v2-note-md td { border: 1px solid var(--c-rule); padding: 3px 7px; text-align: left; }
+.chaya-v2 .v2-note-md th { background: var(--c-surface); font-weight: 600; }
+.chaya-v2 .v2-note-md img { max-width: 100%; border-radius: var(--c-radius-sm); }
+
+/* header "expand panel" button in the compact popover. */
+.chaya-v2 .v2-note-expand {
+  flex: 0 0 auto; width: 24px; height: 24px; display: grid; place-items: center;
+  border: 0; background: transparent; color: var(--c-ink-4); border-radius: 6px; cursor: pointer;
+  transition: background 150ms var(--c-ease), color 150ms var(--c-ease);
+}
+.chaya-v2 .v2-note-expand svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-note-expand:hover { background: var(--c-note-bg); color: var(--c-note-strong); }
+
+/* ---- expanded notes panel (portaled to root, sized like the reading column) ---- */
+.chaya-v2 .v2-note-panel {
+  position: fixed; inset: 0; z-index: 95;
+  display: grid; place-items: center; padding: 24px;
+  background: color-mix(in oklab, var(--c-ink) 32%, transparent);
+  animation: v2-note-panel-fade 160ms var(--c-ease);
+}
+@keyframes v2-note-panel-fade { from { opacity: 0; } to { opacity: 1; } }
+.chaya-v2 .v2-note-panel-card {
+  display: flex; flex-direction: column; width: min(820px, 92vw); max-height: 86vh; overflow: hidden;
+  background: var(--c-bg); border: 1px solid var(--c-rule);
+  border-left: 3px solid var(--c-note); border-radius: var(--c-radius-xl);
+  box-shadow: 0 24px 70px color-mix(in oklab, var(--c-ink) 28%, transparent);
+  animation: v2-note-panel-rise 200ms var(--c-ease) both;
+}
+@keyframes v2-note-panel-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.chaya-v2 .v2-note-panel-hd {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 9px; padding: 13px 16px;
+  border-bottom: 1px solid color-mix(in oklab, var(--c-note) 16%, var(--c-rule));
+  background: color-mix(in oklab, var(--c-note) 5%, transparent);
+}
+.chaya-v2 .v2-note-panel-hd .ic { color: var(--c-note-strong); display: inline-flex; }
+.chaya-v2 .v2-note-panel-hd .ic svg { width: 16px; height: 16px; }
+.chaya-v2 .v2-note-panel-hd .ttl { font-size: 14px; color: var(--c-ink-2); }
+.chaya-v2 .v2-note-panel-hd .ttl b { color: var(--c-ink); font-weight: 600; }
+.chaya-v2 .v2-note-panel-hd .cnt { font-size: 11px; color: var(--c-note-strong); background: var(--c-note-bg);
+  padding: 1px 7px; border-radius: var(--c-radius-pill); font-family: var(--c-mono); }
+.chaya-v2 .v2-note-panel-hd .grow { flex: 1; }
+.chaya-v2 .v2-note-panel-hd .act {
+  width: 32px; height: 32px; display: grid; place-items: center; flex: 0 0 auto;
+  border: 0; background: transparent; color: var(--c-ink-3); border-radius: var(--c-radius-md);
+  cursor: pointer; transition: background 150ms var(--c-ease), color 150ms var(--c-ease);
+}
+.chaya-v2 .v2-note-panel-hd .act svg { width: 17px; height: 17px; }
+.chaya-v2 .v2-note-panel-hd .act:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-note-panel-body { flex: 1 1 auto; overflow-y: auto; padding: 16px 18px; }
+.chaya-v2 .v2-note-panel-list { display: flex; flex-direction: column; gap: 12px; max-width: 720px; margin: 0 auto; }
+/* In the panel a card carries full content with breathing room. */
+.chaya-v2 .v2-note-item.full { padding: 12px 14px 14px; }
+.chaya-v2 .v2-note-item.full .v2-note-read { margin-top: 2px; }
+/* Comfortable reading typography — bigger than the dense popover preview. */
+.chaya-v2 .v2-note-read .v2-note-md { font-size: 14.5px; line-height: 1.72; }
+.chaya-v2 .v2-note-read .v2-note-md p { margin: 0 0 12px; }
+.chaya-v2 .v2-note-read .v2-note-md h1 { font-size: 20px; }
+.chaya-v2 .v2-note-read .v2-note-md h2 { font-size: 17px; }
+.chaya-v2 .v2-note-read .v2-note-md h3,
+.chaya-v2 .v2-note-read .v2-note-md h4 { font-size: 15px; }
+.chaya-v2 .v2-note-read .v2-note-md h1,
+.chaya-v2 .v2-note-read .v2-note-md h2,
+.chaya-v2 .v2-note-read .v2-note-md h3 { margin: 18px 0 8px; }
+.chaya-v2 .v2-note-read .v2-note-md ul,
+.chaya-v2 .v2-note-read .v2-note-md ol { margin: 8px 0 12px; padding-left: 22px; }
+.chaya-v2 .v2-note-read .v2-note-md li { margin: 4px 0; }
+.chaya-v2 .v2-note-read .v2-note-md code { font-size: 13px; }
+.chaya-v2 .v2-note-read .v2-note-md pre { margin: 12px 0; padding: 12px 14px; }
+.chaya-v2 .v2-note-read .v2-note-md pre code { font-size: 12.5px; line-height: 1.6; }
+.chaya-v2 .v2-note-read .v2-note-md blockquote { margin: 12px 0; padding: 4px 0 4px 14px; }
+
+.chaya-v2 .v2-note-add { flex: 0 0 auto; display: flex; gap: 7px; padding: 9px 11px;
+  border-top: 1px solid color-mix(in oklab, var(--c-note) 16%, var(--c-rule)); }
+.chaya-v2 .v2-note-add input { flex: 1; border: 1px solid var(--c-rule); border-radius: var(--c-radius-pill);
+  padding: 6px 12px; font-size: 13px; font-family: var(--c-sans); background: var(--c-bg); outline: 0; color: var(--c-ink); }
+.chaya-v2 .v2-note-add input:focus { border-color: var(--c-note); box-shadow: 0 0 0 3px var(--c-note-bg); }
+.chaya-v2 .v2-note-add button { width: 30px; height: 30px; flex: 0 0 auto; border: 0; border-radius: 50%; cursor: pointer;
+  background: var(--c-note-strong); color: var(--c-note-card); display: grid; place-items: center; }
+.chaya-v2 .v2-note-add button svg { width: 15px; height: 15px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chaya-v2 .v2-sel-bar, .chaya-v2 .v2-note-pop { transition: none; animation: none; }
+}
+
+/* ============================================================
+   衍生卡片（DeriveCard）—— 独立 derive-session 浮层。terracotta accent（既有 --c-accent*）。
+   ============================================================ */
+.chaya-v2 .v2-dv-card {
+  position: fixed; right: 20px; bottom: 20px; z-index: 55;
+  width: min(440px, 42vw); height: min(560px, 72vh);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--c-bg); border: 1px solid var(--c-rule); border-radius: var(--c-radius-xl);
+  box-shadow: var(--c-shadow-modal, 0 1px 2px rgba(0,0,0,.06), 0 20px 60px rgba(0,0,0,.18));
+  animation: v2DvIn 240ms var(--ease-emphasis, var(--c-ease));
+}
+@keyframes v2DvIn { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
+/* 小窗态：右下角一张方形小卡片（缩略预览），可拖动；不拖动点一下重新展开回卡片 */
+.chaya-v2 .v2-dv-card.view-min {
+  width: 248px; height: 208px; border-radius: var(--c-radius-xl); cursor: grab;
+}
+.chaya-v2 .v2-dv-card.view-min.dragging { cursor: grabbing; }
+.chaya-v2 .v2-dv-card.view-min .v2-dv-hd { padding: 7px 7px 7px 11px; cursor: inherit; }
+.chaya-v2 .v2-dv-card.view-min .v2-dv-hd .lab .from { display: none; }
+.chaya-v2 .v2-dv-minhint { flex: 0 0 auto; text-align: center; font-size: 11px; font-weight: 540;
+  color: var(--c-accent-strong); padding: 5px; pointer-events: none; }
+/* 覆盖态：盖在当前 session 上的大浮层（居中、带 scrim），不进 tab 栏 */
+.chaya-v2 .v2-dv-card.view-max {
+  top: 28px; bottom: 28px; left: 0; right: 0; width: auto; height: auto;
+  max-width: min(960px, 92vw); margin: 0 auto;
+}
+.chaya-v2 .v2-dv-scrim {
+  position: fixed; inset: 0; z-index: 54;
+  background: color-mix(in oklab, var(--c-ink) 30%, transparent);
+  animation: v2DvScrim 200ms var(--ease-out, var(--c-ease));
+}
+@keyframes v2DvScrim { from { opacity: 0; } to { opacity: 1; } }
+
+.chaya-v2 .v2-dv-hd {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 10px 11px 10px 13px;
+  border-bottom: 1px solid var(--c-rule);
+  background: linear-gradient(color-mix(in oklab, var(--c-accent) 7%, transparent), transparent);
+  user-select: none;
+}
+.chaya-v2 .v2-dv-hd .branch { color: var(--c-accent-strong); display: inline-flex; }
+.chaya-v2 .v2-dv-hd .branch svg { width: 16px; height: 16px; }
+.chaya-v2 .v2-dv-hd .lab { display: inline-flex; align-items: baseline; gap: 6px; font-size: 11px;
+  font-family: var(--c-mono); letter-spacing: .04em; text-transform: uppercase; color: var(--c-ink-4); min-width: 0; }
+.chaya-v2 .v2-dv-hd .lab b { color: var(--c-accent-strong); font-weight: 600; }
+.chaya-v2 .v2-dv-hd .lab .from { text-transform: none; letter-spacing: 0; color: var(--c-ink-3); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.chaya-v2 .v2-dv-hd .switch { display: inline-flex; gap: 2px; margin-left: 2px; }
+.chaya-v2 .v2-dv-hd .switch button { width: 19px; height: 19px; border: 1px solid var(--c-rule); background: transparent;
+  color: var(--c-ink-3); border-radius: var(--c-radius-sm); font-size: 11px; font-family: var(--c-mono); cursor: pointer; }
+.chaya-v2 .v2-dv-hd .switch button.on { background: var(--c-accent-bg); color: var(--c-accent-strong); border-color: transparent; }
+.chaya-v2 .v2-dv-hd .acts { margin-left: auto; display: flex; gap: 2px; }
+.chaya-v2 .v2-dv-hd .acts button { width: 26px; height: 26px; display: grid; place-items: center; border: 0;
+  background: transparent; color: var(--c-ink-4); border-radius: var(--c-radius-sm); cursor: pointer; font-size: 13px; }
+.chaya-v2 .v2-dv-hd .acts button svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-dv-hd .acts button:hover { background: var(--c-hover); color: var(--c-ink-2); }
+.chaya-v2 .v2-dv-hd .acts .v2-send { width: 26px; height: 26px; }   /* stop ■ 不撑大 */
+
+.chaya-v2 .v2-dv-cite {
+  flex: 0 0 auto; position: relative; margin: 9px 12px 4px; padding: 1px 4px 1px 13px;
+  border-left: 2px solid var(--c-accent); color: var(--c-ink-2);
+  font-family: Georgia, 'Times New Roman', ui-serif, serif; font-style: italic; font-size: 13px; line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.chaya-v2 .v2-dv-stream { flex: 1; overflow-y: auto; padding: 8px 14px 12px; }
+/* 小窗缩略：渐隐「顶部」（latest 在底部 → 底部不遮，流式实时可见）；内容不拦指针（拖动落到卡片） */
+.chaya-v2 .v2-dv-card.view-min .v2-dv-stream { padding: 6px 11px; -webkit-mask-image: linear-gradient(transparent, #000 26%); mask-image: linear-gradient(transparent, #000 26%); pointer-events: none; }
+.chaya-v2 .v2-dv-card.view-min .v2-dv-stream .v2-la-turn { font-size: 12px; }
+.chaya-v2 .v2-dv-card.dragging { transition: none; cursor: grabbing; }
+.chaya-v2 .v2-dv-card .v2-dv-hd { cursor: grab; }
+.chaya-v2 .v2-dv-card.view-max .v2-dv-hd { cursor: default; }
+.chaya-v2 .v2-dv-composer { flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px; padding: 10px 12px 12px;
+  border-top: 1px solid var(--c-rule); }
+.chaya-v2 .v2-dv-composer textarea { flex: 1; resize: none; border: 1px solid var(--c-rule); border-radius: var(--c-radius-lg);
+  background: var(--c-bg); color: var(--c-ink); font-family: var(--c-sans); font-size: 14px; line-height: 1.5;
+  padding: 8px 11px; max-height: 120px; outline: 0; }
+.chaya-v2 .v2-dv-composer textarea:focus { border-color: color-mix(in oklab, var(--c-ink) 22%, var(--c-rule)); }
+
+@media (prefers-reduced-motion: reduce) { .chaya-v2 .v2-dv-card { animation: none; } }
+
+/* composer 里的「衍生入口」chip：刷新后挂在 session 下的衍生由此重新打开（terracotta accent） */
+.chaya-v2 .v2-derive-pill { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px;
+  border: 1px solid transparent; border-radius: var(--c-radius-pill); background: transparent;
+  color: var(--c-accent-strong); cursor: pointer; font-size: 12px; font-family: var(--c-sans);
+  transition: background var(--m-fast, 160ms) var(--c-ease); }
+.chaya-v2 .v2-derive-pill .br { font-family: var(--c-mono); font-size: 13px; color: var(--c-accent); }
+.chaya-v2 .v2-derive-pill:hover { background: var(--c-accent-bg); }
+.chaya-v2 .v2-derive-pill .badge { min-width: 15px; height: 15px; padding: 0 4px; border-radius: var(--c-radius-pill);
+  background: var(--c-accent); color: var(--c-bg); font-size: 10px; font-weight: 600; display: inline-flex;
+  align-items: center; justify-content: center; font-family: var(--c-mono); }

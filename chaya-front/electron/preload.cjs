@@ -16,14 +16,14 @@ contextBridge.exposeInMainWorld('chateeElectron', {
     send: (payload) => ipcRenderer.invoke('localAgent:send', payload),
     warm: (payload) => ipcRenderer.invoke('localAgent:warm', payload),
     permissionRespond: (permId, decision) => ipcRenderer.invoke('localAgent:permissionRespond', { permId, decision }),
-    interrupt: (cwd) => ipcRenderer.invoke('localAgent:interrupt', { cwd }),
-    sessionClose: (cwd) => ipcRenderer.invoke('localAgent:sessionClose', { cwd }),
-    setPermMode: (cwd, permMode) => ipcRenderer.invoke('localAgent:setPermMode', { cwd, permMode }),
-    setModel: (cwd, model) => ipcRenderer.invoke('localAgent:setModel', { cwd, model }),
+    interrupt: (cwd, lane) => ipcRenderer.invoke('localAgent:interrupt', { cwd, lane }),
+    sessionClose: (cwd, lane) => ipcRenderer.invoke('localAgent:sessionClose', { cwd, lane }),
+    setPermMode: (cwd, permMode, lane) => ipcRenderer.invoke('localAgent:setPermMode', { cwd, permMode, lane }),
+    setModel: (cwd, model, lane) => ipcRenderer.invoke('localAgent:setModel', { cwd, model, lane }),
     listMcp: (cwd) => ipcRenderer.invoke('localAgent:listMcp', { cwd }),
-    setMcp: (cwd, mcp) => ipcRenderer.invoke('localAgent:setMcp', { cwd, mcp }),
-    mcpStatus: (cwd) => ipcRenderer.invoke('localAgent:mcpStatus', { cwd }),
-    reconnectMcp: (cwd, name) => ipcRenderer.invoke('localAgent:reconnectMcp', { cwd, name }),
+    setMcp: (cwd, mcp, lane) => ipcRenderer.invoke('localAgent:setMcp', { cwd, mcp, lane }),
+    mcpStatus: (cwd, lane) => ipcRenderer.invoke('localAgent:mcpStatus', { cwd, lane }),
+    reconnectMcp: (cwd, name, lane) => ipcRenderer.invoke('localAgent:reconnectMcp', { cwd, name, lane }),
     // 订阅流式事件；返回取消订阅函数。
     onEvent: (cb) => {
       const handler = (_e, data) => cb(data);

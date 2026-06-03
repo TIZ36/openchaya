@@ -449,9 +449,14 @@ async function readCmdDesc(file) {
  * 后续回合只剩 API 往返，追齐原生终端速度。事件按 cwd 路由回对应标签。
  * canUseTool 让 agent 要权限/提问时真正暂停，弹给用户选。SDK 是 ESM，动态 import。
  * ------------------------------------------------------------------ */
-const sessions = new Map();      // cwd -> { input, ac, query }
-const pendingPerms = new Map();  // permId -> { cwd, settle }
+const sessions = new Map();      // runKey -> { input, ac, query }
+const pendingPerms = new Map();  // permId -> { cwd: runKey, settle }
 const PERM_MODES = ['default', 'plan', 'acceptEdits', 'bypassPermissions'];
+
+/* runKey：会话路由键。主会话 = cwd 本身；衍生(derive)等并行「车道」= cwd + lane。
+ * 关键：runKey 只做 Map 键与事件路由键；SDK 的工作目录始终是真实 cwd。
+ * 这样同一项目目录可并存「主会话」与「衍生会话」两条独立常驻进程，互不串台。 */
+function runKey(cwd, lane) { return lane ? `${cwd}#@#${lane}` : cwd; }
 
 let _sdkPromise = null;
 function getSdk() {
@@ -491,20 +496,22 @@ function clearPerms(cwd, message) {
 }
 
 /** 起一个常驻会话（懒创建，首条消息时调用）。失败返回 null 并已发 error 事件。 */
-function startSession(sender, { cwd, provider, sessionId, permMode, model, mcp }) {
+function startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, lane }) {
+  const key = runKey(cwd, lane);   // Map 键 / 事件路由键（SDK 仍用真实 cwd）
+  if (lane) console.log('[localAgent] start derive session · key=%s · dir=%s', key, cwd);
   const def = PROVIDERS[provider || 'claude'];
-  if (!def || !def.live) { sender.send('localAgent:event', { cwd, ev: { type: 'error', error: `${provider} 暂不支持实时对话` } }); return null; }
+  if (!def || !def.live) { sender.send('localAgent:event', { cwd: key, ev: { type: 'error', error: `${provider} 暂不支持实时对话` } }); return null; }
   const bin = resolveBin(def.bin);
-  if (!bin) { sender.send('localAgent:event', { cwd, ev: { type: 'error', error: `未找到 ${def.bin}，请确认已安装` } }); return null; }
+  if (!bin) { sender.send('localAgent:event', { cwd: key, ev: { type: 'error', error: `未找到 ${def.bin}，请确认已安装` } }); return null; }
   const mode = PERM_MODES.includes(permMode) ? permMode : 'default';
   const input = makeInputQueue();
   const ac = new AbortController();
 
-  // 发事件给渲染层；帧已销毁（渲染进程崩溃/重载）则中断会话并停发，
+  // 发事件给渲染层（按 runKey 路由）；帧已销毁（渲染进程崩溃/重载）则中断会话并停发，
   // 避免对着死帧疯狂 send 刷屏报错、也让孤儿 SDK 进程及时收尾。
   const emit = (ev) => {
     if (sender.isDestroyed()) { try { ac.abort(); } catch { /* */ } return false; }
-    try { sender.send('localAgent:event', { cwd, ev }); return true; }
+    try { sender.send('localAgent:event', { cwd: key, ev }); return true; }
     catch { try { ac.abort(); } catch { /* */ } return false; }
   };
 
@@ -520,7 +527,7 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, mcp }
     };
     if (ac.signal.aborted) { settle({ behavior: 'deny', message: '已取消' }); return; }
     const permId = `perm-${Math.random().toString(36).slice(2, 10)}`;
-    pendingPerms.set(permId, { cwd, settle });
+    pendingPerms.set(permId, { cwd: key, settle });
     const isQuestion = toolName === 'AskUserQuestion';
     emit({
       type: isQuestion ? 'question_request' : 'permission_request', permId, toolName, input: toolInput,
@@ -534,7 +541,7 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, mcp }
 
   const mcpServers = resolveMcp(cwd, mcp);
   const session = { input, ac, query: null, model: model || null, mcp: Array.isArray(mcp) ? mcp.slice() : [] };
-  sessions.set(cwd, session);
+  sessions.set(key, session);
 
   (async () => {
     try {
@@ -571,8 +578,8 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, mcp }
     } catch (e) {
       if (!ac.signal.aborted) emit({ type: 'error', error: String(e && e.message || e) });
     } finally {
-      sessions.delete(cwd);
-      clearPerms(cwd, '会话结束');
+      sessions.delete(key);
+      clearPerms(key, '会话结束');
       emit({ type: 'session_closed' });
     }
   })();
@@ -633,10 +640,11 @@ function buildClaudeContent(prompt, attachments) {
  *  模型在发送这一刻才应用：冷启已用 options.model 起；暖会话且模型变了才 setModel
  *  （setModel 会注入「Set model to …」回显，渲染层会过滤掉，不当对话显示）。
  *  attachments：拖入/选取的文件 + 粘贴的图片（见上方注入逻辑）。 */
-async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode, model, mcp, apiKey, attachments }) {
-  if (provider === 'cursor') return cursorSend(sender, { cwd, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, apiKey });
-  let s = sessions.get(cwd);
-  if (!s) s = startSession(sender, { cwd, provider, sessionId, permMode, model, mcp });
+async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode, model, mcp, apiKey, attachments, lane }) {
+  if (provider === 'cursor' && !lane) return cursorSend(sender, { cwd, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, apiKey });
+  const key = runKey(cwd, lane);
+  let s = sessions.get(key);
+  if (!s) s = startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, lane });
   if (!s) return { ok: false };
   const want = model || null;
   if (s.query && want !== s.model && typeof s.query.setModel === 'function') {
@@ -649,16 +657,16 @@ async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode,
 
 /** 预热：打开/聚焦会话时就起常驻进程（提前付冷启 + resume 读盘），
  *  等用户真正发送时已是暖的——首 token 从 ~10s 降到 ~2s。已有则不重起。 */
-function sessionWarm(sender, { cwd, provider, sessionId, permMode, model, mcp, apiKey }) {
-  if (provider === 'cursor') return cursorWarm(sender, { cwd, sessionId, permMode, model, apiKey });
-  if (sessions.has(cwd)) return { ok: true };
-  const s = startSession(sender, { cwd, provider, sessionId, permMode, model, mcp });
+function sessionWarm(sender, { cwd, provider, sessionId, permMode, model, mcp, apiKey, lane }) {
+  if (provider === 'cursor' && !lane) return cursorWarm(sender, { cwd, sessionId, permMode, model, apiKey });
+  if (sessions.has(runKey(cwd, lane))) return { ok: true };
+  const s = startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, lane });
   return { ok: !!s };
 }
 
 /** 运行中改 MCP（/mcp 等价）：重设该会话启用的 MCP server，并回推连接状态。 */
-async function sessionSetMcp({ cwd, mcp }) {
-  const s = sessions.get(cwd);
+async function sessionSetMcp({ cwd, mcp, lane }) {
+  const s = sessions.get(runKey(cwd, lane));
   if (!s) return { ok: false };
   s.mcp = Array.isArray(mcp) ? mcp.slice() : [];
   if (s.query && typeof s.query.setMcpServers === 'function') {
@@ -679,8 +687,8 @@ async function sessionSetMcp({ cwd, mcp }) {
 }
 
 /** 探测 MCP 连接状态。 */
-async function sessionMcpStatus({ cwd }) {
-  const s = sessions.get(cwd);
+async function sessionMcpStatus({ cwd, lane }) {
+  const s = sessions.get(runKey(cwd, lane));
   if (s?.query && typeof s.query.mcpServerStatus === 'function') {
     try { return { ok: true, servers: await s.query.mcpServerStatus() }; }
     catch (e) { return { ok: false, error: String(e && e.message || e) }; }
@@ -689,8 +697,8 @@ async function sessionMcpStatus({ cwd }) {
 }
 
 /** 重连某个 MCP server（不通时用），完成后回最新状态。 */
-async function sessionReconnectMcp({ cwd, name }) {
-  const s = sessions.get(cwd);
+async function sessionReconnectMcp({ cwd, name, lane }) {
+  const s = sessions.get(runKey(cwd, lane));
   if (s?.query && typeof s.query.reconnectMcpServer === 'function') {
     try {
       await s.query.reconnectMcpServer(name);
@@ -702,10 +710,9 @@ async function sessionReconnectMcp({ cwd, name }) {
 }
 
 /** 运行中切模型（/model 等价）。会话不存在则忽略（下次发送会以选中的 model 起）。 */
-async function sessionSetModel({ cwd, model }) {
-  const cu = cursorSessions.get(cwd);
-  if (cu) { cu.model = model || null; return { ok: true }; }   // cursor 一次性进程：下回合 spawn 时生效
-  const s = sessions.get(cwd);
+async function sessionSetModel({ cwd, model, lane }) {
+  if (!lane) { const cu = cursorSessions.get(cwd); if (cu) { cu.model = model || null; return { ok: true }; } }
+  const s = sessions.get(runKey(cwd, lane));
   if (s?.query && typeof s.query.setModel === 'function') {
     try { await s.query.setModel(model || undefined); } catch { /* */ }
     s.model = model || null;   // 记录已应用，发送时不再重复 setModel
@@ -715,38 +722,42 @@ async function sessionSetModel({ cwd, model }) {
 }
 
 /** 中断当前回合，但保留常驻会话（可继续发）。 */
-async function sessionInterrupt({ cwd }) {
-  const cu = cursorSessions.get(cwd);
-  if (cu) { try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ } return { ok: true }; }
-  const s = sessions.get(cwd);
+async function sessionInterrupt({ cwd, lane }) {
+  if (!lane) {   // lane 是 claude 专用的并行车道；带 lane 时跳过 cursor 分支
+    const cu = cursorSessions.get(cwd);
+    if (cu) { try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ } return { ok: true }; }
+  }
+  const s = sessions.get(runKey(cwd, lane));
   if (s?.query) { try { await s.query.interrupt(); } catch { /* ignore */ } return { ok: true }; }
   return { ok: false };
 }
 
-/** 关闭某标签的常驻会话，回收进程（切会话/新建/关标签/换 provider 时调）。 */
-function sessionClose({ cwd }) {
-  const cu = cursorSessions.get(cwd);
-  if (cu) {
-    cursorSessions.delete(cwd);
-    try { if (cu.ac) cu.ac.abort(); } catch { /* */ }
-    try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ }
-    return { ok: true };
+/** 关闭某标签/车道的常驻会话，回收进程（切会话/新建/关标签/换 provider/关衍生卡片时调）。 */
+function sessionClose({ cwd, lane }) {
+  if (!lane) {
+    const cu = cursorSessions.get(cwd);
+    if (cu) {
+      cursorSessions.delete(cwd);
+      try { if (cu.ac) cu.ac.abort(); } catch { /* */ }
+      try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ }
+      return { ok: true };
+    }
   }
-  const s = sessions.get(cwd);
+  const key = runKey(cwd, lane);
+  const s = sessions.get(key);
   if (!s) return { ok: false };
-  sessions.delete(cwd);
-  clearPerms(cwd, '已切换');
+  sessions.delete(key);
+  clearPerms(key, '已切换');
   try { s.input.close(); } catch { /* */ }
   try { s.ac.abort(); } catch { /* */ }
   return { ok: true };
 }
 
 /** 会话进行中切换权限模式（Tab 切档即时生效）。 */
-async function sessionSetPermMode({ cwd, permMode }) {
-  const cu = cursorSessions.get(cwd);
-  if (cu) { cu.permMode = permMode || 'force'; return { ok: true }; }   // cursor 一次性进程：下回合 spawn 时生效
+async function sessionSetPermMode({ cwd, permMode, lane }) {
+  if (!lane) { const cu = cursorSessions.get(cwd); if (cu) { cu.permMode = permMode || 'force'; return { ok: true }; } }
   const mode = PERM_MODES.includes(permMode) ? permMode : 'default';
-  const s = sessions.get(cwd);
+  const s = sessions.get(runKey(cwd, lane));
   if (s?.query) { try { await s.query.setPermissionMode(mode); } catch { /* */ } return { ok: true }; }
   return { ok: false };
 }
@@ -980,6 +991,7 @@ async function cursorDeleteSession(cwd, sessionId) {
  * IPC 注册
  * ------------------------------------------------------------------ */
 function registerLocalAgent(ipcMain, dialog) {
+  console.log('[localAgent] ready · multi-session lane routing (runKey=cwd#@#lane)');
   ipcMain.handle('localAgent:detect', () => detect());
   ipcMain.handle('localAgent:pickFolder', async () => {
     const res = await dialog.showOpenDialog({
@@ -1017,14 +1029,14 @@ function registerLocalAgent(ipcMain, dialog) {
   ipcMain.handle('localAgent:send', (e, payload) => sessionSend(e.sender, payload));
   ipcMain.handle('localAgent:warm', (e, payload) => sessionWarm(e.sender, payload));
   ipcMain.handle('localAgent:permissionRespond', (_e, { permId, decision }) => permissionRespond(permId, decision));
-  ipcMain.handle('localAgent:interrupt', (_e, { cwd }) => sessionInterrupt({ cwd }));
-  ipcMain.handle('localAgent:sessionClose', (_e, { cwd }) => sessionClose({ cwd }));
-  ipcMain.handle('localAgent:setPermMode', (_e, { cwd, permMode }) => sessionSetPermMode({ cwd, permMode }));
-  ipcMain.handle('localAgent:setModel', (_e, { cwd, model }) => sessionSetModel({ cwd, model }));
+  ipcMain.handle('localAgent:interrupt', (_e, { cwd, lane }) => sessionInterrupt({ cwd, lane }));
+  ipcMain.handle('localAgent:sessionClose', (_e, { cwd, lane }) => sessionClose({ cwd, lane }));
+  ipcMain.handle('localAgent:setPermMode', (_e, { cwd, permMode, lane }) => sessionSetPermMode({ cwd, permMode, lane }));
+  ipcMain.handle('localAgent:setModel', (_e, { cwd, model, lane }) => sessionSetModel({ cwd, model, lane }));
   ipcMain.handle('localAgent:listMcp', (_e, { cwd }) => listMcpConfigs(cwd));
-  ipcMain.handle('localAgent:setMcp', (_e, { cwd, mcp }) => sessionSetMcp({ cwd, mcp }));
-  ipcMain.handle('localAgent:mcpStatus', (_e, { cwd }) => sessionMcpStatus({ cwd }));
-  ipcMain.handle('localAgent:reconnectMcp', (_e, { cwd, name }) => sessionReconnectMcp({ cwd, name }));
+  ipcMain.handle('localAgent:setMcp', (_e, { cwd, mcp, lane }) => sessionSetMcp({ cwd, mcp, lane }));
+  ipcMain.handle('localAgent:mcpStatus', (_e, { cwd, lane }) => sessionMcpStatus({ cwd, lane }));
+  ipcMain.handle('localAgent:reconnectMcp', (_e, { cwd, name, lane }) => sessionReconnectMcp({ cwd, name, lane }));
 }
 
 module.exports = {
