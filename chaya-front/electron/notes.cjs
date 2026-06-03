@@ -9,7 +9,8 @@
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
-const { shell } = require('electron');
+const os = require('os');
+const { shell, app } = require('electron');
 
 const NOTE_EXT = new Set(['.md', '.markdown', '.txt', '.mdown']);
 
@@ -94,6 +95,37 @@ async function deleteNote(p) {
   }
 }
 
+/** 默认「速记」笔记：无对话框地确保 ~/Documents/Chaya/速记.md 存在(用户可见、可改名/移动)。
+ *  选区「记一条」就追加进它。返回稳定路径,渲染层注册进 wiki 笔记列表。 */
+function defaultNoteDir() {
+  try { return path.join(app.getPath('documents'), 'Chaya'); }
+  catch { return path.join(os.homedir(), 'Documents', 'Chaya'); }
+}
+async function ensureDefaultNote() {
+  try {
+    const dir = defaultNoteDir();
+    const full = path.join(dir, '速记.md');
+    await fsp.mkdir(dir, { recursive: true });
+    let exists = true;
+    try { await fsp.access(full); } catch { exists = false; }
+    if (!exists) await fsp.writeFile(full, '# 速记\n\n', 'utf8');
+    const st = await fsp.stat(full);
+    return { ok: true, path: full, name: '速记.md', mtimeMs: st.mtimeMs, size: st.size };
+  } catch (err) { return { ok: false, error: String(err && err.message || err) }; }
+}
+
+/** 往笔记尾部追加一段(自动补换行),用于选区「记一条」。 */
+async function appendNote(p, text) {
+  try {
+    let cur = '';
+    try { cur = await fsp.readFile(p, 'utf8'); } catch { /* new file */ }
+    const sep = cur && !cur.endsWith('\n') ? '\n' : '';
+    await fsp.writeFile(p, cur + sep + (text ?? ''), 'utf8');
+    const st = await fsp.stat(p);
+    return { ok: true, mtimeMs: st.mtimeMs, size: st.size };
+  } catch (err) { return { ok: false, error: String(err && err.message || err) }; }
+}
+
 function registerNotes(ipcMain, dialog) {
   // 平铺管理：从任意目录导入 .md/.txt 文件（多选）。
   ipcMain.handle('notes:pickFiles', async () => {
@@ -128,6 +160,34 @@ function registerNotes(ipcMain, dialog) {
   });
   ipcMain.handle('notes:list', (_e, { dir }) => listDir(dir));
   ipcMain.handle('notes:create', (_e, { dir, name }) => createNote(dir, name));
+  ipcMain.handle('notes:defaultNote', () => ensureDefaultNote());
+  ipcMain.handle('notes:append', (_e, { path: p, text }) => appendNote(p, text));
+  // 关联速记到「已有」本地文件（如 iCloud Drive 里的 .md）：打开对话框单选，保留其内容。
+  ipcMain.handle('notes:pickDefault', async () => {
+    const res = await dialog.showOpenDialog({
+      title: '关联速记到本地文件（可选 iCloud Drive 里的 .md）',
+      properties: ['openFile'],
+      filters: [{ name: 'Notes', extensions: ['md', 'markdown', 'txt', 'mdown'] }, { name: 'All', extensions: ['*'] }],
+    });
+    if (res.canceled || !res.filePaths || !res.filePaths[0]) return { ok: false };
+    const p = res.filePaths[0];
+    try { const st = await fsp.stat(p); return { ok: true, path: p, name: path.basename(p), mtimeMs: st.mtimeMs, size: st.size }; }
+    catch (err) { return { ok: false, error: String(err && err.message || err) }; }
+  });
+  // 新建速记到指定位置（保存对话框，可在 iCloud Drive）；已存在的文件保留内容不清空。
+  ipcMain.handle('notes:chooseDefault', async () => {
+    const res = await dialog.showSaveDialog({
+      title: '速记保存位置（可放进 iCloud Drive 备份）',
+      defaultPath: path.join(defaultNoteDir(), '速记.md'),
+      filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'txt'] }],
+    });
+    if (res.canceled || !res.filePath) return { ok: false };
+    try {
+      if (!fs.existsSync(res.filePath)) await fsp.writeFile(res.filePath, '# 速记\n\n', 'utf8');
+      const st = await fsp.stat(res.filePath);
+      return { ok: true, path: res.filePath, name: path.basename(res.filePath), mtimeMs: st.mtimeMs, size: st.size };
+    } catch (err) { return { ok: false, error: String(err && err.message || err) }; }
+  });
 }
 
 module.exports = { registerNotes };

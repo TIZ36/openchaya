@@ -301,6 +301,8 @@ const ShellInner: React.FC = () => {
   const activateTopTab = useCallback((t: TopTab) => {
     topTabs.setActiveId(t.id);
     topTabs.clearUnread(t.id);
+    topTabs.promote(t.id);   // MRU：点击即提到 tab 栏最左（CLI 会话保持分组/邻接，不参与）
+
     if (t.kind === 'gallery') setActiveNav('gallery');
     else if (t.kind === 'kb') setActiveNav('kb');
     else if (t.kind === 'local' && t.cwd) {

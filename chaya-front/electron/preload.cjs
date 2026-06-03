@@ -1,6 +1,9 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('chateeElectron', {
+  // Electron 32+ 删除了 File.path → 拖拽/选取的文件拿不到本地路径。用 webUtils 取回，
+  // 否则非图片附件(文本文件等)会因无路径被丢弃，输入框上不显示。
+  getPathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return ''; } },
   isElectron: true,
   platform: process.platform,
 
@@ -41,6 +44,10 @@ contextBridge.exposeInMainWorld('chateeElectron', {
     write: (p, content) => ipcRenderer.invoke('notes:write', { path: p, content }),
     rename: (p, name) => ipcRenderer.invoke('notes:rename', { path: p, name }),
     delete: (p) => ipcRenderer.invoke('notes:delete', { path: p }),
+    defaultNote: () => ipcRenderer.invoke('notes:defaultNote'),
+    append: (p, text) => ipcRenderer.invoke('notes:append', { path: p, text }),
+    chooseDefault: () => ipcRenderer.invoke('notes:chooseDefault'),
+    pickDefault: () => ipcRenderer.invoke('notes:pickDefault'),
   },
 });
 

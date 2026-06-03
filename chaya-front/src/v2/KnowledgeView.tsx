@@ -17,6 +17,7 @@ import {
   readNote as readLocalNote, writeNote as writeLocalNote,
   renameNote as renameLocalNote, deleteNote as deleteLocalNote,
   noteTitle, syncedDocId, mapSync, syncedDocIds,
+  defaultNote, getDefaultNotePath, associateDefaultNote, saveDefaultNoteAs, resetDefaultNoteLocation,
   type LocalNoteFile,
 } from './services/localNotes';
 import { IconPin, IconEdit, IconTrash, IconDoc, IconPlus, IconSearch, IconModel, IconChevron, IconKB, IconCloud, IconEye, IconSync } from './icons';
@@ -347,9 +348,11 @@ const KbTree: React.FC<{
           <span className="dot" style={{ background: g.tag ? domainColor(g.tag) : 'var(--c-ink-4)' }} />
           <span className="nm">{g.tag ? g.tag.name : tr('kb.untagged')}</span>
           <span className="cnt">{g.items.length || ''}</span>
-          {/* 未归类不可编辑；用户自建域有铅笔。 */}
+          {/* 未归类不可编辑；用户自建域有铅笔。actions 浮在右侧，不挤占 cnt 列。 */}
           {g.tag && (
-            <button className="row-act" title={tr('kb.editDomain')} onClick={(e) => { e.stopPropagation(); onEditDomain(g.tag!); }}><IconEdit /></button>
+            <span className="row-acts">
+              <button className="row-act" title={tr('kb.editDomain')} onClick={(e) => { e.stopPropagation(); onEditDomain(g.tag!); }}><IconEdit /></button>
+            </span>
           )}
         </div>
         {open && g.items.map((d) => (
@@ -396,8 +399,12 @@ const KbTree: React.FC<{
             <span className="ic-lead" style={{ color: NOTES_DOMAIN_COLOR }}><IconEdit /></span>
             <span className="nm">{tr('kb.notes')}</span>
             <span className="cnt">{noteCount || ''}</span>
-            {localOk && <button className="row-act" title={tr('kb.importExistingNote')} onClick={(e) => { e.stopPropagation(); onImportNote(); }}><IconDoc /></button>}
-            {localOk && <button className="row-act" title={tr('kb.newNote')} onClick={(e) => { e.stopPropagation(); onAddNote(); }}><IconPlus /></button>}
+            {localOk && (
+              <span className="row-acts">
+                <button className="row-act" title={tr('kb.importExistingNote')} onClick={(e) => { e.stopPropagation(); onImportNote(); }}><IconDoc /></button>
+                <button className="row-act" title={tr('kb.newNote')} onClick={(e) => { e.stopPropagation(); onAddNote(); }}><IconPlus /></button>
+              </span>
+            )}
           </div>
           {open && notes.slice().sort(byNoteName).map((f) => (
             <button
@@ -1081,11 +1088,18 @@ const LocalNoteCanvas: React.FC<{
   const [preview, setPreview] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
+  const [defPath, setDefPath] = useState<string | null>(null);   // 当前默认速记路径
+  const [assocMenu, setAssocMenu] = useState(false);
   const editorRef = useRef<NoteEditorHandle | null>(null);
+  const isDefault = !!defPath && defPath === file.path;
+  const associated = !!getDefaultNotePath();
+
+  // 解析当前默认速记路径（用于判断本笔记是不是速记 + 关联操作）。
+  useEffect(() => { let alive = true; void defaultNote().then((d) => { if (alive) setDefPath(d?.path ?? null); }); return () => { alive = false; }; }, [file.path]);
 
   useEffect(() => {
     let alive = true;
-    setLoading(true); setPreview(false); setDirty(false); setTitle(noteTitle(file)); setRenaming(false); setConfirmDel(false);
+    setLoading(true); setPreview(false); setDirty(false); setTitle(noteTitle(file)); setRenaming(false); setConfirmDel(false); setAssocMenu(false);
     setSynced(!!syncedDocId(file.path));
     readLocalNote(file.path).then((c) => {
       if (!alive) return;
@@ -1138,9 +1152,23 @@ const LocalNoteCanvas: React.FC<{
       if (docId) { try { await smartnoteDocuments.ingest(docId); } catch { /* ingest 失败不阻断 */ } }
       setSynced(true);
       window.alert(tr('kb.syncedToCloud'));
-    } catch (e: any) { window.alert(e?.message || tr('kb.syncFailed')); }
+    } catch (e: any) {
+      // 本地此时已写盘(上面 writeLocalNote)。区分「网络连不上」与其它错误，给可操作提示。
+      const msg = String(e?.message || e || '');
+      if (/failed to fetch|networkerror|load failed|fetch failed/i.test(msg)) {
+        window.alert(tr('kb.syncUnreachable', { base: getSmartnoteBaseUrl() }));
+      } else {
+        window.alert(msg || tr('kb.syncFailed'));
+      }
+    }
     finally { setSyncing(false); }
   };
+
+  // 速记关联：重新关联到已有本地文件 / 另存到新位置并关联 / 取消关联。改完刷新默认路径 + 树。
+  const refreshDefault = useCallback(() => { void defaultNote().then((d) => setDefPath(d?.path ?? null)); void onChanged(); }, [onChanged]);
+  const doAssociate = async () => { setAssocMenu(false); try { const d = await associateDefaultNote(); if (d) refreshDefault(); } catch (e: any) { window.alert(e?.message || tr('local.notes.saveFailed')); } };
+  const doSaveAs = async () => { setAssocMenu(false); try { const body = editorRef.current ? editorRef.current.getContent() : content; const d = await saveDefaultNoteAs(body); if (d) refreshDefault(); } catch (e: any) { window.alert(e?.message || tr('local.notes.saveFailed')); } };
+  const doUnlink = () => { setAssocMenu(false); resetDefaultNoteLocation(); refreshDefault(); };
 
   return (
     <section className="v2-kb-canvas v2-note-edit">
@@ -1161,6 +1189,25 @@ const LocalNoteCanvas: React.FC<{
         )}
         <span className="v2-note-status">{saving ? tr('kb.saving') : dirty ? tr('kb.unsaved') : tr('kb.savedLocal')}</span>
         <span className={`v2-pill ${synced ? 'ok' : 'mute'}`}>{synced ? tr('kb.synced') : tr('kb.notSynced')}</span>
+        {isDefault && (
+          <div className="v2-note-assoc">
+            <button className={`v2-pill assoc${assocMenu ? ' on' : ''}`} onClick={() => setAssocMenu((v) => !v)} title={tr('kb.assoc.title')}>
+              ★ {associated ? tr('kb.assoc.linked') : tr('kb.assoc.default')}
+            </button>
+            {assocMenu && (
+              <>
+                <div className="v2-note-assoc-scrim" onClick={() => setAssocMenu(false)} />
+                <div className="v2-note-assoc-menu">
+                  <div className="hd">{tr('kb.assoc.title')}</div>
+                  <button onClick={() => void doAssociate()}>{tr('kb.assoc.pick')}</button>
+                  <button onClick={() => void doSaveAs()}>{tr('kb.assoc.saveAs')}</button>
+                  {associated && <button className="reset" onClick={doUnlink}>{tr('kb.assoc.unlink')}</button>}
+                  {associated && <div className="path" title={file.path}>{file.path}</div>}
+                </div>
+              </>
+            )}
+          </div>
+        )}
         <span className="grow" />
         <button
           className={`v2-note-icon${preview ? ' on' : ''}`}

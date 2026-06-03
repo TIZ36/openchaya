@@ -82,6 +82,8 @@ export interface TopTabsApi {
   setAttn: (id: string, attn: boolean) => void;
   /** 切换固定（缩略钉在最左）。 */
   togglePin: (id: string) => void;
+  /** MRU：把该 tab 移到最左（点击即用即提前）。固定项另有左轨，不受影响。 */
+  promote: (id: string) => void;
 }
 
 export function useTopTabs(): TopTabsApi {
@@ -159,5 +161,14 @@ export function useTopTabs(): TopTabsApi {
     setTabs((prev) => prev.map((t) => t.id === id ? { ...t, pinned: !t.pinned } : t));
   }, []);
 
-  return { tabs, activeId, add, remove, setActiveId, clearUnread, markUnread, setAttn, togglePin };
+  // MRU：被点的 tab 跳到最左，其余保持相对次序——高频用的自然聚到左侧。顺序会持久化。
+  const promote = useCallback((id: string) => {
+    setTabs((prev) => {
+      const i = prev.findIndex((t) => t.id === id);
+      if (i <= 0) return prev;
+      return [prev[i], ...prev.slice(0, i), ...prev.slice(i + 1)];
+    });
+  }, []);
+
+  return { tabs, activeId, add, remove, setActiveId, clearUnread, markUnread, setAttn, togglePin, promote };
 }

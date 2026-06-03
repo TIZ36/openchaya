@@ -19,12 +19,12 @@ import {
    Seven sections (+ optional admin) with left TOC sidebar.
    ============================================================ */
 
-export type FontId = 'default' | 'pixel' | 'terminal' | 'rounded' | 'dotgothic' | 'silkscreen';
+export type FontId = 'default' | 'pixel' | 'terminal' | 'firacode' | 'rounded' | 'dotgothic' | 'silkscreen';
 
 export type { TypeSpeed };
 
 export type AppearanceMode = 'light' | 'dark' | 'system';
-export type ColorTheme = 'default' | 'anthropic' | 'cursor';
+export type ColorTheme = 'default' | 'anthropic' | 'cursor' | 'xcode' | 'razer';
 /** 可单独开启毛玻璃的界面区域。 */
 export type GlassZone = 'composer' | 'sidebar' | 'topbar' | 'menu' | 'modal' | 'bubble' | 'main';
 /** 毛玻璃整体强度（模糊+透明度）：subtle 轻 · standard 标准 · strong 强。 */

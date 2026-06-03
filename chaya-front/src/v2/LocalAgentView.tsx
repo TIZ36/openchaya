@@ -7,7 +7,7 @@
  *
  * 对话用时间线渲染（状态点 + 工具卡片：Edit 代码块 / Bash IN/OUT），配色走 Chaya token。
  */
-import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -22,7 +22,7 @@ export const ForeignPaneContext = React.createContext<ForeignPaneRender | null>(
 import { IconSend, IconAgentCode, IconPlus, IconChevron, IconTrash, IconModel } from './icons';
 import { CodeBlock, PreBlock, mdRehypePlugins } from './codeBlock';
 import { useI18n, t } from '../i18n';
-import { useNotes, SelectionToolbar, LocalNotes } from './NotesLayer';
+import { useWikiNotes, SelectionToolbar, WikiNotes, WikiPicker, buildWikiItems, resolveWikiRef, type WikiItem } from './NotesLayer';
 
 // 公共组件：链接新窗口打开、宽表格局部横滚。
 const MD_COMMON = {
@@ -113,13 +113,6 @@ export const PROVIDER_LABELS: Record<string, string> = {
 };
 
 // 终端风 icon，匹配 app 的 24×24 线性图标风格（同 IconChat/IconKB）。
-const IconTerminal = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
-    <path d="M7.5 9.5l3 2.5-3 2.5M13 14.5h4" />
-  </svg>
-);
-
 const IconFolder = () => (
   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
     <path d="M1.5 3.5h4l1.5 2h7.5v7a1 1 0 0 1-1 1h-12a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z" />
@@ -147,8 +140,10 @@ function readAsDataUrl(blob: Blob): Promise<string> {
 }
 async function filesToAttachments(files: File[]): Promise<Omit<Attachment, 'id'>[]> {
   const out: Omit<Attachment, 'id'>[] = [];
+  const getPath = (window as unknown as { chateeElectron?: { getPathForFile?: (f: File) => string } }).chateeElectron?.getPathForFile;
   for (const f of files) {
-    const p = (f as unknown as { path?: string }).path || undefined;   // Electron 给 File 挂了 .path
+    // Electron 32+ 删了 File.path，改用 preload 暴露的 webUtils.getPathForFile；老路径兜底。
+    const p = (getPath?.(f) || (f as unknown as { path?: string }).path) || undefined;
     const canInlineImg = IMG_MIME_RE.test(f.type) && f.size > 0 && f.size <= 8 * 1024 * 1024;
     let dataUrl: string | undefined;
     if (canInlineImg) { try { dataUrl = await readAsDataUrl(f); } catch { /* */ } }
@@ -653,7 +648,11 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const [cfgOpen, setCfgOpen] = useState(false);
   const [cfgTab, setCfgTab] = useState<'model' | 'mcp'>('model');
   const [mcpList, setMcpList] = useState<McpAvailable[] | null>(null);
-  const notes = useNotes(cwd);   // 目录唯一笔记（选区"添加到笔记" + composer pill）
+  // 笔记/文档全部走 wiki（知识库）：选区「记一条」追加默认速记；composer 联动引用。
+  const wiki = useWikiNotes(cwd === la.activeCwd);
+  const [capToast, setCapToast] = useState('');   // 「已记入速记」轻提示
+  // @ 提及：联动 wiki 笔记/文档。trailing @token → 候选 → 选中插入路径/内容。
+  const [mentionIdx, setMentionIdx] = useState(0);
 
   const attachments = tab?.attachments ?? NO_ATTS;
   const queue = tab?.queue ?? NO_QUEUE;
@@ -690,6 +689,30 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const slashOpen = slashQuery !== null;
   useEffect(() => { setSlashIdx(0); }, [slashQuery]);
   const pickSlash = (c: SlashCommand) => { la.setDraft(cwd, `${c.name} `); setSlashDismissed(true); requestAnimationFrame(() => taRef.current?.focus()); };
+
+  // @ 提及（联动 wiki 笔记/文档）：取末尾 @token（无空格）作 query；slash 优先时不开。
+  const mentionQuery = (!slashOpen ? (/(?:^|\s)@([^@\s]*)$/.exec(draft)?.[1] ?? null) : null);
+  const mentionOpen = mentionQuery !== null && wiki.available;
+  const mentionItems = useMemo(
+    () => (mentionOpen ? buildWikiItems(wiki, mentionQuery || '') : [] as WikiItem[]),
+    [mentionOpen, mentionQuery, wiki.notes, wiki.docs, wiki.defaultPath],
+  );
+  useEffect(() => { setMentionIdx(0); }, [mentionQuery]);
+  // 打开 @ 时拉一次最新 wiki 列表（含云端文档）。
+  const mentionWasOpen = useRef(false);
+  useEffect(() => { if (mentionOpen && !mentionWasOpen.current) wiki.reload(); mentionWasOpen.current = mentionOpen; }, [mentionOpen, wiki]);
+
+  /** 把一段 wiki 引用插进输入框：@ 提及时替换末尾 @token；否则追加。 */
+  const insertWikiRef = useCallback((text: string) => {
+    const d = la.tabs.find((t) => t.cwd === cwd)?.draft ?? '';
+    const m = /(^|\s)@[^@\s]*$/.exec(d);
+    const next = m ? d.slice(0, m.index + m[1].length) + text + ' ' : (d ? d.replace(/\s*$/, ' ') : '') + text + ' ';
+    la.setDraft(cwd, next);
+    requestAnimationFrame(() => taRef.current?.focus());
+  }, [la, cwd]);
+  const pickMention = useCallback(async (it: WikiItem) => {
+    insertWikiRef(await resolveWikiRef(it));
+  }, [insertWikiRef]);
 
   // 自动滚到底（与 ClientShell 主聊保持同款 + 远端挂载的稳态加固）：
   //  ① rAF 队列防 thrash：多个状态变化挤进一帧只测一次 scrollHeight。
@@ -777,6 +800,12 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
         if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIdx((i) => (i - 1 + slashItems.length) % slashItems.length); return; }
         if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickSlash(slashItems[slashIdx]); return; }
       }
+    }
+    if (mentionOpen && mentionItems.length) {
+      if (e.key === 'Escape') { e.preventDefault(); la.setDraft(cwd, draft.replace(/(^|\s)@[^@\s]*$/, '$1')); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); setMentionIdx((i) => (i + 1) % mentionItems.length); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setMentionIdx((i) => (i - 1 + mentionItems.length) % mentionItems.length); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); void pickMention(mentionItems[mentionIdx]); return; }
     }
     if (e.key === 'Tab') { e.preventDefault(); la.cyclePermMode(cwd); return; }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void la.send(cwd); }
@@ -897,10 +926,14 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
         />
       </section>
 
-      {/* 选区延伸：在本窗会话里选中文字 → 浮出「展开讲讲 / 笔记」工具条。 */}
+      {/* 选区延伸：选中文字 → 「展开讲讲」(衍生) / 「记一条」(追加到默认速记笔记)。 */}
       <SelectionToolbar
         containerRef={streamRef}
-        onNote={(text, kind) => notes.add(text, kind)}
+        onNote={(text) => {
+          void wiki.appendToDefault(text)
+            .then((title) => { setCapToast(tr('local.wiki.captured', { note: title })); window.setTimeout(() => setCapToast(''), 1800); })
+            .catch(() => { setCapToast(`⚠ ${tr('local.notes.saveFailed')}`); window.setTimeout(() => setCapToast(''), 1800); });
+        }}
         onPrewarm={() => la.prewarmDerive(cwd)}
         onDerive={(text) => {
           const q = text.replace(/\s+/g, ' ').slice(0, 600);
@@ -933,7 +966,15 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
             picker, the works) — just scaled down via .v2-la-mini (zoom), instead
             of a bespoke slim layout. One component, one set of behaviours. */}
         <div className={`v2-composer${inGrid ? ' v2-la-mini' : ''}`} data-mode="chat">
+          {capToast && <div className="v2-la-captoast">{capToast}</div>}
           <div className="v2-box">
+            {/* @ 联动：选 wiki 笔记/文档 → 插入路径引用(本地) 或 内容(云端)。浮在框上方。 */}
+            {mentionOpen && (
+              <div className="v2-la-mention">
+                <div className="v2-la-mention-hd">{tr('local.wiki.mentionHead')}</div>
+                <WikiPicker items={mentionItems} loading={wiki.loading} activeIdx={mentionIdx} onPick={(it) => void pickMention(it)} emptyHint={tr('local.wiki.empty')} />
+              </div>
+            )}
             {slashOpen && (
               <div className="v2-la-slash">
                 <div className="v2-la-slash-hd">{tr('local.slash.header')}</div>
@@ -1001,15 +1042,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
             />
             <div className="v2-row">
               <div className="v2-l">
-                <LocalNotes api={notes} projectName={proj?.name || basename(realDir(cwd))} />
-                {proj && (
-                  <span className="v2-la-ctx" title={proj.path}><IconFolder />{proj.name}</span>
-                )}
-                <button
-                  className={`v2-la-mode tone-${pm.tone}`}
-                  onClick={() => la.cyclePermMode(cwd)}
-                  title={tr('local.permMode.title', { hint: tr(`local.permMode.${effPerm}.hint`) })}
-                >{tr(`local.permMode.${effPerm}.label`)}</button>
+                <WikiNotes wiki={wiki} onInsert={insertWikiRef} />
                 {current?.live && (
                   <button
                     className={`v2-la-attach${attachments.length ? ' on' : ''}`}
@@ -1017,15 +1050,21 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                     title={tr('local.att.addHint')}
                   ><IconPaperclip />{attachments.length > 0 && <span className="n">{attachments.length}</span>}</button>
                 )}
-                {current?.live && (
-                  <button className="v2-la-cfg" onClick={openCfg} title={tr('local.cfg.modelMcp')}>
-                    <span className="tri" aria-hidden><IconModel /></span>
-                    <span className="m">{(la.modelOptions.find((m) => m.value === tab.model)?.displayName) || (tab.model || tr('local.cfg.defaultModel'))}</span>
-                    {(tab.mcp?.length ?? 0) > 0 && <span className="mcpn">MCP {tab.mcp!.length}</span>}
-                  </button>
-                )}
               </div>
               <div className="v2-grow" />
+              {/* 权限档 + 模型 紧挨发送按钮左侧（高频切换手更近）；权限在模型左。 */}
+              <button
+                className={`v2-la-mode tone-${pm.tone}`}
+                onClick={() => la.cyclePermMode(cwd)}
+                title={tr('local.permMode.title', { hint: tr(`local.permMode.${effPerm}.hint`) })}
+              >{tr(`local.permMode.${effPerm}.label`)}</button>
+              {current?.live && (
+                <button className="v2-la-cfg" onClick={openCfg} title={tr('local.cfg.modelMcp')}>
+                  <span className="tri" aria-hidden><IconModel /></span>
+                  <span className="m">{(la.modelOptions.find((m) => m.value === tab.model)?.displayName) || (tab.model || tr('local.cfg.defaultModel'))}</span>
+                  {(tab.mcp?.length ?? 0) > 0 && <span className="mcpn">MCP {tab.mcp!.length}</span>}
+                </button>
+              )}
               {running ? (
                 <>
                   {/* 处理中也能发：有草稿时显示「排队」按钮（Enter 等效），本轮完成后自动打包发出。 */}
@@ -1358,7 +1397,7 @@ const AgentTurn: React.FC<{ blocks: AgentBlock[]; provider: string; streaming?: 
   });
   return (
     <div className="v2-la-turn agent">
-      <div className={`v2-la-ava prov-${provider}`} title={PROVIDER_LABELS[provider] || provider}><IconTerminal /></div>
+      <div className={`v2-la-ava prov-${provider}`} title={PROVIDER_LABELS[provider] || provider} aria-hidden>{'>.'}</div>
       <div className="v2-la-turn-body">
         {overflow > 0 && !showAll && (
           <button className="v2-la-earlier" onClick={() => setShowAll(true)}>{tr('local.turn.showEarlier', { n: overflow })}</button>

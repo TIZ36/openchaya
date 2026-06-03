@@ -20,6 +20,10 @@ interface NotesBridge {
   write: (path: string, content: string) => Promise<{ ok: boolean; error?: string }>;
   rename: (path: string, name: string) => Promise<{ ok: boolean; error?: string; path?: string; name?: string }>;
   delete: (path: string) => Promise<{ ok: boolean; error?: string }>;
+  defaultNote?: () => Promise<{ ok: boolean; error?: string; path?: string; name?: string; mtimeMs?: number; size?: number }>;
+  append?: (path: string, text: string) => Promise<{ ok: boolean; error?: string; mtimeMs?: number; size?: number }>;
+  chooseDefault?: () => Promise<{ ok: boolean; error?: string; path?: string; name?: string; mtimeMs?: number; size?: number }>;
+  pickDefault?: () => Promise<{ ok: boolean; error?: string; path?: string; name?: string; mtimeMs?: number; size?: number }>;
 }
 
 export interface LocalNoteFile {
@@ -114,6 +118,85 @@ export async function deleteNote(path: string): Promise<void> {
 }
 /** Remove from the app's list without deleting the file on disk. */
 export function forgetNote(path: string): void { removeFile(path); unmapSync(path); }
+
+/* Default-note location: local-first. By default a fixed ~/Documents/Chaya/速记.md;
+ * the user can relocate it (e.g. into an iCloud Drive folder) — the chosen path is
+ * remembered here and becomes the append target. Cloud (smartnote) sync stays manual. */
+const LS_DEFAULT_NOTE = 'chaya_default_note_path';
+export function getDefaultNotePath(): string | null {
+  try { return localStorage.getItem(LS_DEFAULT_NOTE) || null; } catch { return null; }
+}
+function setDefaultNotePath(p: string | null): void {
+  try { if (p) localStorage.setItem(LS_DEFAULT_NOTE, p); else localStorage.removeItem(LS_DEFAULT_NOTE); } catch { /* */ }
+}
+
+/** The default "速记" note. Honors a user-chosen location if set (creating it when
+ *  missing); otherwise the fixed auto path. Auto-registered into the flat list. */
+export async function defaultNote(): Promise<LocalNoteFile | null> {
+  const b = bridge();
+  if (!b) return null;
+  const custom = getDefaultNotePath();
+  if (custom) {
+    try {
+      let st = await b.stat(custom);
+      if (!st.exists) { await b.write(custom, '# 速记\n\n'); st = await b.stat(custom); }
+      addFiles([custom]);
+      return { name: st.name, path: custom, mtimeMs: st.mtimeMs, size: st.size };
+    } catch { /* relocated file vanished → fall back to auto */ setDefaultNotePath(null); }
+  }
+  if (!b.defaultNote) return null;
+  const r = await b.defaultNote();
+  if (!r.ok || !r.path) return null;
+  addFiles([r.path]);
+  return { name: r.name || '速记.md', path: r.path, mtimeMs: r.mtimeMs || Date.now(), size: r.size || 0 };
+}
+
+/** 关联速记到一个**已有**的本地文件（开放对话框选既存 .md，如 iCloud Drive 里的）。
+ *  保留该文件内容；之后「记一条」都追加到它。 */
+export async function associateDefaultNote(): Promise<LocalNoteFile | null> {
+  const b = bridge();
+  if (!b?.pickDefault) return null;
+  const r = await b.pickDefault();
+  if (!r.ok || !r.path) return null;
+  setDefaultNotePath(r.path);
+  addFiles([r.path]);
+  return { name: r.name || '速记', path: r.path, mtimeMs: r.mtimeMs || Date.now(), size: r.size || 0 };
+}
+
+/** 新建速记到指定位置（保存对话框 → 可放进 iCloud Drive 文件夹）。已存在文件不清空。 */
+export async function chooseDefaultNoteLocation(): Promise<LocalNoteFile | null> {
+  const b = bridge();
+  if (!b?.chooseDefault) return null;
+  const r = await b.chooseDefault();
+  if (!r.ok || !r.path) return null;
+  setDefaultNotePath(r.path);
+  addFiles([r.path]);
+  return { name: r.name || '速记.md', path: r.path, mtimeMs: r.mtimeMs || Date.now(), size: r.size || 0 };
+}
+
+/** 另存为：把给定内容写到一个新选的本地位置（保存对话框，可在 iCloud Drive），
+ *  并把速记关联到它。用于「重新保存到新的本地地址并关联」。 */
+export async function saveDefaultNoteAs(content: string): Promise<LocalNoteFile | null> {
+  const b = bridge();
+  if (!b?.chooseDefault) return null;
+  const r = await b.chooseDefault();
+  if (!r.ok || !r.path) return null;
+  await b.write(r.path, content ?? '');   // 把当前内容写进新位置
+  setDefaultNotePath(r.path);
+  addFiles([r.path]);
+  return { name: r.name || '速记.md', path: r.path, mtimeMs: Date.now(), size: (content || '').length };
+}
+
+/** 取消关联，恢复到自动默认位置（~/Documents/Chaya/速记.md）。 */
+export function resetDefaultNoteLocation(): void { setDefaultNotePath(null); }
+
+/** Append a block to a note file (used by the selection "记一条" capture). */
+export async function appendToNote(path: string, text: string): Promise<void> {
+  const b = bridge();
+  if (!b?.append) throw new Error(t('local.notes.unavailable'));
+  const r = await b.append(path, text);
+  if (!r.ok) throw new Error(r.error || t('local.notes.saveFailed'));
+}
 
 /** display title = filename without extension. */
 export function noteTitle(f: LocalNoteFile): string {

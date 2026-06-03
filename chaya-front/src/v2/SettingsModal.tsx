@@ -68,20 +68,12 @@ const TAB_GROUPS: { group: string; items: { id: Tab; label: string; icon: React.
   }] : []),
 ];
 
-// FontId slots are kept for storage compatibility; mapping:
-//   default    → 系统  (SF/PingFang/system)
-//   rounded    → 现代  (Inter)
-//   pixel      → 衬线  (Source Serif 4)
-//   terminal   → 等宽  (JetBrains Mono)
-//   dotgothic  → 经典  (Crimson Pro)
-//   silkscreen → 优雅  (Playfair Display)
-const FONTS: { id: FontId; label: string; tag: string; sampleStyle: React.CSSProperties }[] = [
-  { id: 'default',    label: '系统', tag: 'SYSTEM',          sampleStyle: { fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", system-ui, sans-serif' } },
-  { id: 'rounded',    label: '现代', tag: 'INTER',           sampleStyle: { fontFamily: '"Inter", "PingFang SC", system-ui, sans-serif' } },
-  { id: 'pixel',      label: '衬线', tag: 'SOURCE SERIF',    sampleStyle: { fontFamily: '"Source Serif 4", "Noto Serif SC", serif' } },
-  { id: 'terminal',   label: '等宽', tag: 'JETBRAINS MONO',  sampleStyle: { fontFamily: '"JetBrains Mono", ui-monospace, monospace' } },
-  { id: 'dotgothic',  label: '经典', tag: 'CRIMSON PRO',     sampleStyle: { fontFamily: '"Crimson Pro", "Noto Serif SC", serif' } },
-  { id: 'silkscreen', label: '优雅', tag: 'PLAYFAIR',        sampleStyle: { fontFamily: '"Playfair Display", "Noto Serif SC", serif' } },
+// Minimal picker — only three faces, each card self-demos in its own font.
+// Other FontId slots remain valid for storage/back-compat but aren't offered.
+const FONTS: { id: FontId; sampleStyle: React.CSSProperties }[] = [
+  { id: 'default',  sampleStyle: { fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", system-ui, sans-serif' } },
+  { id: 'terminal', sampleStyle: { fontFamily: '"JetBrains Mono", ui-monospace, monospace' } },
+  { id: 'firacode', sampleStyle: { fontFamily: '"Fira Code", ui-monospace, monospace', fontFeatureSettings: '"liga" 1, "calt" 1' } },
 ];
 
 const APPEARANCES: { id: AppearanceMode; label: string; icon: string }[] = [
@@ -104,6 +96,8 @@ export const GLASS_DEFAULT_ZONES: GlassZone[] = [];
 const THEMES: { id: ColorTheme; label: string; sub: string; surface: string; ramp: [string, string, string] }[] = [
   { id: 'anthropic', label: 'Anthropic', sub: '象牙陶土',   surface: '#faf9f5', ramp: ['#f5e5de', '#d97757', '#c15f3c'] },
   { id: 'cursor',    label: 'Cursor',    sub: '极夜石墨青', surface: '#0e0f12', ramp: ['#162e2b', '#7eede0', '#b4f0e7'] },
+  { id: 'xcode',     label: 'Xcode',     sub: '石墨蓝',     surface: '#292a30', ramp: ['#1e3a5f', '#3c93fd', '#6fb0ff'] },
+  { id: 'razer',     label: 'Razer',     sub: '暗夜霓绿',   surface: '#0a0a0a', ramp: ['#0e3300', '#35de12', '#5cff36'] },
 ];
 
 // Flat, ordered section list (drives the single-page layout + scroll-spy).
@@ -153,7 +147,7 @@ const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, on
 
   const paneFor = (id: Tab): React.ReactNode => {
     switch (id) {
-      case 'account':    return <AccountPane onLogout={onLogout} />;
+      case 'account':    return <AccountPane />;
       case 'appearance': return <AppearancePane settings={settings} updateSettings={updateSettings} />;
       case 'prefs':      return <PrefsPane settings={settings} updateSettings={updateSettings} />;
       case 'services':   return <ServicesPane settings={settings} updateSettings={updateSettings} />;
@@ -189,6 +183,7 @@ const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, on
                 ))}
               </div>
             ))}
+            <NavUserFoot onLogout={onLogout} />
           </nav>
           {/* Single scrollable page — every pane stacked; nav items are anchors. */}
           <div className="v2-settings-pane" ref={paneRef}>
@@ -248,10 +243,10 @@ const Switch: React.FC<{ checked: boolean; onChange: (b: boolean) => void }> = (
 
 /* ============ account / prefs / defaults / rag ============ */
 
-const AccountPane: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
-  const { t: tr } = useI18n();
+/** Avatar initials + display name from the current user — shared by the Account
+ *  pane (full detail) and the nav footer (compact identity beside sign-out). */
+function accountIdentity() {
   const u = api.getUser();
-  const plan = u?.tenant?.plan || 'free';
   const displayName = u?.name || u?.email?.split('@')[0] || '—';
   const initials = (() => {
     const n = displayName;
@@ -262,11 +257,17 @@ const AccountPane: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     }
     return n.slice(0, 1).toUpperCase();
   })();
+  return { u, displayName, initials, plan: u?.tenant?.plan || 'free' };
+}
+
+const AccountPane: React.FC = () => {
+  const { t: tr } = useI18n();
+  const { u, displayName, initials, plan } = accountIdentity();
 
   return (
     <div className="v2-acc">
       {/* Identity card — avatar + name with email/plan/tenant inline as
-          icon+text meta. */}
+          icon+text meta. Sign-out now lives at the bottom of the left nav. */}
       <div className="v2-acc-id">
         <div className="v2-acc-av">{initials}</div>
         <div className="v2-acc-id-r">
@@ -280,18 +281,30 @@ const AccountPane: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
           </div>
         </div>
       </div>
+    </div>
+  );
+};
 
-      {/* Logout — single icon+text danger button. window.confirm carries
-          the warning. The previous endpoint/probe block was promoted out
-          of 账号 into the 外部 · 服务 tab. */}
-      <div className="v2-acc-foot">
-        <button
-          className="v2-set-danger v2-acc-btn"
-          onClick={() => { if (window.confirm(tr('settings.account.logoutConfirm'))) onLogout(); }}
-        >
-          <AccIconPower /><span>{tr('settings.account.logout')}</span>
-        </button>
+/** Pinned to the bottom of the settings left nav: current user (avatar + name,
+ *  left-aligned) with a sign-out button. Keeps the account identity always in
+ *  view and gives sign-out a stable home away from the scrolling panes. */
+const NavUserFoot: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
+  const { t: tr } = useI18n();
+  const { displayName, initials } = accountIdentity();
+  return (
+    <div className="v2-settings-nav-foot">
+      <div className="v2-settings-nav-user" title={displayName}>
+        <span className="av">{initials}</span>
+        <span className="nm">{displayName}</span>
       </div>
+      <button
+        className="v2-settings-nav-signout"
+        title={tr('settings.account.logout')}
+        aria-label={tr('settings.account.logout')}
+        onClick={() => { if (window.confirm(tr('settings.account.logoutConfirm'))) onLogout(); }}
+      >
+        <AccIconPower />
+      </button>
     </div>
   );
 };
@@ -378,8 +391,10 @@ const AppearancePane: React.FC<{ settings: ClientSettings; updateSettings: (p: P
   const { t: tr, lang, setLang } = useI18n();
   return (
   <>
-    <Section title={tr('settings.language')}>
-      <Row label="" sub={tr('settings.languageHint')}>
+    {/* 三个"换皮"项压成一组贴齐的 label · 控件行 —— 标题在左、控件在右，
+        不再用"小节标题 + 远处灰副标题 + 更远的控件"那种三段拉空的排版。 */}
+    <Section>
+      <Row label={tr('settings.language')}>
         <div className="v2-seg">
           {LANGS.map((l) => (
             <button
@@ -392,9 +407,7 @@ const AppearancePane: React.FC<{ settings: ClientSettings; updateSettings: (p: P
           ))}
         </div>
       </Row>
-    </Section>
-    <Section title={tr('settings.appearance.title')}>
-      <Row label="" sub={tr('settings.appearance.systemHint')}>
+      <Row label={tr('settings.appearance.title')}>
         <div className="v2-seg">
           {APPEARANCES.map((a) => (
             <button
@@ -407,9 +420,7 @@ const AppearancePane: React.FC<{ settings: ClientSettings; updateSettings: (p: P
           ))}
         </div>
       </Row>
-    </Section>
-    <Section title={tr('settings.theme.title')}>
-      <Row label="" sub={tr('settings.theme.sub')}>
+      <Row label={tr('settings.theme.title')}>
         <div className="v2-theme-row">
           {THEMES.map((t) => (
             <button
@@ -439,10 +450,6 @@ const AppearancePane: React.FC<{ settings: ClientSettings; updateSettings: (p: P
             onClick={() => updateSettings({ font: f.id })}
           >
             <span className="t" style={f.sampleStyle}>{tr(`settings.font.${f.id}`)}</span>
-            <span className="s" style={{ ...f.sampleStyle, fontSize: 11, marginTop: 2 }}>
-              {tr('settings.font.sample')}
-            </span>
-            <span style={{ fontSize: 8.5, color: 'var(--c-ink-4)', letterSpacing: '0.06em', marginTop: 2 }}>{f.tag}</span>
           </button>
         ))}
       </div>

@@ -414,6 +414,288 @@
   );
 }
 
+/* ============================================================
+   XCODE THEME — Apple developer-tool identity.
+   Colors pulled from Xcode's "Default (Light/Dark)" theme + macOS chrome
+   (smockle xcode-default-theme port), so the surface reads as the real IDE:
+     Light: editor white #fff · sidebar #F5F5F5 · activity chrome #ECECEC ·
+            editor.foreground #282828 · selection #B3D7FF · Xcode blue #3C93FD.
+     Dark:  editor #292A30 · sidebar #252629 · activity chrome #1C1D20 ·
+            editor selection #3D4752 · list-active / accent #3C93FD.
+   #3C93FD is Xcode's canonical control/active-selection blue (same in both
+   modes); #82ADF3 is its focus-ring blue.
+   ============================================================ */
+.chaya-v2[data-theme="xcode"] {
+  --c-bg:           #ffffff;   /* editor.background */
+  --c-sidebar:      #f5f5f5;   /* sideBar.background */
+  --c-ink:          #282828;   /* editor.foreground (soft black, not #000) */
+  --c-ink-2:        #494949;
+  --c-ink-3:        #7a7a7e;
+  --c-ink-4:        #aeaeb2;
+  --c-hover:        #e7e7e9;
+  --c-hover-soft:   #efefef;
+  --c-selected:     #b3d7ff;   /* editor.selectionBackground */
+  --c-rule:         #e0e0e2;
+  --c-surface:      #ececec;   /* activityBar.background — deeper chrome */
+  --c-accent:       #3c93fd;   /* Xcode control / list-active blue */
+  --c-accent-strong:#0a6fe5;
+  --c-accent-bg:    #d8e9ff;
+  --c-note:         #a98a3e;
+  --c-note-strong:  #7a6020;
+  --c-note-bg:      #efe9d6;
+  --c-note-card:    #fdfcf6;
+  --c-ink-deep:     #000;
+  --c-danger:       #d12f1b; --c-danger-bg: #fbe3df;   /* Xcode string red */
+  --c-warn:         #b25000; --c-warn-bg:   #ffeccf;
+  --c-success:      #248a3d; --c-success-bg:#d8f3df;
+  --c-scrollbar:    rgba(40, 40, 40, 0.10);
+}
+.chaya-v2[data-theme="xcode"][data-mode="dark"] {
+  --c-bg:           #292a30;   /* editor.background (Xcode Default Dark) */
+  --c-sidebar:      #252629;   /* sideBar.background */
+  --c-ink:          #f4f4f6;   /* editor.foreground ≈ white, eased a touch */
+  --c-ink-2:        #c5c6cc;
+  --c-ink-3:        #8d9099;
+  --c-ink-4:        #5f626b;
+  --c-hover:        #34353b;
+  --c-hover-soft:   #2e2f35;
+  --c-selected:     #3d4752;   /* editor.selectionBackground */
+  --c-rule:         #3a3b42;
+  --c-surface:      #1c1d20;   /* activityBar.background — darkest chrome */
+  --c-accent:       #3c93fd;   /* Xcode list-active / button blue */
+  --c-accent-strong:#6fb0ff;
+  --c-accent-bg:    #1e3a5f;
+  --c-note:         #d4b878; --c-note-strong: #e8cf92; --c-note-bg: #272318; --c-note-card: #191712;
+  --c-ink-deep:     #ffffff;
+  --c-danger:       #fc6a5d; --c-danger-bg:  rgba(252, 106, 93, 0.16);  /* Xcode string salmon */
+  --c-warn:         #f0c869; --c-warn-bg:    rgba(240, 200, 105, 0.16);
+  --c-success:      #8ad1c3; --c-success-bg: rgba(138, 209, 195, 0.16); /* Xcode type mint */
+  --c-scrollbar:    rgba(244, 244, 246, 0.10);
+}
+
+/* Xcode 卡片体量 —— 与 Cursor 同样的 "editor panel" 处理：
+   Light 极轻 hairline + 上沿高光 + 短焦阴影；Dark 双层阴影制造面板纵深。 */
+.chaya-v2[data-theme="xcode"]:not([data-mode="dark"]) .v2-main {
+  border-color: color-mix(in oklab, var(--c-ink) 7%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.80),
+    inset 0 0 0 1px rgba(29, 29, 31, 0.04),
+    0 1px 0 rgba(29, 29, 31, 0.03),
+    0 8px 22px -10px rgba(29, 29, 31, 0.14);
+}
+.chaya-v2[data-theme="xcode"][data-mode="dark"] .v2-main {
+  border-color: rgba(255, 255, 255, 0.05);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 1px 0 rgba(0, 0, 0, 0.55),
+    0 12px 32px -16px rgba(0, 0, 0, 0.72),
+    0 28px 60px -24px rgba(0, 0, 0, 0.55);
+}
+
+/* Xcode signature touches —— 选区染 system blue；composer focus ring 用蓝 */
+.chaya-v2[data-theme="xcode"] ::selection {
+  background: color-mix(in oklab, var(--c-accent) 25%, var(--c-bg));
+  color: var(--c-ink);
+}
+.chaya-v2[data-theme="xcode"] .v2-box:focus-within {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--c-accent) 32%, transparent),
+              0 8px 24px -10px rgba(0, 0, 0, 0.18);
+}
+.chaya-v2[data-theme="xcode"][data-mode="dark"] .v2-box:focus-within {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--c-accent) 40%, transparent),
+              0 16px 36px -16px rgba(0, 0, 0, 0.80);
+}
+
+/* Code block: tighter hairline + IDE 风底色 */
+.chaya-v2[data-theme="xcode"] .v2-md .v2-code {
+  border-color: color-mix(in oklab, var(--c-ink) 8%, transparent);
+  background: color-mix(in oklab, var(--c-ink) 3%, var(--c-sidebar));
+}
+.chaya-v2[data-theme="xcode"][data-mode="dark"] .v2-md .v2-code {
+  border-color: rgba(255, 255, 255, 0.06);
+  background: #1c1d20;   /* activity-chrome dark — editor-true */
+}
+
+/* Scrollbar: dark mode blue-tinted thumb (Xcode blue #3C93FD) */
+.chaya-v2[data-theme="xcode"][data-mode="dark"] ::-webkit-scrollbar-thumb {
+  background: rgba(60, 147, 253, 0.12);
+}
+.chaya-v2[data-theme="xcode"][data-mode="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(60, 147, 253, 0.26);
+}
+
+/* ============================================================
+   Xcode 主体下：CLI provider 徽标 / 权限模式 / 头像背景 / 列表"默认"
+   统一归到 system blue accent —— 整页配色一致。
+   ============================================================ */
+.chaya-v2[data-theme="xcode"] .v2-la-badge,
+.chaya-v2[data-theme="xcode"] .v2-la-badge.prov-claude,
+.chaya-v2[data-theme="xcode"] .v2-la-badge.prov-cursor,
+.chaya-v2[data-theme="xcode"] .v2-la-badge.prov-codex,
+.chaya-v2[data-theme="xcode"] .v2-la-badge.prov-gemini {
+  background: var(--c-accent);
+  color: var(--c-bg);
+}
+.chaya-v2[data-theme="xcode"] .v2-la-badge .v2-la-spinner.sm {
+  border-color: color-mix(in oklab, var(--c-bg) 35%, transparent);
+  border-top-color: var(--c-bg);
+}
+.chaya-v2[data-theme="xcode"] .v2-la-mode.tone-default {
+  background: transparent; color: var(--c-ink-3);
+}
+.chaya-v2[data-theme="xcode"] .v2-la-mode.tone-plan {
+  background: color-mix(in oklab, var(--c-accent) 18%, var(--c-bg));
+  color: var(--c-accent-strong);
+}
+.chaya-v2[data-theme="xcode"] .v2-la-mode.tone-edit {
+  background: color-mix(in oklab, var(--c-accent) 30%, var(--c-bg));
+  color: var(--c-accent-strong);
+}
+.chaya-v2[data-theme="xcode"] .v2-la-mode.tone-bypass {
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
+}
+.chaya-v2[data-theme="xcode"] .v2-la-ava.prov-claude,
+.chaya-v2[data-theme="xcode"] .v2-la-ava.prov-cursor,
+.chaya-v2[data-theme="xcode"] .v2-la-ava.prov-codex,
+.chaya-v2[data-theme="xcode"] .v2-la-ava.prov-gemini {
+  background: color-mix(in oklab, var(--c-accent) 16%, var(--c-bg));
+  color: var(--c-accent-strong);
+}
+.chaya-v2[data-theme="xcode"] .v2-la-setdot.prov-claude,
+.chaya-v2[data-theme="xcode"] .v2-la-setdot.prov-cursor,
+.chaya-v2[data-theme="xcode"] .v2-la-setdot.prov-codex {
+  background: var(--c-accent);
+}
+.chaya-v2[data-theme="xcode"] .v2-la-setdot.prov-gemini {
+  background: linear-gradient(95deg,
+    color-mix(in oklab, var(--c-accent) 55%, var(--c-ink)),
+    var(--c-accent),
+    color-mix(in oklab, var(--c-accent) 60%, white)
+  );
+}
+
+/* ============================================================
+   RAZER THEME — gaming-hardware identity. "True black + Chroma green."
+   BLACK-ONLY: Razer hardware/Synapse is always-dark, so this theme ignores
+   the light/dark toggle — the base [data-theme="razer"] selector carries the
+   black palette and `color-scheme: dark`, so it renders black in any
+   appearance mode (and Shiki's light-dark() code highlighting follows suit).
+   Colors are pushed to high saturation for a neon-Chroma feel: vivid green
+   accent #35DE12, hot red / amber / emerald status pills.
+   ============================================================ */
+.chaya-v2[data-theme="razer"] {
+  color-scheme: dark;
+  --c-bg:           #0a0a0a;   /* true black canvas */
+  --c-sidebar:      #040404;
+  --c-ink:          #f4f4f4;
+  --c-ink-2:        #c4c4c4;
+  --c-ink-3:        #8c8c8c;
+  --c-ink-4:        #5a5a5a;
+  --c-hover:        #1a1a1a;
+  --c-hover-soft:   #131313;
+  --c-selected:     #123300;   /* deep saturated-green selection */
+  --c-rule:         #242424;
+  --c-surface:      #111111;
+  --c-accent:       #35de12;   /* high-sat Razer green (Chroma neon) */
+  --c-accent-strong:#5cff36;
+  --c-accent-bg:    #0e3300;
+  --c-note:         #f0c040; --c-note-strong: #ffd866; --c-note-bg: #2a2410; --c-note-card: #191510;
+  --c-ink-deep:     #ffffff;
+  --c-danger:       #ff2f24; --c-danger-bg:  rgba(255, 47, 36, 0.18);   /* hot red */
+  --c-warn:         #ffab00; --c-warn-bg:    rgba(255, 171, 0, 0.18);   /* vivid amber */
+  --c-success:      #19e35e; --c-success-bg: rgba(25, 227, 94, 0.16);   /* emerald */
+  --c-scrollbar:    rgba(53, 222, 18, 0.16);
+}
+
+/* Razer 卡片体量 —— 黑面板纵深，双层阴影（始终暗，无 light 变体） */
+.chaya-v2[data-theme="razer"] .v2-main {
+  border-color: rgba(255, 255, 255, 0.05);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 1px 0 rgba(0, 0, 0, 0.6),
+    0 12px 32px -16px rgba(0, 0, 0, 0.85),
+    0 28px 60px -24px rgba(0, 0, 0, 0.7);
+}
+
+/* Razer signature touches —— 选区染 Chroma 绿；focus ring 发绿光 */
+.chaya-v2[data-theme="razer"] ::selection {
+  background: color-mix(in oklab, var(--c-accent) 30%, var(--c-bg));
+  color: var(--c-ink);
+}
+.chaya-v2[data-theme="razer"] .v2-box:focus-within {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--c-accent) 55%, transparent),
+              0 0 20px -2px color-mix(in oklab, var(--c-accent) 45%, transparent),
+              0 16px 36px -16px rgba(0, 0, 0, 0.85);
+}
+
+/* Code block: green hairline + blacker-than-canvas terminal bg */
+.chaya-v2[data-theme="razer"] .v2-md .v2-code {
+  border-color: rgba(53, 222, 18, 0.14);
+  background: #040404;
+}
+
+/* Scrollbar: Chroma-green thumb */
+.chaya-v2[data-theme="razer"] ::-webkit-scrollbar-thumb {
+  background: rgba(53, 222, 18, 0.16);
+}
+.chaya-v2[data-theme="razer"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(53, 222, 18, 0.34);
+}
+
+/* ============================================================
+   Razer 主体下：CLI provider 徽标 / 权限模式 / 头像背景 / 列表"默认"
+   统一归到 Chroma 绿 accent —— 绿底黑字，最 Razer 的观感。
+   ============================================================ */
+.chaya-v2[data-theme="razer"] .v2-la-badge,
+.chaya-v2[data-theme="razer"] .v2-la-badge.prov-claude,
+.chaya-v2[data-theme="razer"] .v2-la-badge.prov-cursor,
+.chaya-v2[data-theme="razer"] .v2-la-badge.prov-codex,
+.chaya-v2[data-theme="razer"] .v2-la-badge.prov-gemini {
+  background: var(--c-accent);
+  color: var(--c-bg);
+}
+.chaya-v2[data-theme="razer"] .v2-la-badge .v2-la-spinner.sm {
+  border-color: color-mix(in oklab, var(--c-bg) 35%, transparent);
+  border-top-color: var(--c-bg);
+}
+.chaya-v2[data-theme="razer"] .v2-la-mode.tone-default {
+  background: transparent; color: var(--c-ink-3);
+}
+.chaya-v2[data-theme="razer"] .v2-la-mode.tone-plan {
+  background: color-mix(in oklab, var(--c-accent) 18%, var(--c-bg));
+  color: var(--c-accent-strong);
+}
+.chaya-v2[data-theme="razer"] .v2-la-mode.tone-edit {
+  background: color-mix(in oklab, var(--c-accent) 30%, var(--c-bg));
+  color: var(--c-accent-strong);
+}
+.chaya-v2[data-theme="razer"] .v2-la-mode.tone-bypass {
+  background: var(--c-danger-bg);
+  color: var(--c-danger);
+}
+.chaya-v2[data-theme="razer"] .v2-la-ava.prov-claude,
+.chaya-v2[data-theme="razer"] .v2-la-ava.prov-cursor,
+.chaya-v2[data-theme="razer"] .v2-la-ava.prov-codex,
+.chaya-v2[data-theme="razer"] .v2-la-ava.prov-gemini {
+  background: color-mix(in oklab, var(--c-accent) 16%, var(--c-bg));
+  color: var(--c-accent-strong);
+}
+.chaya-v2[data-theme="razer"] .v2-la-setdot.prov-claude,
+.chaya-v2[data-theme="razer"] .v2-la-setdot.prov-cursor,
+.chaya-v2[data-theme="razer"] .v2-la-setdot.prov-codex {
+  background: var(--c-accent);
+}
+.chaya-v2[data-theme="razer"] .v2-la-setdot.prov-gemini {
+  background: linear-gradient(95deg,
+    color-mix(in oklab, var(--c-accent) 55%, var(--c-ink)),
+    var(--c-accent),
+    color-mix(in oklab, var(--c-accent) 60%, white)
+  );
+}
+
 /* ===== font picker — data-font on <html> drives the v2 surface family =====
    Slot ids are kept for LS-backward-compat; labels & fonts are formal. */
 html[data-font="rounded"]    .chaya-v2,           /* 现代 — Inter */
@@ -430,6 +712,11 @@ html[data-font="terminal"]   .chaya-v2,           /* 等宽 — JetBrains Mono *
 html[data-font="terminal"]   .chaya-v2 textarea,
 html[data-font="terminal"]   .chaya-v2 input,
 html[data-font="terminal"]   .chaya-v2 button { font-family: 'JetBrains Mono', ui-monospace, 'Menlo', 'PingFang SC', monospace; }
+
+html[data-font="firacode"]   .chaya-v2,           /* 连字 — Fira Code（启用编程连字） */
+html[data-font="firacode"]   .chaya-v2 textarea,
+html[data-font="firacode"]   .chaya-v2 input,
+html[data-font="firacode"]   .chaya-v2 button { font-family: 'Fira Code', ui-monospace, 'Menlo', 'PingFang SC', monospace; font-feature-settings: 'liga' 1, 'calt' 1; }
 
 html[data-font="dotgothic"]  .chaya-v2,           /* 经典 — Crimson Pro */
 html[data-font="dotgothic"]  .chaya-v2 textarea,
@@ -1921,20 +2208,42 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
   width: 2px; border-radius: 1px;
   background: color-mix(in oklab, var(--c-ink) 72%, transparent);
 }
-.chaya-v2 .v2-settings-pane { padding: 24px 30px 28px; overflow-y: auto; min-height: 0; scroll-behavior: smooth; }
+/* Pinned account footer: avatar + name (left) with sign-out (right), held at the
+   bottom of the nav via margin-top:auto. */
+.chaya-v2 .v2-settings-nav-foot {
+  margin-top: auto; flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 6px 2px;
+  border-top: 1px solid var(--c-rule);
+}
+.chaya-v2 .v2-settings-nav-user { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; padding-left: 6px; }
+.chaya-v2 .v2-settings-nav-user .av {
+  width: 24px; height: 24px; flex: 0 0 auto; border-radius: 50%;
+  display: grid; place-items: center; font-size: 10.5px; font-weight: 600;
+  background: var(--c-ink); color: var(--c-bg); letter-spacing: 0.01em;
+}
+.chaya-v2 .v2-settings-nav-user .nm { font-size: 12.5px; color: var(--c-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.chaya-v2 .v2-settings-nav-signout {
+  flex: 0 0 auto; width: 26px; height: 26px; display: grid; place-items: center;
+  border-radius: var(--c-radius-md); color: var(--c-ink-4); cursor: pointer;
+  transition: background 140ms var(--c-ease), color 140ms var(--c-ease);
+}
+.chaya-v2 .v2-settings-nav-signout:hover { background: var(--c-danger-bg); color: var(--c-danger); }
+.chaya-v2 .v2-settings-nav-signout svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-settings-pane { padding: 20px 26px 24px; overflow-y: auto; min-height: 0; scroll-behavior: smooth; }
 /* Single-page settings: every pane is an anchored section. The nav scrolls here
    (scroll-margin clears the pane's top padding) and a hairline divides sections. */
 .chaya-v2 .v2-settings-sec { scroll-margin-top: 18px; }
-.chaya-v2 .v2-settings-sec + .v2-settings-sec { margin-top: 30px; padding-top: 28px; border-top: 1px solid var(--c-rule); }
+.chaya-v2 .v2-settings-sec + .v2-settings-sec { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--c-rule); }
 /* Level 1 — the section title (account / appearance / models …). Icon + 17px
    so it clearly outranks the panes' inner sub-labels (1.26 ratio over 13.5px). */
-.chaya-v2 .v2-settings-sec-hd { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+.chaya-v2 .v2-settings-sec-hd { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .chaya-v2 .v2-settings-sec-hd .ic { display: inline-flex; flex: 0 0 auto; color: var(--c-ink-2); }
 .chaya-v2 .v2-settings-sec-hd .ic svg { width: 18px; height: 18px; }
-.chaya-v2 .v2-settings-sec-hd .t { font-size: 17px; font-weight: 650; line-height: 1.2; letter-spacing: -0.015em; color: var(--c-ink); text-transform: capitalize; }
+.chaya-v2 .v2-settings-sec-hd .t { font-size: 16px; font-weight: 650; line-height: 1.2; letter-spacing: -0.015em; color: var(--c-ink); text-transform: capitalize; }
 @media (prefers-reduced-motion: reduce) { .chaya-v2 .v2-settings-pane { scroll-behavior: auto; } }
 
-.chaya-v2 .v2-set-sec { margin-bottom: 26px; }
+.chaya-v2 .v2-set-sec { margin-bottom: 18px; }
 .chaya-v2 .v2-set-sec:last-child { margin-bottom: 0; }
 .chaya-v2 .v2-set-sec-hd { margin-bottom: 8px; display: flex; align-items: flex-start; gap: 14px; }
 .chaya-v2 .v2-set-sec-hd > div:first-child { flex: 1; min-width: 0; }
@@ -1951,7 +2260,7 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-set-group-hd { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--c-ink-3); padding: 4px 4px 8px; }
 /* 行 = 细线分隔的账本式列表（editorial、安静；靠 1px 鳞次划分，不靠 hover 底色） */
 .chaya-v2 .v2-set-sec-body { display: flex; flex-direction: column; }
-.chaya-v2 .v2-set-row { display: flex; align-items: center; gap: 14px; padding: 13px 2px; border-bottom: 1px solid var(--c-rule); }
+.chaya-v2 .v2-set-row { display: flex; align-items: center; gap: 14px; padding: 10px 2px; border-bottom: 1px solid var(--c-rule); }
 .chaya-v2 .v2-set-row:last-child { border-bottom: 0; }
 .chaya-v2 .v2-set-row-l { flex: 1; min-width: 0; }
 .chaya-v2 .v2-set-row-l .lab { font-size: 13.5px; color: var(--c-ink); }
@@ -2068,7 +2377,7 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
    Replaces the 3-section / 6-row stack with a tight layout. Identity reads
    like a business-card stamp; endpoint is one line; logout is a single
    icon+text button. */
-.chaya-v2 .v2-acc { display: flex; flex-direction: column; gap: 18px; }
+.chaya-v2 .v2-acc { display: flex; flex-direction: column; gap: 14px; }
 /* Identity card. The avatar grounds the block; the right column stacks name
    (one line, ink) over a meta strip of icon+text chips. */
 .chaya-v2 .v2-acc-id {
@@ -2117,7 +2426,6 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
   letter-spacing: -0.005em;
 }
 /* Footer logout — right-aligned single danger button. */
-.chaya-v2 .v2-acc-foot { display: flex; justify-content: flex-end; padding-top: 4px; }
 
 /* Services pane — RAG behaviour rows attached under the Smartnote block.
    One row = label / control / pencil-tone description. No section headers
@@ -2128,15 +2436,14 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-acc-rag-sel { width: auto; min-width: 96px; }
 .chaya-v2 .v2-acc-rag-sub { font-size: 11px; color: var(--c-ink-4); flex: 1 1 auto; min-width: 0; }
 
-.chaya-v2 .v2-set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
-.chaya-v2 .v2-set-card { padding: 10px 12px; border-radius: var(--c-radius-md); background: var(--c-surface); border: 1px solid transparent; cursor: pointer; display: flex; flex-direction: column; gap: 2px; align-items: flex-start; transition: background 140ms var(--c-ease), border-color 140ms var(--c-ease), box-shadow 140ms var(--c-ease); min-height: 58px; }
+.chaya-v2 .v2-set-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+/* Minimal font card — just the name, set in its own face, centered. */
+.chaya-v2 .v2-set-card { padding: 12px 14px; border-radius: var(--c-radius-md); background: var(--c-surface); border: 1px solid transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; min-height: 44px; transition: background 140ms var(--c-ease), border-color 140ms var(--c-ease), box-shadow 140ms var(--c-ease); }
 .chaya-v2 .v2-set-card:hover { background: var(--c-hover-soft); }
 /* 选中 = accent 描边（与主题色块一致的"沉静强调"，不再用墨块反白） */
 .chaya-v2 .v2-set-card.active { background: var(--c-accent-bg); border-color: var(--c-accent); box-shadow: inset 0 0 0 1px var(--c-accent); }
-.chaya-v2 .v2-set-card .t { font-size: 15px; font-weight: 500; line-height: 1.15; color: var(--c-ink); }
-.chaya-v2 .v2-set-card .s { font-size: 11px; color: var(--c-ink-4); }
+.chaya-v2 .v2-set-card .t { font-size: 14px; font-weight: 500; line-height: 1.15; color: var(--c-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chaya-v2 .v2-set-card.active .t { color: var(--c-accent-strong); }
-.chaya-v2 .v2-set-card.active .s { color: var(--c-ink-3); }
 
 .chaya-v2 .v2-set-card-row { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: var(--c-radius-lg); background: var(--c-hover-soft); margin-bottom: 6px; border: 1px solid transparent; transition: background 160ms var(--c-ease), border-color 160ms var(--c-ease), box-shadow 160ms var(--c-ease); }
 .chaya-v2 .v2-set-card-row.is-default { background: var(--c-accent-bg); border-color: var(--c-accent); box-shadow: inset 3px 0 0 var(--c-accent-strong); }
@@ -2635,40 +2942,42 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-kb-tree-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 4px 12px; display: flex; flex-direction: column; gap: 2px; }
 .chaya-v2 .v2-kb-node {
   display: flex; align-items: center; gap: 9px; width: 100%;
-  padding: 7px 12px; border-radius: var(--c-radius-md);
+  padding: 6px 12px; border-radius: var(--c-radius-md);
   text-align: left; cursor: pointer; color: var(--c-ink-2);
   transition: background 140ms var(--c-ease), color 140ms var(--c-ease), box-shadow 140ms var(--c-ease);
 }
 .chaya-v2 .v2-kb-node:hover { background: var(--c-hover-soft); color: var(--c-ink); }
-/* selected = soft bg + a pressed-in INK rail (letterpress deboss, same language as
-   the CLI session rows) + an accent icon as the single sparing color cue. */
+/* selected = soft bg fill + an accent icon as the single sparing color cue.
+   No left rail — a side stripe reads cheap; bg + the accent icon carry it. */
 .chaya-v2 .v2-kb-node.active {
   background: var(--c-hover); color: var(--c-ink);
-  box-shadow: inset 2px 0 0 color-mix(in oklab, var(--c-ink) 70%, transparent);
 }
+.chaya-v2 .v2-kb-node.active .nm { font-weight: 500; }
 .chaya-v2 .v2-kb-node .ic { width: 16px; height: 16px; display: grid; place-items: center; color: var(--c-ink-4); flex: 0 0 auto; }
 .chaya-v2 .v2-kb-node:hover .ic { color: var(--c-ink-3); }
 .chaya-v2 .v2-kb-node.active .ic { color: var(--c-accent-strong); }
 .chaya-v2 .v2-kb-node .ic svg { width: 15px; height: 15px; }
 .chaya-v2 .v2-kb-node .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.chaya-v2 .v2-kb-node .cnt { flex: 0 0 auto; font-size: 10.5px; color: var(--c-ink-4); font-variant-numeric: tabular-nums; }
+/* count/time sit in a shared right gutter so every row's number aligns to one edge. */
+.chaya-v2 .v2-kb-node .cnt { flex: 0 0 auto; margin-left: auto; font-size: 10.5px; color: var(--c-ink-4); font-variant-numeric: tabular-nums; }
 .chaya-v2 .v2-kb-node.top { font-size: 13px; }
 .chaya-v2 .v2-kb-node.leaf { padding-left: 34px; color: var(--c-ink-2); }
 .chaya-v2 .v2-kb-node.leaf .ic { width: 14px; height: 14px; }
 .chaya-v2 .v2-kb-node.leaf .ic svg { width: 13px; height: 13px; }
 /* note row recency — muted mono on the right, the extra sidebar width put to use. */
-.chaya-v2 .v2-kb-node.leaf .meta { flex: 0 0 auto; font-size: 10px; color: var(--c-ink-4); font-family: var(--c-mono); font-variant-numeric: tabular-nums; letter-spacing: 0.01em; opacity: 0.8; transition: opacity 140ms var(--c-ease); }
+.chaya-v2 .v2-kb-node.leaf .meta { flex: 0 0 auto; margin-left: auto; font-size: 10px; color: var(--c-ink-4); font-family: var(--c-mono); font-variant-numeric: tabular-nums; letter-spacing: 0.01em; opacity: 0.8; transition: opacity 140ms var(--c-ease); }
 .chaya-v2 .v2-kb-node.leaf:hover .meta, .chaya-v2 .v2-kb-node.leaf.active .meta { opacity: 1; }
 
 /* 段头 + 分组 */
-.chaya-v2 .v2-kb-tree-sec { display: flex; align-items: center; justify-content: space-between; padding: 16px 10px 6px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--c-ink-4); }
+.chaya-v2 .v2-kb-tree-sec { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 5px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--c-ink-4); }
 .chaya-v2 .v2-kb-tree-add { width: 18px; height: 18px; display: grid; place-items: center; border-radius: var(--c-radius-xs); color: var(--c-ink-4); cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
 .chaya-v2 .v2-kb-tree-add:hover { background: var(--c-hover); color: var(--c-ink); }
 .chaya-v2 .v2-kb-tree-add svg { width: 13px; height: 13px; }
 .chaya-v2 .v2-kb-tree-empty, .chaya-v2 .v2-kb-node-empty { font-size: 11.5px; color: var(--c-ink-4); padding: 4px 10px 4px 30px; font-style: italic; }
 .chaya-v2 .v2-kb-group-row {
+  position: relative;
   display: flex; align-items: center; gap: 6px; width: 100%;
-  padding: 7px 10px; border-radius: var(--c-radius-md);
+  padding: 6px 12px; border-radius: var(--c-radius-md);
   cursor: pointer; color: var(--c-ink-2);
   transition: background 140ms var(--c-ease);
 }
@@ -2686,9 +2995,18 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-kb-notes-cta { display: flex; flex-direction: column; gap: 2px; padding: 2px 0 4px; }
 .chaya-v2 .v2-kb-notes-cta .v2-kb-node-empty { text-align: left; padding-left: 30px; }
 .chaya-v2 .v2-kb-group-row .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; color: var(--c-ink); }
-.chaya-v2 .v2-kb-group-row .cnt { font-size: 10.5px; color: var(--c-ink-4); font-variant-numeric: tabular-nums; }
-.chaya-v2 .v2-kb-group-row .row-act { width: 20px; height: 20px; display: grid; place-items: center; border-radius: var(--c-radius-xs); color: var(--c-ink-4); opacity: 0; transition: opacity 140ms var(--c-ease), background 140ms var(--c-ease), color 140ms var(--c-ease); }
-.chaya-v2 .v2-kb-group-row:hover .row-act { opacity: 1; }
+.chaya-v2 .v2-kb-group-row .cnt { flex: 0 0 auto; margin-left: auto; font-size: 10.5px; color: var(--c-ink-4); font-variant-numeric: tabular-nums; }
+/* Hover actions float over the right gutter (fading in from the row bg) so the
+   count never shifts and stays aligned with every other row's number. */
+.chaya-v2 .v2-kb-group-row .row-acts {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  display: flex; align-items: center; gap: 1px;
+  padding-left: 16px; opacity: 0; pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--c-hover-soft) 40%);
+  transition: opacity 140ms var(--c-ease);
+}
+.chaya-v2 .v2-kb-group-row:hover .row-acts { opacity: 1; pointer-events: auto; }
+.chaya-v2 .v2-kb-group-row .row-act { width: 20px; height: 20px; display: grid; place-items: center; border-radius: var(--c-radius-xs); color: var(--c-ink-4); transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
 .chaya-v2 .v2-kb-group-row .row-act:hover { background: var(--c-hover); color: var(--c-ink); }
 .chaya-v2 .v2-kb-group-row .row-act svg { width: 12px; height: 12px; }
 
@@ -3046,6 +3364,24 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
   flex: 0 0 auto;
 }
 .chaya-v2 .v2-note-toolbar .grow { flex: 1 1 auto; }
+/* 速记关联：默认速记笔记的工具栏小菜单（关联/另存/取消关联）。 */
+.chaya-v2 .v2-note-assoc { position: relative; flex: 0 0 auto; }
+.chaya-v2 .v2-pill.assoc { cursor: pointer; border: 1px solid color-mix(in oklab, var(--c-note) 30%, var(--c-rule)); background: var(--c-note-bg); color: var(--c-note-strong); transition: background 140ms var(--c-ease), border-color 140ms var(--c-ease); }
+.chaya-v2 .v2-pill.assoc:hover, .chaya-v2 .v2-pill.assoc.on { background: color-mix(in oklab, var(--c-note) 18%, var(--c-bg)); }
+.chaya-v2 .v2-note-assoc-scrim { position: fixed; inset: 0; z-index: 49; }
+.chaya-v2 .v2-note-assoc-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 50;
+  min-width: 240px; max-width: 360px; padding: 5px;
+  background: var(--c-bg); border: 1px solid var(--c-rule); border-radius: var(--c-radius-lg);
+  box-shadow: var(--c-shadow-menu); display: flex; flex-direction: column; gap: 1px;
+  animation: v2-popUp 150ms var(--c-ease) both;
+}
+.chaya-v2 .v2-note-assoc-menu .hd { padding: 5px 9px 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--c-ink-4); }
+.chaya-v2 .v2-note-assoc-menu button { text-align: left; padding: 7px 9px; border: 0; background: transparent; border-radius: var(--c-radius-md); font-size: 13px; color: var(--c-ink-2); cursor: pointer; transition: background 120ms var(--c-ease), color 120ms var(--c-ease); }
+.chaya-v2 .v2-note-assoc-menu button:hover { background: var(--c-hover-soft); color: var(--c-ink); }
+.chaya-v2 .v2-note-assoc-menu button.reset { color: var(--c-ink-3); }
+.chaya-v2 .v2-note-assoc-menu button.reset:hover { color: var(--c-danger); background: var(--c-danger-bg, var(--c-hover)); }
+.chaya-v2 .v2-note-assoc-menu .path { padding: 5px 9px 4px; font-size: 10.5px; font-family: var(--c-mono); color: var(--c-ink-4); word-break: break-all; border-top: 1px solid var(--c-rule); margin-top: 2px; }
 /* 标题：大一档、半粗，像真正的文章题头 */
 .chaya-v2 .v2-note-title {
   font-size: 17px; font-weight: 600; color: var(--c-ink);
@@ -3448,22 +3784,21 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
   transition: background 140ms var(--c-ease), color 140ms var(--c-ease);
 }
 .chaya-v2 .v2-la-sess:hover { background: var(--c-hover-soft); }
-/* 当前选中的会话：底色 + 文字加深 + 左侧 2px hairline 压痕（letterpress 语义）。
-   父 project 行的 bg 已经被 :has() 抑制，所以这层底色不会与父 row 撞色。 */
+/* 当前选中的会话：实底色 + 文字加深加粗即可读出选中，不再用左侧色条
+   （色条是最易显廉价的 AI 设计 tell；这里靠底色与字重区分）。 */
 .chaya-v2 .v2-la-sess.active {
   background: var(--c-hover);
   color: var(--c-ink);
 }
-.chaya-v2 .v2-la-sess.active::before {
+/* 在后台标签里打开（非当前）：左侧一个小圆点提示"已打开"，取代旧的竖色条 */
+.chaya-v2 .v2-la-sess.open:not(.active)::before {
   content: ''; position: absolute;
-  left: 18px; top: 8px; bottom: 8px;
-  width: 2px; border-radius: 1px;
-  background: color-mix(in oklab, var(--c-ink) 70%, transparent);
+  left: 19px; top: 50%; margin-top: -2px;
+  width: 4px; height: 4px; border-radius: 50%;
+  background: var(--c-ink-4);
 }
-/* 在后台标签里打开（非当前）：左侧细标，提示"已打开" */
-.chaya-v2 .v2-la-sess.open { box-shadow: inset 2px 0 0 var(--c-rule); }
 .chaya-v2 .v2-la-sess .t { font-size: 12.5px; color: var(--c-ink-2); flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chaya-v2 .v2-la-sess.active .t { color: var(--c-ink); }
+.chaya-v2 .v2-la-sess.active .t { color: var(--c-ink); font-weight: 500; }
 .chaya-v2 .v2-la-sess .m { font-size: 11px; color: var(--c-ink-4); flex: 0 0 auto; }
 /* 删除：hover 出垃圾桶；时间与垃圾桶占同一槽位（hover 时换成桶） */
 .chaya-v2 .v2-la-sess:hover .m { display: none; }
@@ -3852,7 +4187,8 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 
 /* agent 轮：左对齐，provider 头像锚定身份 + 正文列 */
 .chaya-v2 .v2-la-turn.agent { gap: 12px; }
-.chaya-v2 .v2-la-ava { width: 26px; height: 26px; flex: 0 0 auto; border-radius: 50%; display: grid; place-items: center; margin-top: 1px; box-shadow: inset 0 0 0 1px color-mix(in oklab, currentColor 22%, transparent); }
+/* AI 轮次头像：用 CLI 提示符 `>.` 取代图标(更轻、更"终端")。方圆角小块,等宽字。 */
+.chaya-v2 .v2-la-ava { width: 26px; height: 26px; flex: 0 0 auto; border-radius: var(--c-radius-sm); display: grid; place-items: center; margin-top: 1px; box-shadow: inset 0 0 0 1px color-mix(in oklab, currentColor 22%, transparent); font-family: var(--c-mono); font-size: 13px; font-weight: 700; line-height: 1; letter-spacing: -0.5px; user-select: none; }
 .chaya-v2 .v2-la-ava svg { width: 15px; height: 15px; }
 /* 头像底色用 provider 品牌色的淡淡一层（sparing accent：只够认出身份） */
 .chaya-v2 .v2-la-ava.prov-claude { background: rgba(217,119,87,0.14); color: #b8502e; }
@@ -4111,6 +4447,9 @@ body.v2-la-resizing { user-select: none; }
 /* 处理中的「排队」发送键：弱化为描边态，和红色 stop 键并排时不抢戏。 */
 .chaya-v2 .v2-send.queue { background: transparent; color: var(--c-ink-2); border: 1px solid var(--c-rule); }
 .chaya-v2 .v2-send.queue:hover { background: color-mix(in oklab, var(--c-ink) 6%, var(--c-bg)); color: var(--c-ink); }
+/* CLI 发送键：小圆角方形(非圆形)，与顶栏 tab / chip 的方圆语言一致。仅 CLI 作用域，
+   不动 chat 的圆形发送键。 */
+.chaya-v2 .v2-la-composer-wrap .v2-send { width: 30px; height: 30px; border-radius: var(--c-radius-md); }
 
 /* 附件按钮（输入框工具行）：与权限档/模型按钮同款 ghost 风；有附件时点亮 + 角标计数。 */
 .chaya-v2 .v2-la-attach {
@@ -4633,6 +4972,15 @@ body.v2-la-resizing { user-select: none; }
 /* Cursor — pure white in light, true near-black in dark to match the punched-up canvas. */
 .chaya-v2[data-theme="cursor"]                      { --glass-rgb: 251, 251, 252; }
 .chaya-v2[data-theme="cursor"][data-mode="dark"]    { --glass-rgb: 14, 15, 18; }
+/* Razer — black-only: near-black glass tint (= --c-bg #0a0a0a) + light hairline
+   so the frosted sidebar reads as dark glass, not a translucent white patch
+   over the black canvas. Mode-agnostic; sits after the [data-mode="dark"]
+   defaults so it wins in any appearance. */
+.chaya-v2[data-theme="razer"] {
+  --glass-rgb: 10, 10, 10;
+  --glass-hairline: 255, 255, 255;
+  --glass-hairline-a: 0.10;
+}
 
 /* Global glass intensity — saturate 调到接近真实玻璃（之前 145-165% 偏塑料感，
    现在 122-138% 像 Apple Vibrancy）。blur 升一档让背后内容更"远"。 */
@@ -4723,6 +5071,81 @@ body.v2-la-resizing { user-select: none; }
   backdrop-filter: blur(var(--glass-blur)) saturate(calc(var(--glass-sat) - 8%));
 }
 .chaya-v2[data-glass~="sidebar"] .v2-side { background: transparent; }
+
+/* ============================================================
+   Razer 毛玻璃侧栏 —— 真正的 Apple Vibrancy 磨砂玻璃。
+   关键：backdrop-filter 只能模糊"身后已绘制的内容"。侧栏(.v2-app)是最底层，
+   背后只有 .chaya-v2 root 的纯黑 —— 没有明暗变化可模糊，所以之前看着像"灰漆"
+   而非玻璃。解法三件套：
+     1) 给 root 在侧栏区域铺一层极淡的光晕(下方 [data-glass~=sidebar] root 规则)，
+        让模糊有光感/明暗可采样 —— 这是"玻璃≠平涂"的根本。
+     2) 玻璃 tint 调淡(0.36)让模糊后的光晕透上来，形成不均匀的乳白磨砂。
+     3) 叠一层极细噪点(grain) —— 磨砂玻璃散射光的颗粒感，是"frosted"的灵魂。
+   特异性比共享 sidebar 规则高(多一个 [data-theme])故覆盖之。 */
+.chaya-v2[data-theme="razer"][data-glass~="sidebar"] .v2-app {
+  background:
+    /* 1) 表层细噪点：磨砂玻璃散射的颗粒感（去饱和、低不透明度） */
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E") repeat,
+    /* 2) 极轻顶部光泽：玻璃顶端吃一点光，整体保持均匀 */
+    linear-gradient(180deg,
+      rgba(255, 255, 255, 0.06) 0%,
+      rgba(255, 255, 255, 0.015) 22%,
+      rgba(255, 255, 255, 0) 60%),
+    /* 3) 深色亚克力 tint —— 明显抬离纯黑(读作一块玻璃)，但仍属暗色家族，与黑色
+          主区和谐；白字压在上面对比极高(~13:1)，这才是黑主题该有的"对比度处理"。 */
+    rgba(58, 61, 69, 0.62);
+  background-size: 150px 150px, auto, auto;
+  /* 大半径模糊 + 高饱和 —— 把身后的 Chroma 绿光晕揉进玻璃，像暗色亚克力后透着光 */
+  -webkit-backdrop-filter: blur(44px) saturate(190%) brightness(1.05);
+  backdrop-filter: blur(44px) saturate(190%) brightness(1.05);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),            /* 顶沿吃光：淡白 bevel（暗玻璃用淡边） */
+    inset -1px 0 0 rgba(255, 255, 255, 0.05),           /* 右缘微光，把侧栏从主区切开 */
+    inset 0 36px 56px -52px rgba(255, 255, 255, 0.10);  /* 顶部柔和内发光 */
+}
+/* 暗亚克力上：文字保持主题白(对比最高，无需改色)；hover/active 用"提亮"高亮
+   (浅色半透白)而非压暗——绝不再出现深色空洞。仅作用于 razer + 毛玻璃侧栏。 */
+.chaya-v2[data-theme="razer"][data-glass~="sidebar"] .v2-side .v2-row:hover,
+.chaya-v2[data-theme="razer"][data-glass~="sidebar"] .v2-side .v2-a:hover,
+.chaya-v2[data-theme="razer"][data-glass~="sidebar"] .v2-side .v2-r:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+.chaya-v2[data-theme="razer"][data-glass~="sidebar"] .v2-side .v2-row.active,
+.chaya-v2[data-theme="razer"][data-glass~="sidebar"] .v2-side .v2-a.active,
+.chaya-v2[data-theme="razer"][data-glass~="sidebar"] .v2-side .v2-r.active {
+  background: rgba(255, 255, 255, 0.13);
+  color: var(--c-ink);
+}
+/* "+ new chat" 按钮 + 搜索框 hover：默认深色填充在亚克力上会更暗、显脏，
+   改成浅色半透磨砂填充，与暗玻璃同一套提亮语言，白字依旧高对比。 */
+.chaya-v2[data-theme="razer"][data-glass~="sidebar"] .v2-side .v2-side-action {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: var(--c-ink);
+}
+.chaya-v2[data-theme="razer"][data-glass~="sidebar"] .v2-side .v2-side-action:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+.chaya-v2[data-theme="razer"][data-glass~="sidebar"] .v2-side .v2-side-action kbd {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: var(--c-ink-2);
+}
+.chaya-v2[data-theme="razer"][data-glass~="sidebar"] .v2-side .v2-search:hover,
+.chaya-v2[data-theme="razer"][data-glass~="sidebar"] .v2-side .v2-search:focus-within {
+  background: rgba(255, 255, 255, 0.07);
+}
+/* root 侧栏区域光晕 —— 偏左布置（主区不透明会盖住右侧），给上面的模糊采样。
+   暗玻璃下让 Chroma 绿微微透出 = 像玻璃后有绿光，是 Razer 该有的"暗色亚克力透光"。
+   选择器带 sidebar+ambient 两个 attr → (0,4,0)，盖过 base 的 ambient。 */
+.chaya-v2[data-theme="razer"][data-glass~="sidebar"][data-glass~="ambient"] {
+  background-image:
+    radial-gradient(34vw 46vh at -6% -6%,  rgba(68, 214, 44, 0.16),   transparent 60%),
+    radial-gradient(30vw 40vh at 2% 106%,  rgba(68, 214, 44, 0.12),   transparent 62%),
+    radial-gradient(26vw 52vh at -8% 50%,  rgba(120, 150, 130, 0.05), transparent 60%);
+  background-attachment: fixed;
+}
 
 /* ---- ambient wash（仅随侧栏开启叠加）：极淡双角放射，给模糊底色可采样，不抢正文 ---- */
 .chaya-v2[data-glass~="ambient"] {
@@ -4815,6 +5238,109 @@ body.v2-la-resizing { user-select: none; }
   min-width: 16px; height: 16px; padding: 0 4px; border-radius: var(--c-radius-pill);
   background: var(--c-note-bg); color: var(--c-note-strong); font-size: 10px; font-weight: 600;
   display: inline-flex; align-items: center; justify-content: center; font-family: var(--c-mono); margin-left: 1px;
+}
+
+/* ============ wiki 联动：pill 面板 + @ 提及弹层（共用 .v2-wiki-list 行） ============ */
+/* pill 面板：锚定 .v2-box 左下，向上展开。 */
+.chaya-v2 .v2-wiki-pop {
+  position: absolute; left: 0; bottom: calc(100% + 10px); z-index: 40;
+  width: min(440px, 74vw); max-height: 56vh; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--c-note-card); border: 1px solid color-mix(in oklab, var(--c-note) 30%, var(--c-rule));
+  border-radius: var(--c-radius-xl); box-shadow: var(--c-shadow-menu);
+  transform-origin: 0 100%; animation: v2NotePop 220ms var(--c-ease-spring, var(--c-ease));
+}
+.chaya-v2 .v2-wiki-pop-hd {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border-bottom: 1px solid color-mix(in oklab, var(--c-note) 16%, var(--c-rule));
+  background: color-mix(in oklab, var(--c-note) 6%, transparent);
+}
+.chaya-v2 .v2-wiki-pop-hd .ic { color: var(--c-note-strong); display: inline-flex; flex: 0 0 auto; }
+.chaya-v2 .v2-wiki-pop-hd .ic svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-wiki-search { flex: 1 1 auto; min-width: 0; border: 0; background: transparent; outline: 0; font-size: 13px; color: var(--c-ink); font-family: var(--c-sans); }
+.chaya-v2 .v2-wiki-search::placeholder { color: var(--c-ink-4); }
+.chaya-v2 .v2-wiki-pop-ft { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 11px; border-top: 1px solid color-mix(in oklab, var(--c-note) 12%, var(--c-rule)); }
+.chaya-v2 .v2-wiki-pop-ft .hint { flex: 1 1 auto; min-width: 0; font-size: 10.5px; color: var(--c-ink-4); font-family: var(--c-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-wiki-pop-ft .loc { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: var(--c-radius-pill); border: 0; background: transparent; color: var(--c-note-strong); cursor: pointer; font-size: 11px; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-wiki-pop-ft .loc:hover { background: var(--c-note-bg); }
+.chaya-v2 .v2-wiki-pop-ft .loc svg { width: 12px; height: 12px; }
+.chaya-v2 .v2-wiki-pop-ft .loc.reset { color: var(--c-ink-4); }
+.chaya-v2 .v2-wiki-pop-ft .loc.reset:hover { background: var(--c-hover); color: var(--c-ink-2); }
+
+/* @ 提及弹层：浮在输入框上方（复用 slash 的浮层位）。 */
+.chaya-v2 .v2-la-mention {
+  margin-bottom: 8px; border: 1px solid var(--c-rule); border-radius: var(--c-radius-lg);
+  background: var(--c-bg); box-shadow: var(--c-shadow-menu); overflow: hidden;
+  animation: v2-popUp 160ms var(--c-ease) both;
+}
+.chaya-v2 .v2-la-mention-hd { padding: 7px 12px 5px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--c-ink-4); }
+
+/* 共用列表行 */
+.chaya-v2 .v2-wiki-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 5px; display: flex; flex-direction: column; gap: 1px; }
+.chaya-v2 .v2-la-mention .v2-wiki-list { max-height: 300px; }
+.chaya-v2 .v2-wiki-empty { padding: 16px 12px; text-align: center; font-size: 12px; color: var(--c-ink-4); }
+.chaya-v2 .v2-wiki-row {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 7px 10px; border-radius: var(--c-radius-md);
+  text-align: left; cursor: pointer; color: var(--c-ink-2);
+  transition: background 120ms var(--c-ease), color 120ms var(--c-ease);
+}
+.chaya-v2 .v2-wiki-row:hover, .chaya-v2 .v2-wiki-row.on { background: var(--c-hover-soft); color: var(--c-ink); }
+.chaya-v2 .v2-wiki-row .ic { width: 16px; height: 16px; display: grid; place-items: center; color: var(--c-ink-4); flex: 0 0 auto; }
+.chaya-v2 .v2-wiki-row:hover .ic, .chaya-v2 .v2-wiki-row.on .ic { color: var(--c-note-strong); }
+.chaya-v2 .v2-wiki-row .ic svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-wiki-row .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.chaya-v2 .v2-wiki-row .def { flex: 0 0 auto; display: inline-flex; color: var(--c-note-strong); }
+.chaya-v2 .v2-wiki-row .def svg { width: 12px; height: 12px; }
+.chaya-v2 .v2-wiki-row .tm { flex: 0 0 auto; font-size: 10px; color: var(--c-ink-4); font-family: var(--c-mono); font-variant-numeric: tabular-nums; }
+.chaya-v2 .v2-wiki-row .tag { flex: 0 0 auto; font-size: 9.5px; letter-spacing: 0.04em; color: var(--c-ink-4); background: var(--c-surface); padding: 1px 6px; border-radius: var(--c-radius-pill); font-family: var(--c-mono); }
+
+/* ---- wiki peek：点条目浮窗查看/编辑（portal 到根，居中卡片） ---- */
+.chaya-v2 .v2-wiki-peek {
+  position: fixed; inset: 0; z-index: 96;
+  display: grid; place-items: center; padding: 24px;
+  background: color-mix(in oklab, var(--c-ink) 32%, transparent);
+  animation: v2-note-panel-fade 160ms var(--c-ease);
+}
+.chaya-v2 .v2-wiki-peek-card {
+  display: flex; flex-direction: column; width: min(720px, 92vw); height: min(640px, 82vh); overflow: hidden;
+  background: var(--c-bg); border: 1px solid var(--c-rule);
+  border-left: 3px solid var(--c-note); border-radius: var(--c-radius-xl);
+  box-shadow: 0 24px 70px color-mix(in oklab, var(--c-ink) 28%, transparent);
+  animation: v2-note-panel-rise 200ms var(--c-ease) both;
+}
+.chaya-v2 .v2-wiki-peek-hd {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 11px 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--c-note) 16%, var(--c-rule));
+  background: color-mix(in oklab, var(--c-note) 5%, transparent);
+}
+.chaya-v2 .v2-wiki-peek-hd .ic { color: var(--c-note-strong); display: inline-flex; flex: 0 0 auto; }
+.chaya-v2 .v2-wiki-peek-hd .ttl { font-size: 13.5px; color: var(--c-ink); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-wiki-peek-hd .def { color: var(--c-note-strong); display: inline-flex; flex: 0 0 auto; }
+.chaya-v2 .v2-wiki-peek-hd .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-warn); flex: 0 0 auto; }
+.chaya-v2 .v2-wiki-peek-hd .grow { flex: 1; }
+.chaya-v2 .v2-wiki-peek-hd .act {
+  display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; flex: 0 0 auto;
+  border: 1px solid var(--c-rule); background: transparent; color: var(--c-ink-2); border-radius: var(--c-radius-md);
+  cursor: pointer; font-size: 12.5px; transition: background 140ms var(--c-ease), color 140ms var(--c-ease), border-color 140ms var(--c-ease);
+}
+.chaya-v2 .v2-wiki-peek-hd .act svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-wiki-peek-hd .act:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-wiki-peek-hd .act.primary { background: var(--c-ink); color: var(--c-bg); border-color: var(--c-ink); }
+.chaya-v2 .v2-wiki-peek-hd .act.primary:hover:not(:disabled) { background: var(--c-ink-deep); }
+.chaya-v2 .v2-wiki-peek-hd .act:disabled { opacity: 0.45; cursor: default; }
+.chaya-v2 .v2-wiki-peek-hd .act.close { width: 30px; padding: 0; justify-content: center; border-color: transparent; }
+.chaya-v2 .v2-wiki-peek-body {
+  flex: 1 1 auto; min-height: 0; width: 100%; resize: none; border: 0; outline: 0; background: transparent;
+  padding: 18px 22px 22px; font-family: var(--c-mono); font-size: 13px; line-height: 1.7; color: var(--c-ink);
+}
+.chaya-v2 .v2-wiki-peek-body::placeholder { color: var(--c-ink-4); }
+
+/* 「已记入速记」轻提示：浮在输入框上方居中，淡入淡出。 */
+.chaya-v2 .v2-la-captoast {
+  align-self: center; margin-bottom: 8px; padding: 6px 14px; border-radius: var(--c-radius-pill);
+  background: var(--c-note-strong); color: var(--c-note-card); font-size: 12px; font-weight: 500;
+  box-shadow: 0 4px 14px color-mix(in oklab, var(--c-ink) 18%, transparent);
+  animation: v2-popUp 180ms var(--c-ease) both;
 }
 
 /* ---- 笔记弹层（锚定 .v2-box，向上展开）---- */
