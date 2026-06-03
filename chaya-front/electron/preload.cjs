@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('chateeElectron', {
     pickFolder: () => ipcRenderer.invoke('localAgent:pickFolder'),
     pickFiles: () => ipcRenderer.invoke('localAgent:pickFiles'),
     listSessions: (provider, cwd) => ipcRenderer.invoke('localAgent:listSessions', { provider, cwd }),
+    scanCodexSessions: () => ipcRenderer.invoke('localAgent:scanCodexSessions'),
     readSession: (provider, cwd, sessionId) => ipcRenderer.invoke('localAgent:readSession', { provider, cwd, sessionId }),
     deleteSession: (provider, cwd, sessionId) => ipcRenderer.invoke('localAgent:deleteSession', { provider, cwd, sessionId }),
     listCommands: (provider, cwd) => ipcRenderer.invoke('localAgent:listCommands', { provider, cwd }),

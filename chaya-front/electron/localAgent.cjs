@@ -2,8 +2,8 @@
  * 本地 Agent 桥 —— 纯本地功能，与 Chaya 后端无关。
  *
  * 让用户在 Chaya 的对话框里直接驱动自己机器上已安装的 CLI Agent
- * (Claude Code / Codex / Gemini)。当前 Claude Code 端到端打通，
- * codex / gemini 仅做安装探测，run/sessions 走同一抽象后续接入。
+ * (Claude Code / Cursor / Codex / Gemini)。四个 provider 都已接入实时对话：
+ * Claude 走常驻 SDK query；Gemini 走常驻 ACP；Cursor/Codex 走单回合进程 + resume。
  *
  * 设计要点：
  *  - 渲染进程关闭了 nodeIntegration，所有进程操作都在主进程完成，
@@ -111,7 +111,7 @@ function getVersion(bin) {
 const PROVIDERS = {
   claude: { id: 'claude', label: 'Claude Code', bin: 'claude', live: true },
   cursor: { id: 'cursor', label: 'Cursor', bin: 'cursor-agent', live: true, needsApiKey: true },
-  codex: { id: 'codex', label: 'Codex', bin: 'codex', live: false },
+  codex: { id: 'codex', label: 'Codex', bin: 'codex', live: true },
   gemini: { id: 'gemini', label: 'Gemini', bin: 'gemini', live: true },
 };
 
@@ -209,9 +209,7 @@ async function findProjectDir(cwd) {
 async function listSessions(provider, cwd) {
   if (provider === 'cursor') return cursorListSessions(cwd);
   if (provider === 'gemini') return geminiListSessions(cwd);
-  // Only Claude has session-history scanning wired up. codex/gemini are
-  // detection-only stubs for now, so return empty rather than leaking Claude's
-  // sessions into another provider's tree. (Their dirs get added when run is.)
+  if (provider === 'codex') return codexListSessions(cwd);
   if ((provider || 'claude') !== 'claude') return [];
   const dir = await findProjectDir(cwd);
   if (!dir) return [];
@@ -265,6 +263,7 @@ async function peekSession(jsonlPath) {
 async function readSession(provider, cwd, sessionId) {
   if (provider === 'cursor') return cursorReadSession(cwd, sessionId);
   if (provider === 'gemini') return geminiReadSession(cwd, sessionId);
+  if (provider === 'codex') return codexReadSession(cwd, sessionId);
   if ((provider || 'claude') !== 'claude') return { messages: [] };
   const dir = await findProjectDir(cwd);
   if (!dir) return { messages: [] };
@@ -289,6 +288,7 @@ async function readSession(provider, cwd, sessionId) {
 async function deleteSession(provider, cwd, sessionId) {
   if (provider === 'cursor') return cursorDeleteSession(cwd, sessionId);
   if (provider === 'gemini') return geminiDeleteSession(cwd, sessionId);
+  if (provider === 'codex') return codexDeleteSession(cwd, sessionId);
   if ((provider || 'claude') !== 'claude') return { ok: false, error: 'unsupported provider' };
   if (!sessionId || /[/\\]/.test(sessionId)) return { ok: false, error: 'bad sessionId' };
   const dir = await findProjectDir(cwd);
@@ -335,6 +335,264 @@ function normalizeParts(message) {
     }
   }
   return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * Codex 会话落盘读取
+ *   ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<session-id>.jsonl
+ *   ~/.codex/archived_sessions/... 同形
+ * ------------------------------------------------------------------ */
+function codexRoot() {
+  return path.join(os.homedir(), '.codex');
+}
+function codexSessionsRoot() {
+  return path.join(codexRoot(), 'sessions');
+}
+function codexArchivedRoot() {
+  return path.join(codexRoot(), 'archived_sessions');
+}
+
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+function codexSessionIdFromFile(file) {
+  const m = path.basename(file).match(UUID_RE);
+  return m ? m[0] : null;
+}
+
+async function codexWalkJsonl(dir, out = []) {
+  let entries;
+  try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return out; }
+  await Promise.all(entries.map(async (e) => {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) await codexWalkJsonl(full, out);
+    else if (e.isFile() && e.name.endsWith('.jsonl') && e.name.startsWith('rollout-')) out.push(full);
+  }));
+  return out;
+}
+
+async function codexAllRolloutFiles() {
+  const out = [];
+  await codexWalkJsonl(codexSessionsRoot(), out);
+  await codexWalkJsonl(codexArchivedRoot(), out);
+  return out;
+}
+
+async function codexReadSessionIndex() {
+  const file = path.join(codexRoot(), 'session_index.jsonl');
+  const map = new Map();
+  let raw;
+  try { raw = await fsp.readFile(file, 'utf8'); } catch { return map; }
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const o = JSON.parse(line);
+      if (o && o.id) map.set(o.id, {
+        title: o.thread_name || null,
+        updatedAt: o.updated_at ? Date.parse(o.updated_at) : 0,
+      });
+    } catch { /* skip */ }
+  }
+  return map;
+}
+
+async function codexReadMeta(jsonlPath) {
+  let fh;
+  try {
+    fh = await fsp.open(jsonlPath, 'r');
+    const buf = Buffer.alloc(128 * 1024);
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+    const lines = buf.slice(0, bytesRead).toString('utf8').split('\n');
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let o;
+      try { o = JSON.parse(line); } catch { continue; }
+      if (o.type === 'session_meta' && o.payload) {
+        return {
+          id: o.payload.id || codexSessionIdFromFile(jsonlPath),
+          cwd: o.payload.cwd || null,
+          timestamp: o.payload.timestamp || o.timestamp || null,
+        };
+      }
+      if (o.type === 'turn_context' && o.payload?.cwd) {
+        return { id: codexSessionIdFromFile(jsonlPath), cwd: o.payload.cwd, timestamp: o.timestamp || null };
+      }
+    }
+  } catch { /* unreadable */ } finally {
+    if (fh) await fh.close().catch(() => {});
+  }
+  return { id: codexSessionIdFromFile(jsonlPath), cwd: null, timestamp: null };
+}
+
+function codexCwdMatchesProject(projectCwd, sessionCwd) {
+  if (!projectCwd || !sessionCwd) return false;
+  return path.resolve(projectCwd) === path.resolve(sessionCwd);
+}
+
+function codexTextFromContent(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((p) => {
+    if (!p) return '';
+    if (typeof p.text === 'string') return p.text;
+    if (typeof p.content === 'string') return p.content;
+    return '';
+  }).filter(Boolean).join('\n');
+}
+
+function codexPartsFromMessage(item) {
+  const text = codexTextFromContent(item && item.content);
+  return text.trim() ? [{ kind: 'text', text }] : [];
+}
+
+function codexToolInput(item) {
+  if (!item || typeof item.arguments !== 'string') return item?.arguments;
+  try { return JSON.parse(item.arguments); } catch { return item.arguments; }
+}
+
+function codexPartFromResponseItem(item) {
+  if (!item || item.type !== 'function_call') return null;
+  return { kind: 'tool_use', name: item.name || 'tool', input: codexToolInput(item), id: item.call_id };
+}
+
+function codexToolResultFromResponseItem(item) {
+  if (!item || item.type !== 'function_call_output') return null;
+  const txt = typeof item.output === 'string' ? item.output : JSON.stringify(item.output || '');
+  return { kind: 'tool_result', text: (txt || '').slice(0, 8000), toolUseId: item.call_id };
+}
+
+async function codexPeekSession(jsonlPath) {
+  let firstPrompt = null;
+  let turns = 0;
+  let fh;
+  try {
+    fh = await fsp.open(jsonlPath, 'r');
+    const buf = Buffer.alloc(512 * 1024);
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+    const lines = buf.slice(0, bytesRead).toString('utf8').split('\n');
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let o;
+      try { o = JSON.parse(line); } catch { continue; }
+      const p = o.payload || {};
+      if (o.type === 'response_item' && p.type === 'message' && p.role === 'user') {
+        turns += 1;
+        if (!firstPrompt) {
+          const t = codexTextFromContent(p.content);
+          if (t) firstPrompt = t.slice(0, 120);
+        }
+      }
+    }
+  } catch { /* unreadable */ } finally {
+    if (fh) await fh.close().catch(() => {});
+  }
+  return { firstPrompt, turns };
+}
+
+async function codexFilesForCwd(cwd) {
+  const files = await codexAllRolloutFiles();
+  const metas = await Promise.all(files.map(async (file) => ({ file, meta: await codexReadMeta(file) })));
+  return metas.filter((x) => x.meta && codexCwdMatchesProject(cwd, x.meta.cwd));
+}
+
+async function codexListSessions(cwd) {
+  const [items, index] = await Promise.all([codexFilesForCwd(cwd), codexReadSessionIndex()]);
+  const sessions = await Promise.all(items.map(async ({ file, meta }) => {
+    const id = meta.id || codexSessionIdFromFile(file);
+    if (!id) return null;
+    const st = await fsp.stat(file).catch(() => null);
+    const idx = index.get(id) || {};
+    const peek = await codexPeekSession(file);
+    const updatedAt = idx.updatedAt || (st ? st.mtimeMs : 0) || (meta.timestamp ? Date.parse(meta.timestamp) : 0);
+    return {
+      sessionId: id,
+      title: idx.title || null,
+      preview: peek.firstPrompt,
+      turns: peek.turns,
+      updatedAt,
+    };
+  }));
+  return sessions.filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+async function codexListAllSessions() {
+  const [files, index] = await Promise.all([codexAllRolloutFiles(), codexReadSessionIndex()]);
+  const rows = await Promise.all(files.map(async (file) => {
+    const meta = await codexReadMeta(file);
+    const id = meta.id || codexSessionIdFromFile(file);
+    if (!id || !meta.cwd) return null;
+    const st = await fsp.stat(file).catch(() => null);
+    const idx = index.get(id) || {};
+    const peek = await codexPeekSession(file);
+    const updatedAt = idx.updatedAt || (st ? st.mtimeMs : 0) || (meta.timestamp ? Date.parse(meta.timestamp) : 0);
+    return {
+      provider: 'codex',
+      sessionId: id,
+      title: idx.title || null,
+      preview: peek.firstPrompt,
+      turns: peek.turns,
+      updatedAt,
+      cwd: meta.cwd,
+    };
+  }));
+  const byId = new Map();
+  for (const row of rows) {
+    if (!row) continue;
+    const prev = byId.get(row.sessionId);
+    if (!prev || row.updatedAt > prev.updatedAt) byId.set(row.sessionId, row);
+  }
+  return [...byId.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+async function codexFindSessionFile(cwd, sessionId) {
+  if (!sessionId || /[/\\]/.test(sessionId)) return null;
+  const items = await codexFilesForCwd(cwd);
+  const hit = items.find((x) => (x.meta.id || codexSessionIdFromFile(x.file)) === sessionId);
+  return hit ? hit.file : null;
+}
+
+async function codexReadSession(cwd, sessionId) {
+  const full = await codexFindSessionFile(cwd, sessionId);
+  if (!full) return { messages: [] };
+  let raw;
+  try { raw = await fsp.readFile(full, 'utf8'); } catch { return { messages: [] }; }
+  const messages = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    let o;
+    try { o = JSON.parse(line); } catch { continue; }
+    const p = o.payload || {};
+    if (o.type !== 'response_item') continue;
+    if (p.type === 'message' && (p.role === 'user' || p.role === 'assistant')) {
+      const parts = codexPartsFromMessage(p);
+      if (parts.length) messages.push({ role: p.role, parts, ts: o.timestamp || null, uuid: p.id || null });
+      continue;
+    }
+    if (p.type === 'function_call') {
+      const part = codexPartFromResponseItem(p);
+      if (part) messages.push({ role: 'assistant', parts: [part], ts: o.timestamp || null, uuid: p.call_id || null });
+      continue;
+    }
+    if (p.type === 'function_call_output') {
+      const part = codexToolResultFromResponseItem(p);
+      if (part) messages.push({ role: 'assistant', parts: [part], ts: o.timestamp || null, uuid: p.call_id || null });
+    }
+  }
+  return { messages };
+}
+
+async function codexDeleteSession(cwd, sessionId) {
+  const full = await codexFindSessionFile(cwd, sessionId);
+  if (!full) return { ok: false, error: 'session not found' };
+  const roots = [codexSessionsRoot(), codexArchivedRoot()].map((r) => path.resolve(r) + path.sep);
+  const resolved = path.resolve(full);
+  if (!roots.some((r) => resolved.startsWith(r))) return { ok: false, error: 'out of bounds' };
+  try {
+    const { shell } = require('electron');
+    await shell.trashItem(full);
+    return { ok: true, trashed: true };
+  } catch {
+    try { await fsp.unlink(full); return { ok: true, trashed: false }; }
+    catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -648,6 +906,7 @@ function buildClaudeContent(prompt, attachments) {
  *  attachments：拖入/选取的文件 + 粘贴的图片（见上方注入逻辑）。 */
 async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode, model, mcp, apiKey, attachments, lane }) {
   if (provider === 'cursor' && !lane) return cursorSend(sender, { cwd, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, apiKey });
+  if (provider === 'codex') return codexSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model });
   // gemini 无 streaming-input/视觉 → 附件按 @路径 文本引用（与 cursor 同）；支持 lane。
   if (provider === 'gemini') return geminiSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model });
   const key = runKey(cwd, lane);
@@ -667,6 +926,7 @@ async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode,
  *  等用户真正发送时已是暖的——首 token 从 ~10s 降到 ~2s。已有则不重起。 */
 function sessionWarm(sender, { cwd, provider, sessionId, permMode, model, mcp, apiKey, lane }) {
   if (provider === 'cursor' && !lane) return cursorWarm(sender, { cwd, sessionId, permMode, model, apiKey });
+  if (provider === 'codex') return codexWarm(sender, { cwd, lane, sessionId, permMode, model });
   if (provider === 'gemini') return geminiWarm(sender, { cwd, lane, sessionId, permMode, model });
   if (sessions.has(runKey(cwd, lane))) return { ok: true };
   const s = startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, lane });
@@ -721,6 +981,7 @@ async function sessionReconnectMcp({ cwd, name, lane }) {
 /** 运行中切模型（/model 等价）。会话不存在则忽略（下次发送会以选中的 model 起）。 */
 async function sessionSetModel({ cwd, model, lane }) {
   if (!lane) { const cu = cursorSessions.get(cwd); if (cu) { cu.model = model || null; return { ok: true }; } }
+  { const cx = codexSessions.get(runKey(cwd, lane)); if (cx) { cx.model = model || null; return { ok: true }; } }
   { const g = geminiSessions.get(runKey(cwd, lane)); if (g) { g.model = model || null; return { ok: true }; } }
   const s = sessions.get(runKey(cwd, lane));
   if (s?.query && typeof s.query.setModel === 'function') {
@@ -737,6 +998,7 @@ async function sessionInterrupt({ cwd, lane }) {
     const cu = cursorSessions.get(cwd);
     if (cu) { try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ } return { ok: true }; }
   }
+  { const cx = codexSessions.get(runKey(cwd, lane)); if (cx) { try { if (cx.child) cx.child.kill('SIGTERM'); } catch { /* */ } return { ok: true }; } }
   { const g = geminiSessions.get(runKey(cwd, lane)); if (g && g.conn) { try { g.conn.notify('session/cancel', { sessionId: g.sessionId }); } catch { /* */ } return { ok: true }; } }
   const s = sessions.get(runKey(cwd, lane));
   if (s?.query) { try { await s.query.interrupt(); } catch { /* ignore */ } return { ok: true }; }
@@ -765,6 +1027,16 @@ function sessionClose({ cwd, lane }) {
       return { ok: true };
     }
   }
+  {
+    const key = runKey(cwd, lane);
+    const cx = codexSessions.get(key);
+    if (cx) {
+      codexSessions.delete(key);
+      try { if (cx.ac) cx.ac.abort(); } catch { /* */ }
+      try { if (cx.child) cx.child.kill('SIGTERM'); } catch { /* */ }
+      return { ok: true };
+    }
+  }
   { const gk = runKey(cwd, lane); const g = geminiSessions.get(gk);
     if (g) { geminiSessions.delete(gk); try { g.conn && g.conn.kill(); } catch { /* */ } return { ok: true }; } }
   return { ok: killSessionByKey(runKey(cwd, lane)) };
@@ -773,12 +1045,17 @@ function sessionClose({ cwd, lane }) {
 /** 全部回收：渲染进程重载/崩溃/退出时调——否则旧会话的 claude 子进程会变孤儿常驻
  *  （实测一天下来累积了 9 条、共 ~500MB、最久 20h+）。幂等。 */
 function killAllSessions() {
-  const n = sessions.size + cursorSessions.size + geminiSessions.size;
+  const n = sessions.size + cursorSessions.size + codexSessions.size + geminiSessions.size;
   for (const key of [...sessions.keys()]) killSessionByKey(key, '已重置');
   for (const [cwd, cu] of [...cursorSessions]) {
     cursorSessions.delete(cwd);
     try { if (cu.ac) cu.ac.abort(); } catch { /* */ }
     try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ }
+  }
+  for (const [key, cx] of [...codexSessions]) {
+    codexSessions.delete(key);
+    try { if (cx.ac) cx.ac.abort(); } catch { /* */ }
+    try { if (cx.child) cx.child.kill('SIGTERM'); } catch { /* */ }
   }
   for (const [key, g] of [...geminiSessions]) {
     geminiSessions.delete(key);
@@ -806,6 +1083,14 @@ function reapIdleSessions() {
       killSessionByKey(key, '闲置回收');
     }
   }
+  for (const [key, cx] of codexSessions) {
+    if (now - (cx.touched || 0) > SESSION_IDLE_MS) {
+      console.log('[localAgent] reap idle codex · %s', key);
+      codexSessions.delete(key);
+      try { if (cx.ac) cx.ac.abort(); } catch { /* */ }
+      try { if (cx.child) cx.child.kill('SIGTERM'); } catch { /* */ }
+    }
+  }
   // 常驻 gemini ACP 进程同样闲置回收(下次发送 geminiEnsure 自动重建)。
   for (const [key, g] of geminiSessions) {
     if (g.conn && now - (g.touched || 0) > SESSION_IDLE_MS) {
@@ -819,6 +1104,7 @@ function reapIdleSessions() {
 /** 会话进行中切换权限模式（Tab 切档即时生效）。 */
 async function sessionSetPermMode({ cwd, permMode, lane }) {
   if (!lane) { const cu = cursorSessions.get(cwd); if (cu) { cu.permMode = permMode || 'force'; return { ok: true }; } }
+  { const cx = codexSessions.get(runKey(cwd, lane)); if (cx) { cx.permMode = permMode || 'default'; return { ok: true }; } }
   { const g = geminiSessions.get(runKey(cwd, lane)); if (g) { g.permMode = permMode || 'default'; return { ok: true }; } }
   const mode = PERM_MODES.includes(permMode) ? permMode : 'default';
   const s = sessions.get(runKey(cwd, lane));
@@ -831,6 +1117,211 @@ function permissionRespond(permId, decision) {
   if (!e) return { ok: false };
   pendingPerms.delete(permId);
   e.settle(decision);   // settle 规整 allow/deny 成 SDK 要求的形状
+  return { ok: true };
+}
+
+/* ------------------------------------------------------------------ *
+ * 实时驱动 Codex —— 无状态一次性进程（每回合 spawn 一次 `codex exec --json`）。
+ * 新会话用 `codex -C <cwd> exec ...`，续接用 `codex exec resume <sessionId> ...`。
+ * stdout JSONL 被翻成 Claude SDK 同形事件，渲染层无需分叉。
+ * ------------------------------------------------------------------ */
+const codexSessions = new Map();   // runKey(cwd,lane) -> { child, ac, sessionId, model, permMode }
+
+function codexTopPermArgs(permMode) {
+  if (permMode === 'bypassPermissions' || permMode === 'force') return ['--dangerously-bypass-approvals-and-sandbox'];
+  return ['-a', 'never'];
+}
+
+function codexExecSandboxArgs(permMode) {
+  if (permMode === 'bypassPermissions' || permMode === 'force') return [];
+  if (permMode === 'plan' || permMode === 'ask') return ['-s', 'read-only'];
+  return ['-s', 'workspace-write'];
+}
+
+function codexSpawnArgs({ cwd, prompt, sessionId, model, permMode }) {
+  const text = prompt || '';
+  if (sessionId) {
+    const args = [...codexTopPermArgs(permMode), 'exec', 'resume', '--json', '--skip-git-repo-check'];
+    if (model) args.push('-m', model);
+    args.push(sessionId, text);
+    return args;
+  }
+  const args = [...codexTopPermArgs(permMode), '-C', cwd, 'exec', '--json', '--skip-git-repo-check'];
+  if (model) args.push('-m', model);
+  args.push(...codexExecSandboxArgs(permMode), text);
+  return args;
+}
+
+function codexTextDeltaEvent(text) {
+  if (!text) return null;
+  return { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text } } };
+}
+
+function codexExtractEventText(p) {
+  if (!p) return '';
+  if (typeof p.delta === 'string') return p.delta;
+  if (typeof p.text === 'string') return p.text;
+  if (typeof p.message === 'string') return p.message;
+  if (p.delta && typeof p.delta.text === 'string') return p.delta.text;
+  return '';
+}
+
+function codexNormalizeStdoutEvent(o, ctx) {
+  const out = [];
+  const p = (o && o.payload) || o || {};
+  const typ = o && o.type;
+  const payloadType = p.type;
+
+  const sid = p.id || p.session_id || p.sessionId || p.thread_id || p.conversation_id;
+  if (typ !== 'session_meta' && /session|thread/i.test(String(typ || '')) && sid) {
+    ctx.sessionId = sid;
+    out.push({ type: 'system', subtype: 'init', session_id: sid });
+  }
+
+  if (typ === 'session_meta' && p.id) {
+    ctx.sessionId = p.id;
+    out.push({ type: 'system', subtype: 'init', session_id: p.id });
+    return out;
+  }
+
+  if (typ === 'response_item' || payloadType === 'message' || payloadType === 'function_call' || payloadType === 'function_call_output') {
+    const item = typ === 'response_item' ? p : p.item || p;
+    if (item.type === 'message') {
+      if (item.role === 'assistant') {
+        const parts = codexPartsFromMessage(item);
+        if (parts.length) {
+          ctx.sawAssistant = true;
+          out.push({ type: 'assistant', message: { role: 'assistant', content: parts.map((part) => ({ type: 'text', text: part.text })).filter((part) => part.text) }, uuid: item.id || null });
+        }
+      }
+      return out;
+    }
+    if (item.type === 'function_call') {
+      const part = codexPartFromResponseItem(item);
+      if (part) out.push({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: part.name, input: part.input, id: part.id }] }, uuid: item.call_id || null });
+      return out;
+    }
+    if (item.type === 'function_call_output') {
+      const part = codexToolResultFromResponseItem(item);
+      if (part) out.push({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_result', content: part.text, tool_use_id: part.toolUseId }] }, uuid: item.call_id || null });
+      return out;
+    }
+  }
+
+  if (typ === 'event_msg') {
+    if (payloadType === 'agent_message_delta' || payloadType === 'agent_message_chunk') {
+      const ev = codexTextDeltaEvent(codexExtractEventText(p));
+      if (ev) out.push(ev);
+    }
+    if (payloadType === 'task_complete' || payloadType === 'turn_complete' || payloadType === 'turn_completed') {
+      out.push({ type: 'result', subtype: 'success', session_id: ctx.sessionId || undefined });
+    }
+    if (payloadType === 'error') out.push({ type: 'error', error: p.message || p.error || 'Codex 执行失败' });
+    return out;
+  }
+
+  if (/delta/i.test(String(typ || payloadType || ''))) {
+    const ev = codexTextDeltaEvent(codexExtractEventText(p));
+    if (ev) out.push(ev);
+  }
+  if (typ === 'result' || payloadType === 'result') {
+    out.push({ type: 'result', subtype: p.subtype || 'success', session_id: ctx.sessionId || sid || undefined });
+  }
+  if (typ === 'error' || payloadType === 'error') {
+    out.push({ type: 'error', error: p.message || p.error || 'Codex 执行失败' });
+  }
+  return out;
+}
+
+async function codexLatestSessionIdForCwd(cwd, sinceMs) {
+  const sessions = await codexListSessions(cwd);
+  const hit = sessions.find((s) => !sinceMs || s.updatedAt >= sinceMs - 120000);
+  return hit ? hit.sessionId : null;
+}
+
+function codexWarm(_sender, { cwd, lane, sessionId, permMode, model }) {
+  const key = runKey(cwd, lane);
+  const prev = codexSessions.get(key);
+  if (!prev) codexSessions.set(key, { child: null, ac: null, sessionId: sessionId || null, model: model || null, permMode: permMode || 'default', touched: Date.now() });
+  else { if (sessionId !== undefined) prev.sessionId = sessionId || null; if (model !== undefined) prev.model = model || null; if (permMode) prev.permMode = permMode; prev.touched = Date.now(); }
+  return { ok: true };
+}
+
+function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model }) {
+  const bin = resolveBin('codex');
+  const key = runKey(cwd, lane);
+  if (!bin) { sender.send('localAgent:event', { cwd: key, ev: { type: 'error', error: '未找到 codex，请确认已安装 Codex CLI' } }); return { ok: false }; }
+  const prev = codexSessions.get(key);
+  if (prev && prev.child) { try { if (prev.ac) prev.ac.abort(); } catch { /* */ } try { prev.child.kill('SIGTERM'); } catch { /* */ } }
+
+  const ac = new AbortController();
+  const resumeId = (prev && prev.sessionId) || sessionId || null;
+  const wantModel = model || (prev && prev.model) || null;
+  const wantPerm = permMode || (prev && prev.permMode) || 'default';
+  const startedAt = Date.now();
+  const args = codexSpawnArgs({ cwd, prompt, sessionId: resumeId, model: wantModel, permMode: wantPerm });
+
+  const emit = (ev) => {
+    if (sender.isDestroyed()) { try { ac.abort(); } catch { /* */ } return false; }
+    try { sender.send('localAgent:event', { cwd: key, ev }); return true; }
+    catch { try { ac.abort(); } catch { /* */ } return false; }
+  };
+
+  let child;
+  try {
+    child = spawn(bin, args, { cwd, env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) {
+    emit({ type: 'error', error: String(e && e.message || e) });
+    return { ok: false };
+  }
+
+  const session = { child, ac, sessionId: resumeId, model: wantModel, permMode: wantPerm, touched: Date.now() };
+  codexSessions.set(key, session);
+  ac.signal.addEventListener('abort', () => { try { child.kill('SIGTERM'); } catch { /* */ } });
+  if (resumeId) emit({ type: 'system', subtype: 'init', session_id: resumeId });
+
+  const ctx = { sessionId: resumeId, sawAssistant: false };
+  let sawResult = false;
+  let stderrBuf = '';
+  let buf = '';
+  child.stdout.on('data', (d) => {
+    buf += d.toString('utf8');
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+      if (!line.trim()) continue;
+      session.touched = Date.now();
+      let o;
+      try { o = JSON.parse(line); } catch { continue; }
+      for (const ev of codexNormalizeStdoutEvent(o, ctx)) {
+        if (ev.type === 'result') sawResult = true;
+        if (ev.session_id) session.sessionId = ev.session_id;
+        if (!emit(ev)) return;
+      }
+      if (ctx.sessionId) session.sessionId = ctx.sessionId;
+    }
+  });
+  child.stderr.on('data', (d) => { stderrBuf += d.toString('utf8'); });
+  child.on('error', (e) => { emit({ type: 'error', error: String(e && e.message || e) }); emit({ type: 'session_closed' }); });
+  child.on('close', (code) => {
+    session.child = null;
+    (async () => {
+      if (!session.sessionId) {
+        const sid = await codexLatestSessionIdForCwd(cwd, startedAt).catch(() => null);
+        if (sid) { session.sessionId = sid; emit({ type: 'system', subtype: 'init', session_id: sid }); }
+      }
+      if (!sawResult) {
+        if (code === 0 || ctx.sawAssistant) {
+          emit({ type: 'result', subtype: 'success', session_id: session.sessionId || undefined });
+        } else {
+          const msg = stderrBuf.trim() || (code ? `codex 退出码 ${code}` : 'Codex 会话结束');
+          emit({ type: 'error', error: msg });
+          emit({ type: 'session_closed' });
+        }
+      }
+    })();
+  });
+
   return { ok: true };
 }
 
@@ -1289,6 +1780,7 @@ function registerLocalAgent(ipcMain, dialog) {
     return out;
   });
   ipcMain.handle('localAgent:listSessions', (_e, { provider, cwd }) => listSessions(provider, cwd));
+  ipcMain.handle('localAgent:scanCodexSessions', () => codexListAllSessions());
   ipcMain.handle('localAgent:readSession', (_e, { provider, cwd, sessionId }) => readSession(provider, cwd, sessionId));
   ipcMain.handle('localAgent:deleteSession', (_e, { provider, cwd, sessionId }) => deleteSession(provider, cwd, sessionId));
   ipcMain.handle('localAgent:listCommands', (_e, { provider, cwd }) => listCommands(provider, cwd));
@@ -1309,5 +1801,5 @@ module.exports = {
   registerLocalAgent,
   killAllSessions,   // main.cjs 在渲染进程重载/崩溃/退出时调，回收孤儿 claude 子进程
   // 仅供本地冒烟测试，不在渲染进程使用。
-  _internals: { detect, findProjectDir, listSessions, readSession, listCommands, deleteSession },
+  _internals: { detect, findProjectDir, listSessions, readSession, listCommands, deleteSession, codexListAllSessions },
 };

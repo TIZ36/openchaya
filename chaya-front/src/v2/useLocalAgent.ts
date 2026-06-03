@@ -12,7 +12,7 @@ import {
   localAgent, loadProjects, addProject as addProjectStore, removeProject as removeProjectStore,
   loadTabsState, saveTabsState, loadPermBySession, savePermBySession, loadModelBySession, saveModelBySession,
   loadMcpBySession, saveMcpBySession, permModesFor, defaultPermMode,
-  loadExpandedProjects, saveExpandedProjects,
+  loadExpandedProjects, saveExpandedProjects, loadCodexImportedSessions,
   type DetectedProvider, type ProviderId, type SessionSummary, type TranscriptMessage, type LocalProject,
   type PermMode, type SlashCommand, type PermissionRequest, type PermissionDecision, type QuestionRequest,
   type TabGroup, type ModelInfo, type McpStatus, type Attachment,
@@ -176,6 +176,17 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   const [modelOptions, setModelOptions] = useState<ModelInfo[]>([]);   // 可选模型（SDK supportedModels）
 
   const [projects, setProjects] = useState<LocalProject[]>(() => loadProjects());
+  useEffect(() => {
+    const onProjectsChanged = () => setProjects(loadProjects());
+    window.addEventListener('chaya:localAgentProjectsChanged', onProjectsChanged);
+    return () => window.removeEventListener('chaya:localAgentProjectsChanged', onProjectsChanged);
+  }, []);
+  const [codexImportsTick, setCodexImportsTick] = useState(0);
+  useEffect(() => {
+    const onImportsChanged = () => setCodexImportsTick((n) => n + 1);
+    window.addEventListener('chaya:localAgentCodexImportsChanged', onImportsChanged);
+    return () => window.removeEventListener('chaya:localAgentCodexImportsChanged', onImportsChanged);
+  }, []);
   // 展开的项目目录：从持久化恢复（下次启动不用重新点开）；变化即回存。
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(loadExpandedProjects()));
   useEffect(() => { saveExpandedProjects([...expanded]); }, [expanded]);
@@ -398,28 +409,36 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   const loadSessionsFor = useCallback(async (path: string) => {
     const dir = realDir(path);
     setSessionsByPath((m) => ({ ...m, [dir]: 'loading' }));
-    const ss = await localAgent.listSessions(provider, dir);
+    let ss = await localAgent.listSessions(provider, dir);
+    if (provider === 'codex') {
+      const imported = loadCodexImportedSessions()[dir];
+      if (imported && imported.length) {
+        const allow = new Set(imported);
+        ss = ss.filter((s) => allow.has(s.sessionId));
+      }
+    }
     setSessionsByPath((m) => ({ ...m, [dir]: ss }));
-  }, [provider]);
+  }, [provider, codexImportsTick]);
 
   const toggleProject = useCallback((p: LocalProject) => {
     setExpanded((cur) => {
       const next = new Set(cur);
       if (next.has(p.id)) next.delete(p.id);
-      else { next.add(p.id); if (!sessionsByPath[p.path]) void loadSessionsFor(p.path); }
+      else { next.add(p.id); void loadSessionsFor(p.path); }
       return next;
     });
-  }, [sessionsByPath, loadSessionsFor]);
+  }, [loadSessionsFor]);
 
-  // 恢复展开记忆后，为已展开但尚未载入的项目补拉一次会话列表（否则展开了却空着）。
-  // 只在进入 CLI / 项目列表变化时对账；不依赖 sessionsByPath 以免 loadSessionsFor 自激发回环。
+  // 恢复展开记忆后拉取会话列表。sessionsByPath 只按路径缓存，不按 provider 缓存；
+  // 因此切换 Claude/Cursor/Codex 时必须重新拉，否则会沿用上一个 provider 的空列表。
+  // 不依赖 sessionsByPath，以免 loadSessionsFor 自激发回环。
   useEffect(() => {
     if (!active || !projects.length || !expanded.size) return;
     for (const p of projects) {
-      if (expanded.has(p.id) && !sessionsByPath[p.path]) void loadSessionsFor(p.path);
+      if (expanded.has(p.id)) void loadSessionsFor(p.path);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, projects, provider]);
+  }, [active, projects, provider, codexImportsTick]);
 
   const expandProject = useCallback((cwd: string) => {
     const p = projects.find((x) => x.path === realDir(cwd));

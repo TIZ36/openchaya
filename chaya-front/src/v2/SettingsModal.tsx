@@ -15,7 +15,10 @@ import type { ClientSettings, AppearanceMode, ColorTheme, GlassZone } from '../c
 import type { FontId } from '../components/SettingsPage';
 import { type TypeSpeed } from './typewriter';
 import { getBackendUrl } from '../utils/backendUrl';
-import { isLocalAgentAvailable } from './services/localAgent';
+import {
+  isLocalAgentAvailable, localAgent, addProject as addLocalProject, addCodexImportedSessions,
+  basename, type CodexSessionSummary,
+} from './services/localAgent';
 import {
   IconUser, IconGear, IconModel, IconPlug, IconCloud, IconTerminal, IconAppearance,
 } from './icons';
@@ -487,8 +490,8 @@ interface LAProvider {
 const LA_PROVIDERS: LAProvider[] = [
   { id: 'claude', label: 'Claude Code', vendor: 'Anthropic',     cli: 'claude',       live: true,  installUrl: 'https://docs.anthropic.com/claude/docs/claude-code' },
   { id: 'cursor', label: 'Cursor',       vendor: 'Cursor.com',   cli: 'cursor-agent', live: true,  installUrl: 'https://docs.cursor.com/cli' },
-  { id: 'codex',  label: 'Codex',        vendor: 'OpenAI',       cli: 'codex',        live: false, installUrl: 'https://platform.openai.com/docs/codex' },
-  { id: 'gemini', label: 'Gemini',       vendor: 'Google',       cli: 'gemini',       live: false, installUrl: 'https://github.com/google-gemini/gemini-cli' },
+  { id: 'codex',  label: 'Codex',        vendor: 'OpenAI',       cli: 'codex',        live: true,  installUrl: 'https://platform.openai.com/docs/codex' },
+  { id: 'gemini', label: 'Gemini',       vendor: 'Google',       cli: 'gemini',       live: true,  installUrl: 'https://github.com/google-gemini/gemini-cli' },
 ];
 
 /** Cursor headless 模式需要 API Key（cursor-agent 的交互式登录态不被 -p 模式认）。
@@ -533,6 +536,146 @@ const CursorKeyRow: React.FC = () => {
         {msg && <span className="v2-pill ok">{msg}</span>}
       </div>
     </Row>
+  );
+};
+
+const CodexImportRow: React.FC = () => {
+  const { t: tr } = useI18n();
+  const [sessions, setSessions] = useState<CodexSessionSummary[] | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [activeCwd, setActiveCwd] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [scanning, setScanning] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const scan = async () => {
+    setScanning(true); setMsg(null);
+    try {
+      const rows = await localAgent.scanCodexSessions();
+      setSessions(rows);
+      setSelected(new Set());
+      setActiveCwd(rows[0]?.cwd || null);
+      setMsg(rows.length ? tr('settings.localagent.codexScanFound', { n: rows.length }) : tr('settings.localagent.codexScanEmpty'));
+    } catch (e: any) {
+      setMsg(e?.message || tr('settings.localagent.codexScanFailed'));
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const toggle = (id: string) => {
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const rows = sessions || [];
+  const projectGroups = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const map = new Map<string, { cwd: string; count: number; latest: number; title: string | null }>();
+    for (const s of rows) {
+      if (q) {
+        const hay = `${s.cwd} ${s.title || ''} ${s.preview || ''}`.toLowerCase();
+        if (!hay.includes(q)) continue;
+      }
+      const prev = map.get(s.cwd);
+      if (!prev) map.set(s.cwd, { cwd: s.cwd, count: 1, latest: s.updatedAt || 0, title: s.title || s.preview || null });
+      else {
+        prev.count += 1;
+        if ((s.updatedAt || 0) > prev.latest) { prev.latest = s.updatedAt || 0; prev.title = s.title || s.preview || prev.title; }
+      }
+    }
+    return [...map.values()].sort((a, b) => b.latest - a.latest);
+  }, [rows, query]);
+
+  const activeSessions = useMemo(() => rows.filter((s) => s.cwd === activeCwd), [rows, activeCwd]);
+  const selectedInProject = activeSessions.filter((s) => selected.has(s.sessionId));
+
+  useEffect(() => {
+    if (!activeCwd || !projectGroups.some((p) => p.cwd === activeCwd)) setActiveCwd(projectGroups[0]?.cwd || null);
+  }, [projectGroups, activeCwd]);
+
+  const importRows = (picked: CodexSessionSummary[]) => {
+    if (!picked.length) return;
+    const byCwd = new Map<string, string[]>();
+    for (const s of picked) {
+      if (!s.cwd || !s.sessionId) continue;
+      if (!byCwd.has(s.cwd)) byCwd.set(s.cwd, []);
+      byCwd.get(s.cwd)!.push(s.sessionId);
+    }
+    for (const [cwd, ids] of byCwd) {
+      addLocalProject(cwd);
+      addCodexImportedSessions(cwd, ids);
+    }
+    setMsg(tr('settings.localagent.codexImported', { sessions: picked.length, projects: byCwd.size }));
+  };
+
+  return (
+    <div className="v2-codex-import">
+      <div className="v2-codex-import-head">
+        <div className="v2-codex-import-copy">
+          <div className="v2-codex-import-title">{tr('settings.localagent.codexImport')}</div>
+          <div className="v2-codex-import-sub">{tr('settings.localagent.codexImportSub')}</div>
+        </div>
+        {msg && <span className="v2-pill ok">{msg}</span>}
+      </div>
+      <div className="v2-codex-import-toolbar">
+        <button className="v2-set-btn" disabled={scanning} onClick={() => void scan()}>{scanning ? tr('settings.localagent.codexScanning') : tr('settings.localagent.codexScan')}</button>
+        <input
+          className="v2-set-select v2-codex-import-search"
+          placeholder={tr('settings.localagent.codexSearch')}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button className="v2-set-btn primary" disabled={!selected.size} onClick={() => importRows(rows.filter((s) => selected.has(s.sessionId)))}>{tr('settings.localagent.codexImportSelected', { n: selected.size })}</button>
+      </div>
+      {rows.length > 0 && (
+        <div className="v2-codex-import-grid">
+          <div className="v2-codex-projects">
+            {projectGroups.map((p) => {
+              const on = p.cwd === activeCwd;
+              return (
+                <button key={p.cwd} className={`v2-codex-project${on ? ' on' : ''}`} onClick={() => setActiveCwd(p.cwd)}>
+                  <span className="v2-codex-project-name">{basename(p.cwd)}</span>
+                  <span className="v2-codex-project-path">{p.count} · {p.cwd}</span>
+                </button>
+              );
+            })}
+            {!projectGroups.length && <div className="v2-codex-empty">{tr('settings.localagent.codexNoProject')}</div>}
+          </div>
+          <div className="v2-codex-sessions">
+            <div className="v2-codex-sessions-head">
+              <div className="v2-codex-active-project">
+                <div className="v2-codex-active-name">{activeCwd ? basename(activeCwd) : tr('settings.localagent.codexPickProject')}</div>
+                <div className="v2-codex-active-path">{activeCwd || ''}</div>
+              </div>
+              <div className="v2-codex-import-actions">
+                <button className="v2-set-btn" disabled={!activeSessions.length} onClick={() => importRows(activeSessions)}>{tr('settings.localagent.codexImportProject', { n: activeSessions.length })}</button>
+                <button className="v2-set-btn primary" disabled={!selectedInProject.length} onClick={() => importRows(selectedInProject)}>{tr('settings.localagent.codexImportSelected', { n: selectedInProject.length })}</button>
+              </div>
+            </div>
+            <div className="v2-codex-session-list">
+              {activeSessions.map((s) => {
+                const on = selected.has(s.sessionId);
+                const title = s.title || s.preview || tr('local.untitledSession');
+                return (
+                  <label key={s.sessionId} className="v2-codex-session">
+                    <input type="checkbox" checked={on} onChange={() => toggle(s.sessionId)} />
+                    <span className="v2-codex-session-copy">
+                      <span className="v2-codex-session-title">{title}</span>
+                      <span className="v2-codex-session-meta">{s.turns || 0} turns · {s.updatedAt ? new Date(s.updatedAt).toLocaleString() : s.sessionId}</span>
+                    </span>
+                  </label>
+                );
+              })}
+              {!activeSessions.length && <div className="v2-codex-empty">{tr('settings.localagent.codexNoSessions')}</div>}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 };
 
@@ -594,9 +737,12 @@ const LAProviderCard: React.FC<{
         )}
         {p.id === 'cursor' && <CursorKeyRow />}
         {p.id === 'codex' && (
-          <Row label={tr('settings.localagent.status')} sub={tr('settings.localagent.codexSub')}>
-            <a className="v2-set-btn" href={p.installUrl} target="_blank" rel="noreferrer">{tr('settings.localagent.learnMore')}</a>
-          </Row>
+          <>
+            <Row label={tr('settings.localagent.status')} sub={tr('settings.localagent.codexSub')}>
+              <a className="v2-set-btn" href={p.installUrl} target="_blank" rel="noreferrer">{tr('settings.localagent.learnMore')}</a>
+            </Row>
+            <CodexImportRow />
+          </>
         )}
         {p.id === 'gemini' && (
           <Row label={tr('settings.localagent.status')} sub={tr('settings.localagent.geminiSub')}>
