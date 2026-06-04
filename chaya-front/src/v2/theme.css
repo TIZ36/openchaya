@@ -5308,6 +5308,206 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .v2-la-prov-body .v2-set-row { padding: 11px 0; border-bottom: 0; }
 .chaya-v2 .v2-la-prov.is-soon .v2-la-prov-body { background: var(--c-hover-soft); }
 
+.chaya-v2 .v2-codex-import {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  padding: 12px 0 10px;
+}
+
+.chaya-v2 .v2-codex-import-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.chaya-v2 .v2-codex-import-copy { min-width: 0; }
+.chaya-v2 .v2-codex-import-title { font-size: 13.5px; font-weight: 600; color: var(--c-ink); }
+.chaya-v2 .v2-codex-import-sub {
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--c-ink-4);
+}
+
+.chaya-v2 .v2-codex-import-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.chaya-v2 .v2-codex-import .v2-set-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.chaya-v2 .v2-codex-import-search {
+  flex: 1 1 240px;
+  min-width: 180px;
+  max-width: 420px;
+}
+
+.chaya-v2 .v2-codex-import-grid {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.38fr) minmax(360px, 1fr);
+  min-height: 320px;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--c-rule);
+  border-radius: var(--c-radius-lg);
+  background: var(--c-bg);
+}
+
+.chaya-v2 .v2-codex-projects {
+  min-width: 0;
+  max-height: 380px;
+  overflow: auto;
+  border-right: 1px solid var(--c-rule);
+  background: var(--c-surface);
+}
+
+.chaya-v2 .v2-codex-project {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  padding: 11px 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 140ms var(--c-ease), box-shadow 140ms var(--c-ease);
+}
+
+.chaya-v2 .v2-codex-project:hover { background: var(--c-hover-soft); }
+.chaya-v2 .v2-codex-project.on {
+  background: var(--c-selected);
+  box-shadow: inset 2px 0 0 0 var(--c-accent-strong);
+}
+
+.chaya-v2 .v2-codex-project-name,
+.chaya-v2 .v2-codex-project-path,
+.chaya-v2 .v2-codex-active-name,
+.chaya-v2 .v2-codex-active-path,
+.chaya-v2 .v2-codex-session-title,
+.chaya-v2 .v2-codex-session-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chaya-v2 .v2-codex-project-name {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--c-ink);
+}
+
+.chaya-v2 .v2-codex-project-path {
+  font-size: 11.5px;
+  color: var(--c-ink-4);
+}
+
+.chaya-v2 .v2-codex-sessions {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-width: 0;
+}
+
+.chaya-v2 .v2-codex-sessions-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--c-rule);
+}
+
+.chaya-v2 .v2-codex-active-project { min-width: 0; }
+.chaya-v2 .v2-codex-active-name { font-size: 13.5px; font-weight: 650; color: var(--c-ink); }
+.chaya-v2 .v2-codex-active-path {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--c-ink-4);
+}
+
+.chaya-v2 .v2-codex-import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  min-width: max-content;
+}
+
+.chaya-v2 .v2-codex-session-list {
+  min-width: 0;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.chaya-v2 .v2-codex-session {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--c-rule);
+  cursor: pointer;
+}
+
+.chaya-v2 .v2-codex-session:last-child { border-bottom: 0; }
+.chaya-v2 .v2-codex-session:hover { background: var(--c-hover-soft); }
+.chaya-v2 .v2-codex-session input { width: 16px; height: 16px; accent-color: var(--c-accent); }
+.chaya-v2 .v2-codex-session-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.chaya-v2 .v2-codex-session-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-ink);
+}
+
+.chaya-v2 .v2-codex-session-meta {
+  font-size: 11.5px;
+  color: var(--c-ink-4);
+}
+
+.chaya-v2 .v2-codex-empty {
+  padding: 14px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--c-ink-4);
+}
+
+@media (max-width: 860px) {
+  .chaya-v2 .v2-codex-import-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .chaya-v2 .v2-codex-projects {
+    max-height: 220px;
+    border-right: 0;
+    border-bottom: 1px solid var(--c-rule);
+  }
+
+  .chaya-v2 .v2-codex-sessions-head {
+    grid-template-columns: 1fr;
+  }
+
+  .chaya-v2 .v2-codex-import-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+}
+
 /* ===========================================================================
    Frosted glass / vibrancy — per-zone toggles + global intensity.
    Root carries:  data-glass="<zone> <zone> …"   e.g. "composer menu modal"

@@ -1,14 +1,14 @@
 /**
  * 本地 Agent 客户端 —— renderer 侧对 Electron 桥的类型化封装。
  *
- * 纯本地功能：驱动用户机器上已装的 CLI Agent（Claude Code 已打通，
- * codex / gemini 探测到但暂不可对话）。非 Electron 环境下整组 API 不可用，
+ * 纯本地功能：驱动用户机器上已装的 CLI Agent（Claude Code / Cursor /
+ * Codex / Gemini）。非 Electron 环境下整组 API 不可用，
  * UI 据 `isLocalAgentAvailable()` 隐藏入口。
  */
 
 export type ProviderId = 'claude' | 'cursor' | 'codex' | 'gemini';
 
-/** 权限模式：claude 用 default/plan/acceptEdits/bypassPermissions（CLI --permission-mode）；
+/** 权限模式：claude/codex/gemini 用 default/plan/acceptEdits/bypassPermissions；
  *  cursor 用 plan/ask/force（cursor-agent 没有逐工具暂停，只有档位）。 */
 export type PermMode = 'default' | 'plan' | 'acceptEdits' | 'bypassPermissions' | 'ask' | 'force';
 export const PERM_META: Record<PermMode, { label: string; tone: string; hint: string }> = {
@@ -78,6 +78,11 @@ export interface SessionSummary {
   updatedAt: number;    // epoch ms
 }
 
+export interface CodexSessionSummary extends SessionSummary {
+  provider: 'codex';
+  cwd: string;
+}
+
 export type MsgPart =
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
@@ -137,6 +142,7 @@ interface LocalAgentBridge {
   pickFolder(): Promise<string | null>;
   pickFiles(): Promise<Array<{ kind: 'image' | 'file'; name: string; path: string; mime: string | null; size: number; dataUrl?: string }>>;
   listSessions(provider: ProviderId, cwd: string): Promise<SessionSummary[]>;
+  scanCodexSessions(): Promise<CodexSessionSummary[]>;
   readSession(provider: ProviderId, cwd: string, sessionId: string): Promise<{ messages: TranscriptMessage[] }>;
   deleteSession(provider: ProviderId, cwd: string, sessionId: string): Promise<{ ok: boolean; trashed?: boolean; error?: string }>;
   listCommands(provider: ProviderId, cwd: string): Promise<SlashCommand[]>;
@@ -170,6 +176,8 @@ export const localAgent = {
   pickFiles: () => bridge()?.pickFiles() ?? Promise.resolve([]),
   listSessions: (provider: ProviderId, cwd: string) =>
     bridge()?.listSessions(provider, cwd) ?? Promise.resolve([] as SessionSummary[]),
+  scanCodexSessions: () =>
+    bridge()?.scanCodexSessions() ?? Promise.resolve([] as CodexSessionSummary[]),
   readSession: (provider: ProviderId, cwd: string, sessionId: string) =>
     bridge()?.readSession(provider, cwd, sessionId) ?? Promise.resolve({ messages: [] as TranscriptMessage[] }),
   deleteSession: (provider: ProviderId, cwd: string, sessionId: string) =>
@@ -227,6 +235,7 @@ export function loadProjects(): LocalProject[] {
 
 function saveProjects(list: LocalProject[]): void {
   try { localStorage.setItem(PROJECTS_KEY, JSON.stringify(list)); } catch { /* quota */ }
+  try { window.dispatchEvent(new CustomEvent('chaya:localAgentProjectsChanged')); } catch { /* non-browser */ }
 }
 
 export function addProject(path: string): LocalProject[] {
@@ -235,6 +244,29 @@ export function addProject(path: string): LocalProject[] {
   list.unshift({ id: `p-${Date.now()}`, path, name: basename(path), addedAt: Date.now() });
   saveProjects(list);
   return list;
+}
+
+const CODEX_IMPORTS_KEY = 'chaya.localAgent.codexImportedSessions';
+export type CodexImportsByCwd = Record<string, string[]>;
+
+export function loadCodexImportedSessions(): CodexImportsByCwd {
+  try {
+    const raw = localStorage.getItem(CODEX_IMPORTS_KEY);
+    const o = raw ? JSON.parse(raw) : null;
+    return (o && typeof o === 'object') ? o : {};
+  } catch {
+    return {};
+  }
+}
+
+export function addCodexImportedSessions(cwd: string, sessionIds: string[]): CodexImportsByCwd {
+  const map = loadCodexImportedSessions();
+  const cur = new Set(map[cwd] || []);
+  sessionIds.forEach((id) => { if (id) cur.add(id); });
+  if (cur.size) map[cwd] = [...cur];
+  try { localStorage.setItem(CODEX_IMPORTS_KEY, JSON.stringify(map)); } catch { /* quota */ }
+  try { window.dispatchEvent(new CustomEvent('chaya:localAgentCodexImportsChanged')); } catch { /* non-browser */ }
+  return map;
 }
 
 export function removeProject(id: string): LocalProject[] {
