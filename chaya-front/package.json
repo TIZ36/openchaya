@@ -54,6 +54,8 @@
     "directories": {
       "output": "release"
     },
+    "afterPack": "build/afterPack.cjs",
+    "afterSign": "build/notarize.cjs",
     "files": [
       "dist/**/*",
       "electron/**/*",
@@ -62,6 +64,10 @@
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "build/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "target": [
         "dmg",
         "zip"

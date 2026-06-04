@@ -49,7 +49,7 @@ import {
   IconPlus, IconSend, IconSidebar,
   IconAspect, IconModel,
   IconEdit, IconRevert, IconQuote,
-  IconCopy, IconCheck, IconDownload,
+  IconCopy, IconCheck, IconDownload, IconTrash,
 } from './icons';
 import { getLLMConfigs, type LLMConfigFromDB } from '../services/llmApi';
 import { updateSessionLLMConfig, getSessionMessages } from '../services/chat';
@@ -57,7 +57,7 @@ import { updateRoleProfile } from '../services/roleApi';
 import { mcpApi, type MCPServer } from '../services/integrationsApi';
 import { LocalAgentTree, LocalAgentConversation, PROVIDER_LABELS, ForeignPaneContext } from './LocalAgentView';
 import { useLocalAgent } from './useLocalAgent';
-import { isLocalAgentAvailable } from './services/localAgent';
+import { isLocalAgentAvailable, type ProviderId } from './services/localAgent';
 import { TopTabs } from './TopTabs';
 import {
   useTopTabs, localTabId, chatTabId, GALLERY_TAB_ID, KB_TAB_ID,
@@ -400,17 +400,19 @@ const ShellInner: React.FC = () => {
 
   // Color theme + light/dark appearance → attributes on the .chaya-v2 root.
   // 'system' follows the OS via matchMedia and live-updates.
-  const appearance = settings.appearance ?? 'system';
+  const appearance = settings.appearance ?? 'dark';   // 默认(含未登录) = 深色
   // 'warm' / 'linear' were retired from the theme picker — silently coerce any
   // persisted value back to the minimalist default so users on a stale setting
   // don't get a CSS variant that's no longer maintained or selectable in UI.
   // 默认主题 = anthropic（象牙陶土）。'default'（极简）已下线 —— 持久化在 localStorage
    // 里的旧值统一规整回 anthropic，确保用户不会停在已不再维护的 CSS 变体。
-  const rawTheme = settings.theme ?? 'anthropic';
+  const rawTheme = settings.theme ?? 'codex';   // 默认主题 = Pure
   const theme: typeof rawTheme = (
     (rawTheme as string) === 'warm' ||
     (rawTheme as string) === 'linear' ||
     (rawTheme as string) === 'midnight' ||
+    (rawTheme as string) === 'cursor' ||
+    (rawTheme as string) === 'xcode' ||
     (rawTheme as string) === 'default'
   ) ? 'anthropic' : rawTheme;
   const [systemDark, setSystemDark] = useState(
@@ -439,16 +441,18 @@ const ShellInner: React.FC = () => {
   const updateSettings = useCallback((patch: Partial<ClientSettings>) => {
     setSettings((p) => ({ ...p, ...patch }));
   }, []);
-  // Click the CLI badge to cycle provider: claude → cursor → codex → gemini → claude.
-  // provider is settings-driven and detect() already returns all of them, so
-  // switching just re-points `current` — no re-detection needed.
+  // Click the CLI badge to cycle provider — only through INSTALLED + live ones
+  // (so e.g. codex, a detect-only stub, isn't a dead stop, and gemini is reachable
+  // once its CLI is installed). Falls back to claude before detection lands.
   const cycleLocalAgentProvider = useCallback(() => {
-    const order = ['claude', 'cursor', 'codex', 'gemini'] as const;
+    const avail = la.providers.filter((p) => p.installed && p.live).map((p) => p.id);
+    const order: ProviderId[] = avail.length ? avail : ['claude'];
     setSettings((p) => {
       const cur = p.localAgentProvider ?? 'claude';
-      return { ...p, localAgentProvider: order[(order.indexOf(cur) + 1) % order.length] };
+      const i = order.indexOf(cur);
+      return { ...p, localAgentProvider: order[(i + 1) % order.length] };
     });
-  }, []);
+  }, [la.providers]);
   const handleLogout = useCallback(() => {
     api.clearToken();
     window.location.reload();
@@ -3453,22 +3457,47 @@ const StylePanel: React.FC<{
         <span>{tr('shell.style.head')}</span>
         {custom.length > 0 && <span style={{ color: 'var(--c-ink-4)' }}>{tr('shell.style.savedCount', { n: custom.length })}</span>}
       </div>
-      <div className="v2-options">
-        <div className={`v2-opt${!activeId && !trimmed ? ' active' : ''}`} onClick={() => setStyle('')}>
-          <span>{tr('shell.create.none')}</span><small>NONE</small>
-        </div>
-        {all.map((s) => (
-          <div
-            key={s.id}
-            className={`v2-opt${activeId === s.id ? ' active' : ''}`}
-            onClick={() => setStyle(s.suffix)}
-            title={s.suffix}
-          >
-            <span>{s.custom ? s.zh : tr('misc.style.' + s.id)}</span>
-            {s.custom ? <span className="v2-opt-custom">{tr('shell.style.customTag')}</span> : (s.en && <small>{s.en}</small>)}
-            <span className="v2-opt-del" title={tr('common.delete')} onClick={(e) => onDelete(s.id, !!s.custom, e)}>✕</span>
+      <div className="v2-style-grid">
+        <div
+          className={`v2-style-card${!activeId && !trimmed ? ' active' : ''}`}
+          onClick={() => setStyle('')}
+        >
+          <div className="v2-style-card-body">
+            <span className="v2-style-card-name">{tr('shell.create.none')}</span>
           </div>
-        ))}
+          <div className="v2-style-card-foot">
+            <span className="v2-style-card-tag">NONE</span>
+          </div>
+        </div>
+        {all.map((s) => {
+          const label = s.custom ? s.zh : tr('misc.style.' + s.id);
+          const tag = s.custom ? tr('shell.style.customTag') : (s.en || '');
+          return (
+            <div
+              key={s.id}
+              className={`v2-style-card${activeId === s.id ? ' active' : ''}${s.custom ? ' is-custom' : ''}`}
+              onClick={() => setStyle(s.suffix)}
+              title={s.suffix}
+            >
+              <div className="v2-style-card-body">
+                <span className="v2-style-card-name">{label}</span>
+              </div>
+              <div className="v2-style-card-foot">
+                {tag && <span className={`v2-style-card-tag${s.custom ? ' custom' : ''}`}>{tag}</span>}
+                <div className="v2-style-card-acts">
+                  <StyleCopyBtn text={s.suffix} />
+                  <button
+                    type="button"
+                    className="v2-style-card-act v2-style-card-del"
+                    title={tr('common.delete')}
+                    aria-label={tr('common.delete')}
+                    onClick={(e) => onDelete(s.id, !!s.custom, e)}
+                  ><IconTrash /></button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
       <CustomStyleEditor
         initialSuffix={activeId ? '' : cfg.style}
@@ -3476,6 +3505,32 @@ const StylePanel: React.FC<{
         onApply={applyNow}
       />
     </div>
+  );
+};
+
+// Tiny icon-only button living inside a style option row — copies the actual
+// suffix content (the part that's hidden behind a name/tag for custom styles).
+// Stops propagation so it doesn't also trigger the row's "select this style".
+const StyleCopyBtn: React.FC<{ text: string }> = ({ text }) => {
+  const { t: tr } = useI18n();
+  const [copied, setCopied] = useState(false);
+  if (!text.trim()) return null;
+  const onCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try { await navigator.clipboard.writeText(text); } catch { /* ignore */ }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <button
+      type="button"
+      className={`v2-style-card-act v2-style-card-copy${copied ? ' done' : ''}`}
+      onClick={onCopy}
+      title={copied ? tr('shell.spec.copied') : tr('shell.style.copyTip')}
+      aria-label={tr('shell.style.copyTip')}
+    >
+      {copied ? <IconCheck /> : <IconCopy />}
+    </button>
   );
 };
 

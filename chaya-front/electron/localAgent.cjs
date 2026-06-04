@@ -20,6 +20,8 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const cursorDriver = require('./cursorDriver.cjs');
+const geminiDriver = require('./geminiDriver.cjs');       // 历史落盘读取(mapTool 复用)
+const geminiAcp = require('./geminiAcpDriver.cjs');       // 常驻 ACP 实时驱动
 
 /* GUI 启动的 Electron 在 macOS 下 PATH 很贫瘠，CLI 往往找不到。
  * 补上常见安装目录，并据此解析二进制全路径。 */
@@ -110,7 +112,7 @@ const PROVIDERS = {
   claude: { id: 'claude', label: 'Claude Code', bin: 'claude', live: true },
   cursor: { id: 'cursor', label: 'Cursor', bin: 'cursor-agent', live: true, needsApiKey: true },
   codex: { id: 'codex', label: 'Codex', bin: 'codex', live: false },
-  gemini: { id: 'gemini', label: 'Gemini', bin: 'gemini', live: false },
+  gemini: { id: 'gemini', label: 'Gemini', bin: 'gemini', live: true },
 };
 
 /** 探测已安装的本地 agent 及版本。 */
@@ -206,6 +208,7 @@ async function findProjectDir(cwd) {
 /** 列出某 cwd 下的 Claude 会话（轻量：只取标题/首条提示/时间）。 */
 async function listSessions(provider, cwd) {
   if (provider === 'cursor') return cursorListSessions(cwd);
+  if (provider === 'gemini') return geminiListSessions(cwd);
   // Only Claude has session-history scanning wired up. codex/gemini are
   // detection-only stubs for now, so return empty rather than leaking Claude's
   // sessions into another provider's tree. (Their dirs get added when run is.)
@@ -261,6 +264,7 @@ async function peekSession(jsonlPath) {
 /** 完整读取一个会话，归一化成可渲染的消息列表。 */
 async function readSession(provider, cwd, sessionId) {
   if (provider === 'cursor') return cursorReadSession(cwd, sessionId);
+  if (provider === 'gemini') return geminiReadSession(cwd, sessionId);
   if ((provider || 'claude') !== 'claude') return { messages: [] };
   const dir = await findProjectDir(cwd);
   if (!dir) return { messages: [] };
@@ -284,6 +288,7 @@ async function readSession(provider, cwd, sessionId) {
  *  安全检查：目标必须落在 ~/.claude/projects 之内，且文件名是合法 sessionId。 */
 async function deleteSession(provider, cwd, sessionId) {
   if (provider === 'cursor') return cursorDeleteSession(cwd, sessionId);
+  if (provider === 'gemini') return geminiDeleteSession(cwd, sessionId);
   if ((provider || 'claude') !== 'claude') return { ok: false, error: 'unsupported provider' };
   if (!sessionId || /[/\\]/.test(sessionId)) return { ok: false, error: 'bad sessionId' };
   const dir = await findProjectDir(cwd);
@@ -643,6 +648,8 @@ function buildClaudeContent(prompt, attachments) {
  *  attachments：拖入/选取的文件 + 粘贴的图片（见上方注入逻辑）。 */
 async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode, model, mcp, apiKey, attachments, lane }) {
   if (provider === 'cursor' && !lane) return cursorSend(sender, { cwd, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, apiKey });
+  // gemini 无 streaming-input/视觉 → 附件按 @路径 文本引用（与 cursor 同）；支持 lane。
+  if (provider === 'gemini') return geminiSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model });
   const key = runKey(cwd, lane);
   let s = sessions.get(key);
   if (!s) s = startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, lane });
@@ -660,6 +667,7 @@ async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode,
  *  等用户真正发送时已是暖的——首 token 从 ~10s 降到 ~2s。已有则不重起。 */
 function sessionWarm(sender, { cwd, provider, sessionId, permMode, model, mcp, apiKey, lane }) {
   if (provider === 'cursor' && !lane) return cursorWarm(sender, { cwd, sessionId, permMode, model, apiKey });
+  if (provider === 'gemini') return geminiWarm(sender, { cwd, lane, sessionId, permMode, model });
   if (sessions.has(runKey(cwd, lane))) return { ok: true };
   const s = startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, lane });
   return { ok: !!s };
@@ -713,6 +721,7 @@ async function sessionReconnectMcp({ cwd, name, lane }) {
 /** 运行中切模型（/model 等价）。会话不存在则忽略（下次发送会以选中的 model 起）。 */
 async function sessionSetModel({ cwd, model, lane }) {
   if (!lane) { const cu = cursorSessions.get(cwd); if (cu) { cu.model = model || null; return { ok: true }; } }
+  { const g = geminiSessions.get(runKey(cwd, lane)); if (g) { g.model = model || null; return { ok: true }; } }
   const s = sessions.get(runKey(cwd, lane));
   if (s?.query && typeof s.query.setModel === 'function') {
     try { await s.query.setModel(model || undefined); } catch { /* */ }
@@ -728,6 +737,7 @@ async function sessionInterrupt({ cwd, lane }) {
     const cu = cursorSessions.get(cwd);
     if (cu) { try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ } return { ok: true }; }
   }
+  { const g = geminiSessions.get(runKey(cwd, lane)); if (g && g.conn) { try { g.conn.notify('session/cancel', { sessionId: g.sessionId }); } catch { /* */ } return { ok: true }; } }
   const s = sessions.get(runKey(cwd, lane));
   if (s?.query) { try { await s.query.interrupt(); } catch { /* ignore */ } return { ok: true }; }
   return { ok: false };
@@ -755,24 +765,31 @@ function sessionClose({ cwd, lane }) {
       return { ok: true };
     }
   }
+  { const gk = runKey(cwd, lane); const g = geminiSessions.get(gk);
+    if (g) { geminiSessions.delete(gk); try { g.conn && g.conn.kill(); } catch { /* */ } return { ok: true }; } }
   return { ok: killSessionByKey(runKey(cwd, lane)) };
 }
 
 /** 全部回收：渲染进程重载/崩溃/退出时调——否则旧会话的 claude 子进程会变孤儿常驻
  *  （实测一天下来累积了 9 条、共 ~500MB、最久 20h+）。幂等。 */
 function killAllSessions() {
-  const n = sessions.size + cursorSessions.size;
+  const n = sessions.size + cursorSessions.size + geminiSessions.size;
   for (const key of [...sessions.keys()]) killSessionByKey(key, '已重置');
   for (const [cwd, cu] of [...cursorSessions]) {
     cursorSessions.delete(cwd);
     try { if (cu.ac) cu.ac.abort(); } catch { /* */ }
     try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ }
   }
-  // Backstop: the claude CLI children (direct children of this main process)
-  // ignore SIGTERM, so abort()/stdin-EOF can leave them resident (observed: 20h+
-  // orphans after renderer reloads). On full teardown SIGKILL every one of ours.
+  for (const [key, g] of [...geminiSessions]) {
+    geminiSessions.delete(key);
+    try { if (g.conn) g.conn.kill(); } catch { /* */ }
+  }
+  // Backstop: CLI children (direct children of this main process) — claude ignores
+  // SIGTERM and can orphan (observed 20h+). On full teardown SIGKILL every one of
+  // ours. "stream-json" matches claude/cursor (--output-format) AND gemini (-o).
   try {
-    require('child_process').execFile('pkill', ['-9', '-P', String(process.pid), '-f', 'output-format stream-json'], () => {});
+    require('child_process').execFile('pkill', ['-9', '-P', String(process.pid), '-f', 'stream-json'], () => {});
+    require('child_process').execFile('pkill', ['-9', '-P', String(process.pid), '-f', 'experimental-acp'], () => {});
   } catch { /* pkill unavailable (non-unix) — graceful close above still applies */ }
   if (n) console.log('[localAgent] killAllSessions · reaped %d resident session(s)', n);
   return n;
@@ -789,11 +806,20 @@ function reapIdleSessions() {
       killSessionByKey(key, '闲置回收');
     }
   }
+  // 常驻 gemini ACP 进程同样闲置回收(下次发送 geminiEnsure 自动重建)。
+  for (const [key, g] of geminiSessions) {
+    if (g.conn && now - (g.touched || 0) > SESSION_IDLE_MS) {
+      console.log('[localAgent] reap idle gemini · %s', key);
+      try { g.conn.kill(); } catch { /* */ }
+      geminiSessions.delete(key);
+    }
+  }
 }
 
 /** 会话进行中切换权限模式（Tab 切档即时生效）。 */
 async function sessionSetPermMode({ cwd, permMode, lane }) {
   if (!lane) { const cu = cursorSessions.get(cwd); if (cu) { cu.permMode = permMode || 'force'; return { ok: true }; } }
+  { const g = geminiSessions.get(runKey(cwd, lane)); if (g) { g.permMode = permMode || 'default'; return { ok: true }; } }
   const mode = PERM_MODES.includes(permMode) ? permMode : 'default';
   const s = sessions.get(runKey(cwd, lane));
   if (s?.query) { try { await s.query.setPermissionMode(mode); } catch { /* */ } return { ok: true }; }
@@ -915,6 +941,205 @@ function cursorWarm(sender, { cwd, sessionId, permMode, model, apiKey }) {
   else { if (apiKey) prev.apiKey = key; if (model !== undefined) prev.model = model || null; if (permMode) prev.permMode = permMode; }
   if (key) fetchCursorModels(bin, key, (ev) => { try { sender.send('localAgent:event', { cwd, ev }); } catch { /* */ } });
   return { ok: true };
+}
+
+/* ------------------------------------------------------------------ *
+ * 实时驱动 Gemini —— 常驻 ACP agent（`gemini --experimental-acp`，JSON-RPC/ndjson）。
+ * 比 stream-json 每回合 spawn 更优：常驻、双向流式、协议自带逐工具权限请求、按 id 续接。
+ * 用 gemini 自身登录态(oauth)，零鉴权代码。文件读写由 agent 委托回我们(fs/* 请求)。
+ * 按 runKey(cwd,lane) 寻址；cwd 统一传 realpath，确保历史落盘 hash 与读取一致。
+ * ------------------------------------------------------------------ */
+const geminiSessions = new Map();   // runKey -> { conn, sessionId, model, permMode, turnCtx, key, emit, _init }
+const GEMINI_MODELS = [
+  { value: 'auto', displayName: 'Auto', description: 'Gemini 自动选择' },
+  { value: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' },
+  { value: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
+];
+
+/** ACP session/request_permission → 复用渲染层既有权限 UI(canUseTool 同款)。
+ *  自动档(bypass/acceptEdits) 直接放行，default 弹给用户。返回 ACP outcome。 */
+function geminiPermission(sess, params) {
+  const options = Array.isArray(params.options) ? params.options : [];
+  const tc = params.toolCall || {};
+  const pick = (...kinds) => { for (const k of kinds) { const o = options.find((x) => x.kind === k); if (o) return o; } return options[0]; };
+  const sel = (o) => ({ outcome: o ? { outcome: 'selected', optionId: o.optionId } : { outcome: 'cancelled' } });
+  const pm = (sess && sess.permMode) || 'default';
+  if (pm === 'bypassPermissions') return Promise.resolve(sel(pick('allow_always', 'allow_once')));
+  if (pm === 'acceptEdits' && tc.kind === 'edit') return Promise.resolve(sel(pick('allow_once', 'allow_always')));
+  return new Promise((resolve) => {
+    const permId = `perm-${Math.random().toString(36).slice(2, 10)}`;
+    pendingPerms.set(permId, { cwd: sess ? sess.key : '', settle: (decision) => {
+      const allow = decision && decision.behavior === 'allow';
+      resolve(sel(allow ? pick('allow_once', 'allow_always') : pick('reject_once', 'reject_always')));
+    } });
+    const { verb, input } = geminiAcp.mapAcpTool(tc.kind, tc.rawInput, tc.title);
+    sess.emit({ type: 'permission_request', permId, toolName: verb, input, title: tc.title || verb, displayName: verb, description: tc.title || '', suggestions: null });
+  });
+}
+
+/** 确保某 key 有一条常驻 ACP 会话(initialize + session/new|load)。并发安全(_init)。 */
+async function geminiEnsure(sender, { cwd, lane, sessionId, permMode, model }) {
+  const key = runKey(cwd, lane);
+  let s = geminiSessions.get(key);
+  if (s) {
+    if (model !== undefined) s.model = model || s.model;
+    if (permMode) s.permMode = permMode;
+    if (s._init) { try { await s._init; } catch { /* */ } }
+    if (s.conn) return geminiSessions.get(key);
+  }
+  const bin = resolveBin('gemini');
+  if (!bin) { sender.send('localAgent:event', { cwd: key, ev: { type: 'error', error: '未找到 gemini，请确认已安装 gemini CLI' } }); return null; }
+  let realCwd = cwd; try { realCwd = fs.realpathSync(cwd); } catch { /* */ }
+  const emit = (ev) => { if (sender.isDestroyed()) return false; try { sender.send('localAgent:event', { cwd: key, ev }); return true; } catch { return false; } };
+  s = { conn: null, sessionId: sessionId || null, model: (model !== undefined ? model : null), permMode: permMode || 'default', turnCtx: geminiAcp.makeTurnState(), key, emit, _init: null, touched: Date.now() };
+  geminiSessions.set(key, s);
+  s._init = (async () => {
+    const conn = new geminiAcp.AcpConn({
+      bin, cwd: realCwd, env: childEnv(),
+      onNotify: (m, p) => { if (m !== 'session/update') return; const cur = geminiSessions.get(key); if (!cur) return; cur.touched = Date.now(); for (const ev of geminiAcp.normalizeUpdate(p, cur.turnCtx)) emit(ev); },
+      onRequest: async (m, p) => {
+        if (m === 'fs/read_text_file') { try { return { content: await fsp.readFile(p.path, 'utf8') }; } catch { return { content: '' }; } }
+        if (m === 'fs/write_text_file') { try { await fsp.mkdir(path.dirname(p.path), { recursive: true }); await fsp.writeFile(p.path, p.content ?? ''); } catch { /* */ } return null; }
+        if (m === 'session/request_permission') return geminiPermission(geminiSessions.get(key), p);
+        return {};
+      },
+      onClose: () => { emit({ type: 'session_closed' }); clearPerms(key, '会话结束'); geminiSessions.delete(key); },
+      onError: (e) => emit({ type: 'error', error: String(e && e.message || e) }),
+    });
+    s.conn = conn;
+    await conn.request('initialize', { protocolVersion: geminiAcp.ACP_PROTOCOL_VERSION, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } } });
+    if (s.sessionId) {
+      try { await conn.request('session/load', { cwd: realCwd, mcpServers: [], sessionId: s.sessionId }); }
+      catch { const ns = await conn.request('session/new', { cwd: realCwd, mcpServers: [] }); s.sessionId = ns.sessionId; }
+    } else {
+      const ns = await conn.request('session/new', { cwd: realCwd, mcpServers: [] });
+      s.sessionId = ns.sessionId;
+    }
+    emit({ type: 'models', models: GEMINI_MODELS });
+  })();
+  try { await s._init; } catch (e) { emit({ type: 'error', error: 'gemini ACP 初始化失败: ' + (e && e.message || e) }); try { s.conn && s.conn.kill(); } catch { /* */ } geminiSessions.delete(key); return null; }
+  s._init = null;
+  return geminiSessions.get(key);
+}
+
+/** 发一个 gemini 回合：常驻 ACP session/prompt，流式 update 归一回渲染层。 */
+async function geminiSend(sender, { cwd, lane, sessionId, prompt, permMode, model }) {
+  const s = await geminiEnsure(sender, { cwd, lane, sessionId, permMode, model });
+  if (!s) return { ok: false };
+  s.turnCtx = geminiAcp.makeTurnState();   // 新回合的累计/工具状态
+  s.touched = Date.now();
+  const emit = s.emit;
+  emit({ type: 'system', subtype: 'init', session_id: s.sessionId });   // 让渲染层拿到真实 sessionId
+  try {
+    const res = await s.conn.request('session/prompt', { sessionId: s.sessionId, prompt: [{ type: 'text', text: prompt }] });
+    // 收尾：累计文本补一条 assistant 气泡(否则 livePreview 在 finalize 被丢弃) + result。
+    const ctx = s.turnCtx;
+    if (!ctx.emittedFinal && ctx.accum) emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: ctx.accum }] } });
+    const stop = (res && res.stopReason) || 'end_turn';
+    emit({ type: 'result', subtype: stop === 'end_turn' ? 'success' : stop, session_id: s.sessionId });
+  } catch (e) {
+    emit({ type: 'error', error: String(e && e.message || e) });
+    emit({ type: 'session_closed' });
+  }
+  return { ok: true };
+}
+
+/** gemini 预热：建立常驻 ACP 连接(initialize + session)，首发即暖。失败静默。 */
+function geminiWarm(sender, { cwd, lane, sessionId, permMode, model }) {
+  void geminiEnsure(sender, { cwd, lane, sessionId, permMode, model });
+  return { ok: true };
+}
+
+/* ------------------------------------------------------------------ *
+ * Gemini 历史落盘读取 —— ~/.gemini/tmp/<sha256(realpath(cwd))>/chats/session-*.json
+ *   每个文件 = { sessionId, startTime, lastUpdated, messages:[{type:'user'|'gemini', content, toolCalls?}] }
+ *   纯 JSON,直接读;无需调 CLI。续接用 --list-sessions 的序号(geminiResumeIndex)。
+ * ------------------------------------------------------------------ */
+function geminiChatsDir(cwd) {
+  let real = cwd;
+  try { real = fs.realpathSync(cwd); } catch { /* 路径不存在则用原值 */ }
+  const hash = crypto.createHash('sha256').update(real).digest('hex');
+  return path.join(os.homedir(), '.gemini', 'tmp', hash, 'chats');
+}
+
+/** gemini message[] → 渲染层 TranscriptMessage[]（text + 工具卡片，复用同一套渲染）。 */
+function geminiMessagesToTranscript(messages) {
+  const out = [];
+  for (const m of (messages || [])) {
+    const ts = m.timestamp ? Date.parse(m.timestamp) || null : null;
+    if (m.type === 'user') {
+      const text = (m.content || '').trim();
+      if (text) out.push({ role: 'user', parts: [{ kind: 'text', text }], ts, uuid: m.id || null });
+    } else if (m.type === 'gemini' || m.type === 'assistant') {
+      const parts = [];
+      if (m.content && String(m.content).trim()) parts.push({ kind: 'text', text: String(m.content) });
+      for (const tc of (m.toolCalls || [])) {
+        const { verb, input } = geminiDriver.mapTool(tc.name, tc.args);
+        parts.push({ kind: 'tool_use', name: verb, input, id: tc.id });
+        const resp = tc.result && tc.result[0] && tc.result[0].functionResponse && tc.result[0].functionResponse.response;
+        const resText = tc.resultDisplay || (resp && (resp.output || resp.error)) || '';
+        if (resText) parts.push({ kind: 'tool_result', text: String(resText), isError: !!(tc.status && tc.status !== 'success'), toolUseId: tc.id });
+      }
+      if (parts.length) out.push({ role: 'assistant', parts, ts, uuid: m.id || null });
+    }
+  }
+  return out;
+}
+
+async function geminiReadSessionFile(full) {
+  let raw; try { raw = await fsp.readFile(full, 'utf8'); } catch { return null; }
+  let d; try { d = JSON.parse(raw); } catch { return null; }
+  return d && Array.isArray(d.messages) ? d : null;
+}
+
+/** 列出某 cwd 下的 gemini 历史会话（标题取首条用户消息）。按 lastUpdated 倒序。 */
+async function geminiListSessions(cwd) {
+  const dir = geminiChatsDir(cwd);
+  let files;
+  try { files = (await fsp.readdir(dir)).filter((f) => f.endsWith('.json')); } catch { return []; }
+  const out = await Promise.all(files.map(async (f) => {
+    const d = await geminiReadSessionFile(path.join(dir, f));
+    if (!d || d.messages.length === 0) return null;
+    const firstUser = d.messages.find((m) => m.type === 'user' && (m.content || '').trim());
+    const title = firstUser ? String(firstUser.content).replace(/\s+/g, ' ').slice(0, 80) : null;
+    const turns = d.messages.filter((m) => m.type === 'user').length;
+    const updatedAt = Date.parse(d.lastUpdated || d.startTime || '') || 0;
+    return { sessionId: d.sessionId, title, preview: title, turns, updatedAt };
+  }));
+  return out.filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+async function geminiReadSession(cwd, sessionId) {
+  const dir = geminiChatsDir(cwd);
+  let files;
+  try { files = (await fsp.readdir(dir)).filter((f) => f.endsWith('.json')); } catch { return { messages: [] }; }
+  for (const f of files) {
+    const d = await geminiReadSessionFile(path.join(dir, f));
+    if (d && d.sessionId === sessionId) return { messages: geminiMessagesToTranscript(d.messages) };
+  }
+  return { messages: [] };
+}
+
+/** sessionId → --list-sessions 的 1-based 序号（按 lastUpdated 倒序，与 CLI 的「最近优先」一致）。 */
+async function geminiResumeIndex(cwd, sessionId) {
+  const list = await geminiListSessions(cwd);
+  const i = list.findIndex((s) => s.sessionId === sessionId);
+  return i < 0 ? 0 : i + 1;
+}
+
+async function geminiDeleteSession(cwd, sessionId) {
+  const dir = geminiChatsDir(cwd);
+  let files;
+  try { files = (await fsp.readdir(dir)).filter((f) => f.endsWith('.json')); } catch { return { ok: false, error: 'no sessions' }; }
+  for (const f of files) {
+    const d = await geminiReadSessionFile(path.join(dir, f));
+    if (d && d.sessionId === sessionId) {
+      const target = path.join(dir, f);
+      try { const { shell } = require('electron'); await shell.trashItem(target); return { ok: true, trashed: true }; }
+      catch { try { await fsp.unlink(target); return { ok: true, trashed: false }; } catch (e) { return { ok: false, error: String(e && e.message || e) }; } }
+    }
+  }
+  return { ok: false, error: 'not found' };
 }
 
 /* ------------------------------------------------------------------ *

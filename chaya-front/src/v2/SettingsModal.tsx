@@ -11,7 +11,7 @@ import {
   getSmartnoteBaseUrl, setSmartnoteBaseUrl,
   smartnoteProbe,
 } from '../services/smartnoteApi';
-import type { ClientSettings, AppearanceMode, ColorTheme, GlassZone, GlassIntensity } from '../components/SettingsPage';
+import type { ClientSettings, AppearanceMode, ColorTheme, GlassZone } from '../components/SettingsPage';
 import type { FontId } from '../components/SettingsPage';
 import { type TypeSpeed } from './typewriter';
 import { getBackendUrl } from '../utils/backendUrl';
@@ -82,21 +82,14 @@ const APPEARANCES: { id: AppearanceMode; label: string; icon: string }[] = [
   { id: 'system', label: '跟随系统', icon: '⌣' },
 ];
 
-// 侧栏透明度的三档预设（id 复用 GlassIntensity，越「通透」越透明）。
-const GLASS_INTENSITIES: { id: GlassIntensity; label: string }[] = [
-  { id: 'subtle',   label: '通透' },
-  { id: 'standard', label: '标准' },
-  { id: 'strong',   label: '厚实' },
-];
-// 简化后默认侧栏不开玻璃；输入框/菜单/抽屉/用户气泡的磨砂由 CSS 无条件常开。
+// 侧栏玻璃开关已移除(Pure 走窗口 vibrancy 常态)；保留默认 zones 供 ClientShell 引用。
 export const GLASS_DEFAULT_ZONES: GlassZone[] = [];
 
 // surface = swatch canvas (dark-first brands show their dark bg);
 // ramp = [tint, base, deep] accent layers shown as chips
 const THEMES: { id: ColorTheme; label: string; sub: string; surface: string; ramp: [string, string, string] }[] = [
   { id: 'anthropic', label: 'Anthropic', sub: '象牙陶土',   surface: '#faf9f5', ramp: ['#f5e5de', '#d97757', '#c15f3c'] },
-  { id: 'cursor',    label: 'Cursor',    sub: '极夜石墨青', surface: '#0e0f12', ramp: ['#162e2b', '#7eede0', '#b4f0e7'] },
-  { id: 'xcode',     label: 'Xcode',     sub: '石墨蓝',     surface: '#292a30', ramp: ['#1e3a5f', '#3c93fd', '#6fb0ff'] },
+  { id: 'codex',     label: 'Pure',      sub: '纯净',       surface: '#eef0f3', ramp: ['#e2e4e8', '#9b9da4', '#c8cace'] },
   { id: 'razer',     label: 'Razer',     sub: '暗夜霓绿',   surface: '#0a0a0a', ramp: ['#0e3300', '#35de12', '#5cff36'] },
 ];
 
@@ -356,35 +349,8 @@ const AccIconPower = () => (
   </svg>
 );
 
-const GlassControl: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => {
-  // 简化后只剩「侧栏」一个可调项：开关 + 透明度。其余区域（输入框/菜单/抽屉/用户气泡）
-  // 默认常开磨砂、弹框/顶栏/主界面一律不加玻璃，均由 CSS 固定，无需用户操心。
-  const { t: tr } = useI18n();
-  const sidebarOn = (settings.glassZones ?? GLASS_DEFAULT_ZONES).includes('sidebar');
-  return (
-    <>
-      <Row label={tr('settings.glass.sidebar')} sub={tr('settings.glass.sidebarSub')}>
-        <Switch checked={sidebarOn} onChange={(v) => updateSettings({ glassZones: v ? ['sidebar'] : [] })} />
-      </Row>
-      <Row label={tr('settings.glass.opacity')} sub={tr('settings.glass.opacitySub')}>
-        <div className="v2-seg">
-          {GLASS_INTENSITIES.map((i) => (
-            <button
-              key={i.id}
-              className={`v2-seg-item${(settings.glassIntensity ?? 'standard') === i.id ? ' active' : ''}`}
-              onClick={() => updateSettings({ glassIntensity: i.id })}
-              disabled={!sidebarOn}
-            >
-              {tr(`settings.glass.intensity.${i.id}`)}
-            </button>
-          ))}
-        </div>
-      </Row>
-    </>
-  );
-};
-
-/** 外观面板：明暗 · 主题 · 毛玻璃 · 字体 — 从 偏好 抽出独立的左导航 tab。
+/** 外观面板：明暗 · 主题 · 字体 — 从 偏好 抽出独立的左导航 tab。
+ *  侧栏玻璃开关已移除：Pure 常态走窗口 vibrancy(mac)，统一一种样式,无需用户调。
  *  独立后用户更容易找到也更容易做"换皮"动作；旧的 偏好 现在专注对话行为
  *  与出字速度。注意：所有 setting key 都不变，对外行为 / 持久化无影响。 */
 const AppearancePane: React.FC<{ settings: ClientSettings; updateSettings: (p: Partial<ClientSettings>) => void }> = ({ settings, updateSettings }) => {
@@ -412,7 +378,7 @@ const AppearancePane: React.FC<{ settings: ClientSettings; updateSettings: (p: P
           {APPEARANCES.map((a) => (
             <button
               key={a.id}
-              className={`v2-seg-item${(settings.appearance ?? 'system') === a.id ? ' active' : ''}`}
+              className={`v2-seg-item${(settings.appearance ?? 'dark') === a.id ? ' active' : ''}`}
               onClick={() => updateSettings({ appearance: a.id })}
             >
               <span className="ic">{a.icon}</span>{tr(`settings.appearance.${a.id}`)}
@@ -425,7 +391,7 @@ const AppearancePane: React.FC<{ settings: ClientSettings; updateSettings: (p: P
           {THEMES.map((t) => (
             <button
               key={t.id}
-              className={`v2-theme-chip${(settings.theme ?? 'anthropic') === t.id ? ' active' : ''}`}
+              className={`v2-theme-chip${(settings.theme ?? 'codex') === t.id ? ' active' : ''}`}
               onClick={() => updateSettings({ theme: t.id })}
               title={`${t.label} · ${tr(`settings.theme.sub.${t.id}`)}`}
             >
@@ -437,9 +403,6 @@ const AppearancePane: React.FC<{ settings: ClientSettings; updateSettings: (p: P
           ))}
         </div>
       </Row>
-    </Section>
-    <Section title={tr('settings.glass.title')} hint={tr('settings.glass.hint')}>
-      <GlassControl settings={settings} updateSettings={updateSettings} />
     </Section>
     <Section title={tr('settings.font.title')} hint={tr('settings.font.hint')}>
       <div className="v2-set-grid">

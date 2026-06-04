@@ -131,6 +131,15 @@ const IconFileGeneric = () => (
   </svg>
 );
 
+// 权限档纯 icon（Pure 用；其它主题仍走文字）。按 tone 取图：
+//   default=盾(需要时询问) · plan=清单(只读规划) · edit=笔(自动接受改动) · bypass=闪电(全自动)
+const PERM_ICONS: Record<string, React.ReactNode> = {
+  default: (<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M8 1.8l4.6 1.8v3.5c0 3-2 5.1-4.6 6.1-2.6-1-4.6-3.1-4.6-6.1V3.6L8 1.8z" /></svg>),
+  plan: (<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="2.8" width="9" height="11.4" rx="1.3" /><path d="M6 2.8v-.6h4v.6M6 7h4M6 9.6h4M6 12.1h2.2" /></svg>),
+  edit: (<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M2.6 13.4h2.6l7-7a1.8 1.8 0 0 0-2.6-2.6l-7 7v2.6z" /><path d="M9 5l2 2" /></svg>),
+  bypass: (<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 1.5L3.5 9H7.5l-1 5.5L12.5 7H8.5l.5-5.5z" /></svg>),
+};
+
 
 /** 把拖入/粘贴的 File 列表转成附件（图片读成 dataUrl 走视觉；其它按 path 让 agent 读取）。
  *  ≤8MB 的图片才内联 dataUrl，否则退化成按路径引用（与主进程 pickFiles 规则一致）。 */
@@ -1057,7 +1066,10 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                 className={`v2-la-mode tone-${pm.tone}`}
                 onClick={() => la.cyclePermMode(cwd)}
                 title={tr('local.permMode.title', { hint: tr(`local.permMode.${effPerm}.hint`) })}
-              >{tr(`local.permMode.${effPerm}.label`)}</button>
+              >
+                <span className="v2-la-mode-ic" aria-hidden>{PERM_ICONS[pm.tone] || PERM_ICONS.default}</span>
+                <span className="v2-la-mode-lb">{tr(`local.permMode.${effPerm}.label`)}</span>
+              </button>
               {current?.live && (
                 <button className="v2-la-cfg" onClick={openCfg} title={tr('local.cfg.modelMcp')}>
                   <span className="tri" aria-hidden><IconModel /></span>

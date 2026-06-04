@@ -24,7 +24,12 @@ function createWindow() {
     height: 860,
     minWidth: 420,
     minHeight: 560,
-    backgroundColor: '#000000',
+    // mac：开启窗口 vibrancy(NSVisualEffectView)，让透明区域透出「模糊的桌面/它窗」。
+    // backgroundColor 给透明值,否则会盖住 vibrancy；非透明主题用各自不透明的 CSS 底
+    // 覆盖它,所以只有 Pure 把侧栏/底色调成半透时才会真的透出来。
+    backgroundColor: IS_MAC ? '#00000000' : '#000000',
+    vibrancy: IS_MAC ? 'under-window' : undefined,
+    visualEffectState: IS_MAC ? 'active' : undefined,
     show: false,
     // macOS ignores the window icon (it uses the dock/bundle icon); win/linux
     // take it for the title bar / taskbar.
@@ -58,6 +63,7 @@ function createWindow() {
     win.webContents.executeJavaScript(`
       document.documentElement.setAttribute('data-electron', 'true');
       document.documentElement.setAttribute('data-electron-platform', '${process.platform}');
+      ${IS_MAC ? "document.documentElement.setAttribute('data-vibrancy', 'on');" : ''}
     `).catch(() => {});
 
     if (IS_MAC) {

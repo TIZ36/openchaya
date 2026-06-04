@@ -234,16 +234,27 @@ export async function resolveWikiRef(it: WikiItem): Promise<string> {
   return it.title;
 }
 
-const WikiRow: React.FC<{ it: WikiItem; activeKb: boolean; onPick: () => void }> = ({ it, activeKb, onPick }) => {
+type DefaultActions = { associated: boolean; onAssociate: () => void; onReset: () => void };
+const WikiRow: React.FC<{ it: WikiItem; activeKb: boolean; onPick: () => void; defaultActions?: DefaultActions }> = ({ it, activeKb, onPick, defaultActions }) => {
   const { t: tr } = useI18n();
   return (
-    <button className={`v2-wiki-row${activeKb ? ' on' : ''}`} onMouseDown={(e) => { e.preventDefault(); onPick(); }}>
+    <div className={`v2-wiki-row${activeKb ? ' on' : ''}`} role="button" tabIndex={-1} onMouseDown={(e) => { e.preventDefault(); onPick(); }}>
       <span className="ic">{it.kind === 'note' ? <IconNoteBook /> : <IconDocSm />}</span>
       <span className="nm">{it.title}</span>
       {it.isDefault && <span className="def" title={tr('local.wiki.defaultNote')}><IconStar /></span>}
       {it.mtimeMs ? <span className="tm">{fmtAge(it.mtimeMs, tr)}</span> : null}
-      <span className="tag">{it.kind === 'note' ? tr('local.wiki.kindNote') : tr('local.wiki.kindDoc')}</span>
-    </button>
+      {it.isDefault && defaultActions ? (
+        // 速记的本地关联控件直接挂在这一行（不再占底部一条 bar）。
+        <span className="v2-wiki-row-act" onMouseDown={(e) => e.stopPropagation()}>
+          {defaultActions.associated && (
+            <button className="loc reset" onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); defaultActions.onReset(); }} title={tr('local.wiki.resetTip')}>{tr('local.wiki.reset')}</button>
+          )}
+          <button className="loc" onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); defaultActions.onAssociate(); }} title={tr('local.wiki.relocateTip')}><IconLink /></button>
+        </span>
+      ) : (
+        <span className="tag">{it.kind === 'note' ? tr('local.wiki.kindNote') : tr('local.wiki.kindDoc')}</span>
+      )}
+    </div>
   );
 };
 
@@ -254,13 +265,14 @@ export const WikiPicker: React.FC<{
   activeIdx: number;
   onPick: (it: WikiItem) => void;
   emptyHint: string;
-}> = ({ items, loading, activeIdx, onPick, emptyHint }) => {
+  defaultActions?: DefaultActions;     // 速记行内联的本地关联控件(仅 wiki 抽屉传，@提及不传)
+}> = ({ items, loading, activeIdx, onPick, emptyHint, defaultActions }) => {
   return (
     <div className="v2-wiki-list" role="listbox">
       {items.length === 0 ? (
         <div className="v2-wiki-empty">{loading ? '…' : emptyHint}</div>
       ) : (
-        items.map((it, i) => <WikiRow key={it.key} it={it} activeKb={i === activeIdx} onPick={() => onPick(it)} />)
+        items.map((it, i) => <WikiRow key={it.key} it={it} activeKb={i === activeIdx} onPick={() => onPick(it)} defaultActions={it.isDefault ? defaultActions : undefined} />)
       )}
     </div>
   );
@@ -268,9 +280,13 @@ export const WikiPicker: React.FC<{
 
 /* ================= floating peek / editor ================= */
 
-/** 点击 wiki 条目 → 浮窗查看/编辑其文字。笔记可改并保存(写盘)；云端文档可改并 patch。
- *  顶部「引用」把它接进输入框；Esc / 点遮罩关闭。 */
-const WikiPeek: React.FC<{ item: WikiItem; onClose: () => void; onInsertRef: () => void }> = ({ item, onClose, onInsertRef }) => {
+const IconBack = () => (
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M15 5l-7 7 7 7" /></svg>
+);
+
+/** 抽屉内联文档视图：读/编辑/保存/引用。笔记写盘；云端文档 patch。无遮罩/portal —— 直接铺在
+ *  右侧抽屉里(替代旧的居中浮窗)，看完点返回回到列表。 */
+const WikiDocView: React.FC<{ item: WikiItem; onBack: () => void; onInsertRef: () => void }> = ({ item, onBack, onInsertRef }) => {
   const { t: tr } = useI18n();
   const [content, setContent] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -286,10 +302,8 @@ const WikiPeek: React.FC<{ item: WikiItem; onClose: () => void; onInsertRef: () 
       } catch { if (alive) setContent(''); }
       if (alive) requestAnimationFrame(() => taRef.current?.focus());
     })();
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } };
-    window.addEventListener('keydown', onKey);
-    return () => { alive = false; window.removeEventListener('keydown', onKey); };
-  }, [item, onClose]);
+    return () => { alive = false; };
+  }, [item]);
   const save = useCallback(async () => {
     if (content == null) return;
     setSaving(true);
@@ -299,32 +313,28 @@ const WikiPeek: React.FC<{ item: WikiItem; onClose: () => void; onInsertRef: () 
       setDirty(false);
     } catch { /* surfaced via the unsaved dot */ } finally { setSaving(false); }
   }, [content, item]);
-  const host: Element = (typeof document !== 'undefined' && document.querySelector('.chaya-v2')) || document.body;
-  return createPortal(
-    <div className="v2-wiki-peek" onMouseDown={(e) => { e.stopPropagation(); onClose(); }}>
-      <div className="v2-wiki-peek-card" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="v2-wiki-peek-hd">
-          <span className="ic">{item.kind === 'note' ? <IconNoteBook /> : <IconDocSm />}</span>
-          <span className="ttl">{item.title}</span>
-          {item.isDefault && <span className="def" title={tr('local.wiki.defaultNote')}><IconStar /></span>}
-          {dirty && <span className="dot" title={tr('kb.unsaved')} aria-hidden />}
-          <span className="grow" />
-          <button className="act" onClick={onInsertRef} title={tr('local.wiki.insertRef')}><IconLink /><span>{tr('local.wiki.insertRef')}</span></button>
-          <button className="act primary" disabled={!dirty || saving} onClick={() => void save()}>{saving ? '…' : tr('kb.save')}</button>
-          <button className="act close" onClick={onClose} title={tr('common.close')} aria-label={tr('common.close')}><IconXSm /></button>
-        </div>
-        <textarea
-          ref={taRef}
-          className="v2-wiki-peek-body"
-          value={content ?? ''}
-          placeholder={content == null ? '…' : tr('local.wiki.peekEmpty')}
-          spellCheck={false}
-          onChange={(e) => { setContent(e.target.value); setDirty(true); }}
-          onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); void save(); } }}
-        />
+  return (
+    <div className="v2-wiki-doc">
+      <div className="v2-wiki-doc-hd">
+        <button className="back" onClick={onBack} title={tr('common.back')} aria-label={tr('common.back')}><IconBack /></button>
+        <span className="ic">{item.kind === 'note' ? <IconNoteBook /> : <IconDocSm />}</span>
+        <span className="ttl">{item.title}</span>
+        {item.isDefault && <span className="def" title={tr('local.wiki.defaultNote')}><IconStar /></span>}
+        {dirty && <span className="dot" title={tr('kb.unsaved')} aria-hidden />}
+        <span className="grow" />
+        <button className="act" onClick={onInsertRef} title={tr('local.wiki.insertRef')}><IconLink /></button>
+        <button className="act primary" disabled={!dirty || saving} onClick={() => void save()}>{saving ? '…' : tr('kb.save')}</button>
       </div>
-    </div>,
-    host,
+      <textarea
+        ref={taRef}
+        className="v2-wiki-doc-body"
+        value={content ?? ''}
+        placeholder={content == null ? '…' : tr('local.wiki.peekEmpty')}
+        spellCheck={false}
+        onChange={(e) => { setContent(e.target.value); setDirty(true); }}
+        onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); void save(); } }}
+      />
+    </div>
   );
 };
 
@@ -345,52 +355,64 @@ export const WikiNotes: React.FC<{
     if (!open) return;
     wiki.reload();
     requestAnimationFrame(() => inputRef.current?.focus());
-    const onDown = (e: MouseEvent) => { if (!peekRef.current && !wrapRef.current?.contains(e.target as Node)) setOpen(false); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !peekRef.current) setOpen(false); };
-    window.addEventListener('mousedown', onDown);
+    // 抽屉是 portal 到 body 的，外点交给遮罩处理；这里只管 Esc：先退文档视图,再关抽屉。
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { if (peekRef.current) setPeek(null); else setOpen(false); } };
     window.addEventListener('keydown', onKey);
-    return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey); };
+    return () => { window.removeEventListener('keydown', onKey); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+  // 打开时给根节点打 data-wiki-left：CSS 据此收起侧栏、把主界面右移让出左栏给 wiki。
+  useEffect(() => {
+    const root = typeof document !== 'undefined' ? document.querySelector('.chaya-v2') : null;
+    if (!root) return;
+    if (open) root.setAttribute('data-wiki-left', 'on'); else root.removeAttribute('data-wiki-left');
+    return () => root.removeAttribute('data-wiki-left');
+  }, [open]);
   const items = useMemo(() => buildWikiItems(wiki, q), [wiki, q, wiki.notes, wiki.docs, wiki.defaultPath]);
-  // 点条目 → 浮窗查看/编辑（而非直接插入）；浮窗里的「引用」才插入。@ 提及仍是直接插入。
+  // 点条目 → 在抽屉内联打开查看/编辑；其「引用」才插入。@ 提及仍是直接插入。
   const openPeek = useCallback((it: WikiItem) => setPeek(it), []);
   const insertFromPeek = useCallback(async (it: WikiItem) => {
     setPeek(null); setOpen(false);
     onInsert(await resolveWikiRef(it));
   }, [onInsert]);
   if (!wiki.available) return null;
+  const host: Element = (typeof document !== 'undefined' && document.querySelector('.chaya-v2')) || document.body;
   return (
     <div className="v2-note" ref={wrapRef}>
       <button className={`v2-note-pill${open ? ' on' : ''}`} title={tr('local.wiki.openTitle')} onClick={() => setOpen((o) => !o)}>
         <IconNoteBook /><span>{tr('local.wiki.pill')}</span>
         {wiki.notes.length > 0 && <span className="badge">{wiki.notes.length}</span>}
       </button>
-      {open && (
-        <div className="v2-wiki-pop" onMouseDown={(e) => e.stopPropagation()}>
-          <div className="v2-wiki-pop-hd">
-            <span className="ic"><IconNoteBook /></span>
-            <input
-              ref={inputRef}
-              className="v2-wiki-search"
-              value={q}
-              placeholder={tr('local.wiki.searchPlaceholder')}
-              onChange={(e) => setQ(e.target.value)}
-            />
-          </div>
-          <WikiPicker items={items} loading={wiki.loading} activeIdx={-1} onPick={openPeek} emptyHint={tr('local.wiki.empty')} />
-          <div className="v2-wiki-pop-ft">
-            <span className="hint">{wiki.associated ? tr('local.wiki.assocOn') : tr('local.wiki.footHint')}</span>
-            {wiki.associated && (
-              <button className="loc reset" onClick={() => wiki.resetDefault()} title={tr('local.wiki.resetTip')}>{tr('local.wiki.reset')}</button>
+      {open && createPortal(
+        <>
+          {/* wiki 占据左栏，与主界面平行（非浮层遮罩）：侧栏收起、主界面右移让位，边用边看。 */}
+          <aside className="v2-wiki-drawer" role="region" aria-label={tr('local.wiki.pill')} onMouseDown={(e) => e.stopPropagation()}>
+            <div className="v2-wiki-drawer-hd">
+              <span className="ic"><IconNoteBook /></span>
+              <input
+                ref={inputRef}
+                className="v2-wiki-search"
+                value={q}
+                placeholder={tr('local.wiki.searchPlaceholder')}
+                onChange={(e) => setQ(e.target.value)}
+              />
+              <button className="x" onClick={() => setOpen(false)} title={tr('common.close')} aria-label={tr('common.close')}><IconXSm /></button>
+            </div>
+            {peek ? (
+              <WikiDocView item={peek} onBack={() => setPeek(null)} onInsertRef={() => void insertFromPeek(peek)} />
+            ) : (
+              <div className="v2-wiki-drawer-list">
+                <WikiPicker
+                  items={items} loading={wiki.loading} activeIdx={-1} onPick={openPeek}
+                  emptyHint={tr('local.wiki.empty')}
+                  defaultActions={{ associated: wiki.associated, onAssociate: () => void wiki.associateDefault(), onReset: () => wiki.resetDefault() }}
+                />
+              </div>
             )}
-            <button className="loc" onClick={() => void wiki.associateDefault()} title={tr('local.wiki.relocateTip')}>
-              <IconLink /><span>{tr('local.wiki.relocate')}</span>
-            </button>
-          </div>
-        </div>
+          </aside>
+        </>,
+        host,
       )}
-      {peek && <WikiPeek item={peek} onClose={() => setPeek(null)} onInsertRef={() => void insertFromPeek(peek)} />}
     </div>
   );
 };

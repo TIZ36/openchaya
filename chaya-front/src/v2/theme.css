@@ -12,6 +12,7 @@
      down on narrow ones so it never crowds the main card to a sliver. */
   --sidebar-w: clamp(300px, 30vw, 390px);
   --sidebar-gap: 6px;
+  --wiki-w: clamp(420px, 40vw, 600px);   /* wiki 左栏宽度（与主界面平行时占的左侧宽度） */
   /* Drives Shiki's light-dark() dual theme (see codeBlock.tsx). Dark mode is
      an attribute, not a class/media query, so color-scheme is set per mode. */
   color-scheme: light;
@@ -177,196 +178,6 @@
     0 16px 32px -20px rgba(0, 0, 0, 0.55);
 }
 
-/* ---- Cursor — Anysphere identity: ink-black, teal accent #82D2CE.
-   Polish (2026-05): pushed ink toward true black (#0a0a0a / #ededf0) for
-   higher contrast — user wanted "blacker black". Status colors get a
-   Cursor-tuned palette (sharper red / cleaner amber / brighter green) so
-   danger/warn/success pills sit beside the teal accent without clashing
-   with the imported default-theme orange. */
-/* ============================================================
-   CURSOR THEME — engineering tool aesthetic, refined past the real Cursor.
-   "Cool slate ink + signature teal + true near-black canvas"
-   Light: ivory whites with faint cool drift; teal accent grounded for paper.
-   Dark:  deep cool slate (not pure black), tighter steps, bright clean teal.
-   All neutrals carry 0.003-0.008 chroma toward cyan to avoid "dead gray".
-   ============================================================ */
-.chaya-v2[data-theme="cursor"] {
-  /* Light: paper whites with subtle cool drift; teal grounded for contrast */
-  --c-bg:           #fbfbfc;
-  --c-sidebar:      #f1f1f2;
-  --c-ink:          #0a0b0e;
-  --c-ink-2:        #2a2c31;
-  --c-ink-3:        #6a6c72;
-  --c-ink-4:        #a0a2a8;
-  --c-hover:        #e8e8ea;
-  --c-hover-soft:   #eeeef0;
-  --c-selected:     #cdebe6;
-  --c-rule:         #e3e3e5;
-  --c-surface:      #ededee;
-  --c-accent:       #0b9389;
-  --c-accent-strong:#076b62;
-  --c-accent-bg:    #d6ece9;
-  --c-note:         #a98a3e;
-  --c-note-strong:  #7a6020;
-  --c-note-bg:      #efe9d6;
-  --c-note-card:    #fdfcf6;
-  --c-ink-deep:     #000;
-  --c-danger:       #dc2626; --c-danger-bg: #fde8e8;
-  --c-warn:         #b45309; --c-warn-bg:   #fef3c7;
-  --c-success:      #15803d; --c-success-bg:#dcfce7;
-  --c-scrollbar:    rgba(10, 11, 14, 0.10);
-}
-.chaya-v2[data-theme="cursor"][data-mode="dark"] {
-  /* Dark: true Cursor-dark, slight slate drift, brighter clean teal */
-  --c-bg:           #0e0f12;
-  --c-sidebar:      #0a0b0e;
-  --c-ink:          #eeeff2;
-  --c-ink-2:        #c4c6cb;
-  --c-ink-3:        #82858c;
-  --c-ink-4:        #52555c;
-  --c-hover:        #1d1e22;
-  --c-hover-soft:   #15161a;
-  --c-selected:     #173432;
-  --c-rule:         #1f2126;
-  --c-surface:      #15161a;
-  --c-note:         #d4b878; --c-note-strong: #e8cf92; --c-note-bg: #272318; --c-note-card: #191712;
-  --c-accent:       #7eede0;          /* Cursor 标志的 clean teal */
-  --c-accent-strong:#b4f0e7;
-  --c-accent-bg:    #162e2b;
-  --c-ink-deep:     #ffffff;
-  --c-danger:       #ff7170; --c-danger-bg:  rgba(255, 113, 112, 0.16);
-  --c-warn:         #efc46a; --c-warn-bg:    rgba(239, 196, 106, 0.16);
-  --c-success:      #6ee7a2; --c-success-bg: rgba(110, 231, 162, 0.16);
-  --c-scrollbar:    rgba(238, 239, 242, 0.10);
-}
-
-/* ============================================================
-   Cursor 卡片体量 ——
-   Light: 极轻 hairline + 上沿 1px 高光 + 短焦阴影。"刚刚浮起来"。
-   Dark:  upper ridge highlight + 双层阴影制造"editor panel"感。
-   ============================================================ */
-.chaya-v2[data-theme="cursor"]:not([data-mode="dark"]) .v2-main {
-  border-color: color-mix(in oklab, var(--c-ink) 7%, transparent);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.80),
-    inset 0 0 0 1px rgba(10, 11, 14, 0.04),
-    0 1px 0 rgba(10, 11, 14, 0.03),
-    0 8px 22px -10px rgba(10, 11, 14, 0.14);
-}
-.chaya-v2[data-theme="cursor"][data-mode="dark"] .v2-main {
-  border-color: rgba(255, 255, 255, 0.05);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
-    0 1px 0 rgba(0, 0, 0, 0.55),
-    0 12px 32px -16px rgba(0, 0, 0, 0.72),
-    0 28px 60px -24px rgba(0, 0, 0, 0.55);
-}
-
-/* ============================================================
-   Cursor signature touches —— 与 Codex 通用版差异化：
-   1) nav / agents / recents active row 左侧 2px teal accent 痕（editor 风）
-   2) sidebar 文字 letter-spacing 微缩 -0.005em（紧凑工程感）
-   3) 选区染 accent teal 而非 ink
-   注：sidebar/main 之间不画 hairline divider —— 之前加的 1px inset 会让
-       底部"统一底板"被切成两块，留下 sidebar tone 一气呵成更准 Cursor。
-   ============================================================ */
-.chaya-v2[data-theme="cursor"] .v2-nav .v2-row,
-.chaya-v2[data-theme="cursor"] .v2-agents .v2-a,
-.chaya-v2[data-theme="cursor"] .v2-recents .v2-r,
-.chaya-v2[data-theme="cursor"] .v2-la-proj-row {
-  letter-spacing: -0.005em;
-}
-/* Cursor 主题下：active row 一律走默认的 --c-hover bg tint，不再画 teal accent
-   竖条 + halo。之前那道青色光晕在 sidebar 里读成"染色"而非"高亮"，与浅白底色
-   不协调。Codex / ChatGPT 都是纯 tint 标识 active，最稳。 */
-.chaya-v2[data-theme="cursor"] ::selection {
-  background: color-mix(in oklab, var(--c-accent) 25%, var(--c-bg));
-  color: var(--c-ink);
-}
-
-/* Cursor 的 composer focus ring 用 teal accent，呼应"在编辑器里"的语义 */
-.chaya-v2[data-theme="cursor"] .v2-box:focus-within {
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--c-accent) 32%, transparent),
-              0 8px 24px -10px rgba(0, 0, 0, 0.18);
-}
-.chaya-v2[data-theme="cursor"][data-mode="dark"] .v2-box:focus-within {
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--c-accent) 40%, transparent),
-              0 16px 36px -16px rgba(0, 0, 0, 0.80);
-}
-
-/* Code block: tighter padding + sharper hairline in Cursor — IDE 风 */
-.chaya-v2[data-theme="cursor"] .v2-md .v2-code {
-  border-color: color-mix(in oklab, var(--c-ink) 8%, transparent);
-  background: color-mix(in oklab, var(--c-ink) 3%, var(--c-sidebar));
-}
-.chaya-v2[data-theme="cursor"][data-mode="dark"] .v2-md .v2-code {
-  border-color: rgba(255, 255, 255, 0.06);
-  background: #07080a;   /* even darker than sidebar — editor-true */
-}
-
-/* Scrollbar Cursor 化：dark mode 用 teal-tinted thumb 而非纯白透 */
-.chaya-v2[data-theme="cursor"][data-mode="dark"] ::-webkit-scrollbar-thumb {
-  background: rgba(126, 237, 224, 0.10);
-}
-.chaya-v2[data-theme="cursor"][data-mode="dark"] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(126, 237, 224, 0.22);
-}
-
-/* ============================================================
-   Cursor 主体下：CLI provider 徽标 / 权限模式 / 头像背景 / 列表"默认"
-   全部归到 cursor teal accent —— 不再是单独 brand 色，整页配色一致。
-   ============================================================ */
-.chaya-v2[data-theme="cursor"] .v2-la-badge,
-.chaya-v2[data-theme="cursor"] .v2-la-badge.prov-claude,
-.chaya-v2[data-theme="cursor"] .v2-la-badge.prov-cursor,
-.chaya-v2[data-theme="cursor"] .v2-la-badge.prov-codex,
-.chaya-v2[data-theme="cursor"] .v2-la-badge.prov-gemini {
-  background: var(--c-accent);
-  color: var(--c-bg);
-}
-.chaya-v2[data-theme="cursor"] .v2-la-badge .v2-la-spinner.sm {
-  border-color: color-mix(in oklab, var(--c-bg) 35%, transparent);
-  border-top-color: var(--c-bg);
-}
-/* 权限模式：cursor 主体下用 tonal accent，差异通过深浅档区分语义 */
-.chaya-v2[data-theme="cursor"] .v2-la-mode.tone-default {
-  background: transparent; color: var(--c-ink-3);
-}
-.chaya-v2[data-theme="cursor"] .v2-la-mode.tone-plan {
-  background: color-mix(in oklab, var(--c-accent) 18%, var(--c-bg));
-  color: var(--c-accent-strong);
-}
-.chaya-v2[data-theme="cursor"] .v2-la-mode.tone-edit {
-  background: color-mix(in oklab, var(--c-accent) 30%, var(--c-bg));
-  color: var(--c-accent-strong);
-}
-.chaya-v2[data-theme="cursor"] .v2-la-mode.tone-bypass {
-  background: var(--c-danger-bg);
-  color: var(--c-danger);
-}
-/* CLI 头像底色：cursor 主体下统一用 accent tint */
-.chaya-v2[data-theme="cursor"] .v2-la-ava.prov-claude,
-.chaya-v2[data-theme="cursor"] .v2-la-ava.prov-cursor,
-.chaya-v2[data-theme="cursor"] .v2-la-ava.prov-codex,
-.chaya-v2[data-theme="cursor"] .v2-la-ava.prov-gemini {
-  background: color-mix(in oklab, var(--c-accent) 16%, var(--c-bg));
-  color: var(--c-accent-strong);
-}
-/* 设置 provider 卡片色点 + soon 标记同步走 accent */
-.chaya-v2[data-theme="cursor"] .v2-la-setdot.prov-claude,
-.chaya-v2[data-theme="cursor"] .v2-la-setdot.prov-cursor,
-.chaya-v2[data-theme="cursor"] .v2-la-setdot.prov-codex {
-  background: var(--c-accent);
-}
-.chaya-v2[data-theme="cursor"] .v2-la-setdot.prov-gemini {
-  background: linear-gradient(95deg,
-    color-mix(in oklab, var(--c-accent) 55%, var(--c-ink)),
-    var(--c-accent),
-    color-mix(in oklab, var(--c-accent) 60%, white)
-  );
-}
-
 /* ============================================================
    Anthropic 主体下：同套元素归到 Claude Code 橙（--c-accent 在该主题就是 #d97757）
    —— Anthropic 是 CC 母厂的主题色，badge / mode chips 都跟着橙系走。
@@ -411,168 +222,6 @@
     color-mix(in oklab, var(--c-accent) 50%, var(--c-ink)),
     var(--c-accent),
     color-mix(in oklab, var(--c-accent) 55%, white)
-  );
-}
-
-/* ============================================================
-   XCODE THEME — Apple developer-tool identity.
-   Colors pulled from Xcode's "Default (Light/Dark)" theme + macOS chrome
-   (smockle xcode-default-theme port), so the surface reads as the real IDE:
-     Light: editor white #fff · sidebar #F5F5F5 · activity chrome #ECECEC ·
-            editor.foreground #282828 · selection #B3D7FF · Xcode blue #3C93FD.
-     Dark:  editor #292A30 · sidebar #252629 · activity chrome #1C1D20 ·
-            editor selection #3D4752 · list-active / accent #3C93FD.
-   #3C93FD is Xcode's canonical control/active-selection blue (same in both
-   modes); #82ADF3 is its focus-ring blue.
-   ============================================================ */
-.chaya-v2[data-theme="xcode"] {
-  --c-bg:           #ffffff;   /* editor.background */
-  --c-sidebar:      #f5f5f5;   /* sideBar.background */
-  --c-ink:          #282828;   /* editor.foreground (soft black, not #000) */
-  --c-ink-2:        #494949;
-  --c-ink-3:        #7a7a7e;
-  --c-ink-4:        #aeaeb2;
-  --c-hover:        #e7e7e9;
-  --c-hover-soft:   #efefef;
-  --c-selected:     #b3d7ff;   /* editor.selectionBackground */
-  --c-rule:         #e0e0e2;
-  --c-surface:      #ececec;   /* activityBar.background — deeper chrome */
-  --c-accent:       #3c93fd;   /* Xcode control / list-active blue */
-  --c-accent-strong:#0a6fe5;
-  --c-accent-bg:    #d8e9ff;
-  --c-note:         #a98a3e;
-  --c-note-strong:  #7a6020;
-  --c-note-bg:      #efe9d6;
-  --c-note-card:    #fdfcf6;
-  --c-ink-deep:     #000;
-  --c-danger:       #d12f1b; --c-danger-bg: #fbe3df;   /* Xcode string red */
-  --c-warn:         #b25000; --c-warn-bg:   #ffeccf;
-  --c-success:      #248a3d; --c-success-bg:#d8f3df;
-  --c-scrollbar:    rgba(40, 40, 40, 0.10);
-}
-.chaya-v2[data-theme="xcode"][data-mode="dark"] {
-  --c-bg:           #292a30;   /* editor.background (Xcode Default Dark) */
-  --c-sidebar:      #252629;   /* sideBar.background */
-  --c-ink:          #f4f4f6;   /* editor.foreground ≈ white, eased a touch */
-  --c-ink-2:        #c5c6cc;
-  --c-ink-3:        #8d9099;
-  --c-ink-4:        #5f626b;
-  --c-hover:        #34353b;
-  --c-hover-soft:   #2e2f35;
-  --c-selected:     #3d4752;   /* editor.selectionBackground */
-  --c-rule:         #3a3b42;
-  --c-surface:      #1c1d20;   /* activityBar.background — darkest chrome */
-  --c-accent:       #3c93fd;   /* Xcode list-active / button blue */
-  --c-accent-strong:#6fb0ff;
-  --c-accent-bg:    #1e3a5f;
-  --c-note:         #d4b878; --c-note-strong: #e8cf92; --c-note-bg: #272318; --c-note-card: #191712;
-  --c-ink-deep:     #ffffff;
-  --c-danger:       #fc6a5d; --c-danger-bg:  rgba(252, 106, 93, 0.16);  /* Xcode string salmon */
-  --c-warn:         #f0c869; --c-warn-bg:    rgba(240, 200, 105, 0.16);
-  --c-success:      #8ad1c3; --c-success-bg: rgba(138, 209, 195, 0.16); /* Xcode type mint */
-  --c-scrollbar:    rgba(244, 244, 246, 0.10);
-}
-
-/* Xcode 卡片体量 —— 与 Cursor 同样的 "editor panel" 处理：
-   Light 极轻 hairline + 上沿高光 + 短焦阴影；Dark 双层阴影制造面板纵深。 */
-.chaya-v2[data-theme="xcode"]:not([data-mode="dark"]) .v2-main {
-  border-color: color-mix(in oklab, var(--c-ink) 7%, transparent);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.80),
-    inset 0 0 0 1px rgba(29, 29, 31, 0.04),
-    0 1px 0 rgba(29, 29, 31, 0.03),
-    0 8px 22px -10px rgba(29, 29, 31, 0.14);
-}
-.chaya-v2[data-theme="xcode"][data-mode="dark"] .v2-main {
-  border-color: rgba(255, 255, 255, 0.05);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
-    0 1px 0 rgba(0, 0, 0, 0.55),
-    0 12px 32px -16px rgba(0, 0, 0, 0.72),
-    0 28px 60px -24px rgba(0, 0, 0, 0.55);
-}
-
-/* Xcode signature touches —— 选区染 system blue；composer focus ring 用蓝 */
-.chaya-v2[data-theme="xcode"] ::selection {
-  background: color-mix(in oklab, var(--c-accent) 25%, var(--c-bg));
-  color: var(--c-ink);
-}
-.chaya-v2[data-theme="xcode"] .v2-box:focus-within {
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--c-accent) 32%, transparent),
-              0 8px 24px -10px rgba(0, 0, 0, 0.18);
-}
-.chaya-v2[data-theme="xcode"][data-mode="dark"] .v2-box:focus-within {
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--c-accent) 40%, transparent),
-              0 16px 36px -16px rgba(0, 0, 0, 0.80);
-}
-
-/* Code block: tighter hairline + IDE 风底色 */
-.chaya-v2[data-theme="xcode"] .v2-md .v2-code {
-  border-color: color-mix(in oklab, var(--c-ink) 8%, transparent);
-  background: color-mix(in oklab, var(--c-ink) 3%, var(--c-sidebar));
-}
-.chaya-v2[data-theme="xcode"][data-mode="dark"] .v2-md .v2-code {
-  border-color: rgba(255, 255, 255, 0.06);
-  background: #1c1d20;   /* activity-chrome dark — editor-true */
-}
-
-/* Scrollbar: dark mode blue-tinted thumb (Xcode blue #3C93FD) */
-.chaya-v2[data-theme="xcode"][data-mode="dark"] ::-webkit-scrollbar-thumb {
-  background: rgba(60, 147, 253, 0.12);
-}
-.chaya-v2[data-theme="xcode"][data-mode="dark"] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(60, 147, 253, 0.26);
-}
-
-/* ============================================================
-   Xcode 主体下：CLI provider 徽标 / 权限模式 / 头像背景 / 列表"默认"
-   统一归到 system blue accent —— 整页配色一致。
-   ============================================================ */
-.chaya-v2[data-theme="xcode"] .v2-la-badge,
-.chaya-v2[data-theme="xcode"] .v2-la-badge.prov-claude,
-.chaya-v2[data-theme="xcode"] .v2-la-badge.prov-cursor,
-.chaya-v2[data-theme="xcode"] .v2-la-badge.prov-codex,
-.chaya-v2[data-theme="xcode"] .v2-la-badge.prov-gemini {
-  background: var(--c-accent);
-  color: var(--c-bg);
-}
-.chaya-v2[data-theme="xcode"] .v2-la-badge .v2-la-spinner.sm {
-  border-color: color-mix(in oklab, var(--c-bg) 35%, transparent);
-  border-top-color: var(--c-bg);
-}
-.chaya-v2[data-theme="xcode"] .v2-la-mode.tone-default {
-  background: transparent; color: var(--c-ink-3);
-}
-.chaya-v2[data-theme="xcode"] .v2-la-mode.tone-plan {
-  background: color-mix(in oklab, var(--c-accent) 18%, var(--c-bg));
-  color: var(--c-accent-strong);
-}
-.chaya-v2[data-theme="xcode"] .v2-la-mode.tone-edit {
-  background: color-mix(in oklab, var(--c-accent) 30%, var(--c-bg));
-  color: var(--c-accent-strong);
-}
-.chaya-v2[data-theme="xcode"] .v2-la-mode.tone-bypass {
-  background: var(--c-danger-bg);
-  color: var(--c-danger);
-}
-.chaya-v2[data-theme="xcode"] .v2-la-ava.prov-claude,
-.chaya-v2[data-theme="xcode"] .v2-la-ava.prov-cursor,
-.chaya-v2[data-theme="xcode"] .v2-la-ava.prov-codex,
-.chaya-v2[data-theme="xcode"] .v2-la-ava.prov-gemini {
-  background: color-mix(in oklab, var(--c-accent) 16%, var(--c-bg));
-  color: var(--c-accent-strong);
-}
-.chaya-v2[data-theme="xcode"] .v2-la-setdot.prov-claude,
-.chaya-v2[data-theme="xcode"] .v2-la-setdot.prov-cursor,
-.chaya-v2[data-theme="xcode"] .v2-la-setdot.prov-codex {
-  background: var(--c-accent);
-}
-.chaya-v2[data-theme="xcode"] .v2-la-setdot.prov-gemini {
-  background: linear-gradient(95deg,
-    color-mix(in oklab, var(--c-accent) 55%, var(--c-ink)),
-    var(--c-accent),
-    color-mix(in oklab, var(--c-accent) 60%, white)
   );
 }
 
@@ -644,6 +293,619 @@
 .chaya-v2[data-theme="razer"] ::-webkit-scrollbar-thumb:hover {
   background: rgba(53, 222, 18, 0.34);
 }
+
+/* ============================================================
+   GLASS THEME — misted opal glass. Transparent, but legible.
+   The material is the identity here: low-chroma mist neutrals, a little
+   iris-lavender depth, restrained warm reflection, and crisp hairlines.
+   ============================================================ */
+.chaya-v2[data-theme="codex"] {
+  color-scheme: light;
+  /* 中性色去蓝：chroma 砍约一半(只留极轻冷调 ~0.006–0.014)，整屏不再发蓝；accent 仍是
+     codex 的蓝紫签名色，保留。 */
+  --c-bg:           color-mix(in oklab, oklch(0.992 0.003 250) 70%, transparent);
+  --c-sidebar:      oklch(0.948 0.005 255);   /* 浅灰 chrome —— 让白色主卡片明显浮起 */
+  /* 6 层灰阶(L 均匀 ~0.12 步距，玻璃上对比更分明)：ink=正文…ink-6=发丝/禁用。
+     低层级整体调深一档，磨砂会洗对比，深一点才读得清。 */
+  --c-ink:          oklch(0.200 0.013 255);   /* L1 正文/最强 */
+  --c-ink-2:        oklch(0.330 0.013 255);   /* L2 次级 */
+  --c-ink-3:        oklch(0.470 0.013 255);   /* L3 三级(原 .525→深，更清) */
+  --c-ink-4:        oklch(0.600 0.013 255);   /* L4 元信息/时间戳(原 .705→明显更清) */
+  --c-ink-5:        oklch(0.715 0.012 255);   /* L5 占位/极弱 */
+  --c-ink-6:        oklch(0.830 0.010 255);   /* L6 发丝/禁用 */
+  --c-hover:        color-mix(in oklab, oklch(0.67 0.022 255) 11%, transparent);
+  --c-hover-soft:   color-mix(in oklab, oklch(0.72 0.018 245) 6.5%, transparent);
+  --c-selected:     color-mix(in oklab, oklch(0.68 0.045 270) 16%, transparent);
+  --c-rule:         color-mix(in oklab, oklch(0.38 0.015 255) 16%, transparent);
+  --c-surface:      color-mix(in oklab, oklch(0.965 0.005 245) 48%, transparent);
+  --c-accent:       oklch(0.64 0.060 272);
+  --c-accent-strong:oklch(0.42 0.065 272);
+  --c-accent-bg:    color-mix(in oklab, oklch(0.64 0.060 272) 15%, transparent);
+  --c-accent-warm:  oklch(0.78 0.080 78);
+  /* Pure：note(wiki/速记)走中性,不要暖琥珀 —— 让 wiki 完全遵从纯净外观。 */
+  --c-note:         var(--c-ink-3); --c-note-strong: var(--c-ink-2); --c-note-bg: color-mix(in oklab, var(--c-ink) 8%, transparent); --c-note-card: var(--glass-matte-strong);
+  --c-ink-deep:     oklch(0.16 0.016 255);
+  --c-danger:       oklch(0.53 0.10 25); --c-danger-bg:  color-mix(in oklab, oklch(0.62 0.12 25) 14%, transparent);
+  --c-warn:         oklch(0.52 0.08 75); --c-warn-bg:    color-mix(in oklab, oklch(0.75 0.10 78) 18%, transparent);
+  --c-success:      oklch(0.48 0.07 160); --c-success-bg: color-mix(in oklab, oklch(0.70 0.09 160) 16%, transparent);
+  --c-scrollbar:    color-mix(in oklab, oklch(0.38 0.015 255) 18%, transparent);
+  --c-shadow-card:  0 18px 54px -30px color-mix(in oklab, oklch(0.32 0.018 255) 32%, transparent);
+  --c-shadow-modal: 0 26px 80px -34px color-mix(in oklab, oklch(0.32 0.018 255) 44%, transparent);
+  --c-shadow-menu:  0 18px 42px -26px color-mix(in oklab, oklch(0.32 0.018 255) 36%, transparent);
+  --c-shadow-soft:  0 14px 34px -24px color-mix(in oklab, oklch(0.32 0.018 255) 30%, transparent);
+  --c-shadow-pill:  inset 0 1px 0 var(--glass-bevel), 0 10px 24px -20px rgba(48, 50, 58, 0.32);
+
+  /* Minimum backing layer for text on glass. Blur creates the material; matte
+     keeps overlapping translucent panes from making text unreadable. */
+  /* 抬升面用浅灰(不是近白)，才在白色主卡上看得见(与暗色同逻辑、镜像)。 */
+  --glass-matte:        color-mix(in oklab, oklch(0.925 0.004 255) 80%, transparent);
+  --glass-matte-soft:   color-mix(in oklab, oklch(0.905 0.004 255) 62%, transparent);
+  --glass-matte-strong: color-mix(in oklab, oklch(0.952 0.003 255) 90%, transparent);
+  --glass-chrome:       color-mix(in oklab, oklch(0.970 0.006 245) 72%, transparent);
+  --glass-matte-line:   color-mix(in oklab, oklch(0.38 0.015 255) 14%, transparent);
+  --glass-focus-ring:   color-mix(in oklab, oklch(0.58 0.05 265) 34%, transparent);
+
+  /* Mode-aware 玻璃高光：sheen(斜向受光) / bevel(顶沿吃光) / chip(浮层填充) / edge(亮边) /
+     input(输入底)。亮色用白高光；暗色全降成极淡白霜(低 alpha)——否则亮白会漏进暗色玻璃发糊。 */
+  --glass-sheen:        rgba(255, 255, 255, 0.52);
+  --glass-bevel-strong: rgba(255, 255, 255, 0.84);
+  --glass-bevel:        rgba(255, 255, 255, 0.74);
+  --glass-bevel-soft:   rgba(255, 255, 255, 0.56);
+  --glass-chip:         var(--glass-chip);
+  --glass-chip-soft:    rgba(255, 255, 255, 0.34);
+  --glass-edge:         rgba(255, 255, 255, 0.60);
+  --glass-input:        var(--glass-input);
+
+  /* 背景：减弱蓝色 linear 主洗 + accent 蓝径向；保留极淡的暖粉/青点缀做层次，不抢戏。 */
+  background:
+    radial-gradient(circle at 16% 10%, color-mix(in oklab, var(--c-accent) 9%, transparent), transparent 25%),
+    radial-gradient(circle at 84% 20%, color-mix(in oklab, oklch(0.82 0.045 325) 12%, transparent), transparent 28%),
+    radial-gradient(circle at 72% 82%, color-mix(in oklab, oklch(0.84 0.040 150) 10%, transparent), transparent 34%),
+    linear-gradient(145deg, oklch(0.968 0.006 245) 0%, oklch(0.995 0.003 250) 50%, oklch(0.962 0.006 235) 100%);
+}
+
+.chaya-v2[data-theme="codex"][data-mode="dark"] {
+  color-scheme: dark;
+  /* 暗色层级：侧栏/底色(chrome)略浅，主内容面板更深——差值克制，整体协调。 */
+  --c-bg:           color-mix(in oklab, oklch(0.210 0.007 260) 72%, transparent);
+  --c-sidebar:      oklch(0.210 0.007 260);   /* 底面压深一档(原 0.235 偏浅) */
+  /* 6 层灰阶(暗色反向：低层级调亮一档，磨砂上才清楚)。 */
+  --c-ink:          oklch(0.950 0.006 250);   /* L1 */
+  --c-ink-2:        oklch(0.825 0.009 250);   /* L2 */
+  --c-ink-3:        oklch(0.700 0.011 250);   /* L3 (原 .64→亮，更清) */
+  --c-ink-4:        oklch(0.580 0.012 250);   /* L4 元信息(原 .48→明显更清) */
+  --c-ink-5:        oklch(0.465 0.012 250);   /* L5 占位/极弱 */
+  --c-ink-6:        oklch(0.365 0.012 250);   /* L6 发丝/禁用 */
+  --c-ink-deep:     oklch(0.965 0.006 250);   /* 暗色「加深」反向=近白(主按钮 hover);否则落到亮色近黑→暗底里消失 */
+  --c-hover:        color-mix(in oklab, oklch(0.80 0.012 250) 12%, transparent);
+  --c-hover-soft:   color-mix(in oklab, oklch(0.80 0.012 250) 7%, transparent);
+  --c-selected:     color-mix(in oklab, oklch(0.80 0.028 265) 16%, transparent);
+  --c-rule:         color-mix(in oklab, oklch(0.86 0.008 250) 16%, transparent);
+  --c-surface:      color-mix(in oklab, oklch(0.32 0.011 260) 54%, transparent);
+  --c-accent:       oklch(0.74 0.045 265);
+  --c-accent-strong:oklch(0.88 0.030 265);
+  --c-accent-bg:    color-mix(in oklab, oklch(0.74 0.045 265) 15%, transparent);
+  /* Pure 暗：note 同样走中性。 */
+  --c-note:         var(--c-ink-3); --c-note-strong: var(--c-ink-2); --c-note-bg: color-mix(in oklab, var(--c-ink) 9%, transparent); --c-note-card: var(--glass-matte-strong);
+  --c-danger:       oklch(0.74 0.08 25); --c-danger-bg:  color-mix(in oklab, oklch(0.68 0.11 25) 16%, transparent);
+  --c-warn:         oklch(0.80 0.08 78); --c-warn-bg:    color-mix(in oklab, oklch(0.76 0.10 78) 15%, transparent);
+  --c-success:      oklch(0.78 0.07 160); --c-success-bg: color-mix(in oklab, oklch(0.70 0.09 160) 14%, transparent);
+  --c-scrollbar:    color-mix(in oklab, oklch(0.88 0.008 250) 16%, transparent);
+  /* 抬升面(hover/选中/浮层/代码块)比底面浅一档即可——步距克制，不要刺眼的亮灰块。 */
+  --glass-matte:        color-mix(in oklab, oklch(0.345 0.008 260) 80%, transparent);
+  --glass-matte-soft:   color-mix(in oklab, oklch(0.330 0.008 260) 62%, transparent);
+  --glass-matte-strong: color-mix(in oklab, oklch(0.385 0.008 260) 90%, transparent);
+  --glass-chrome:       color-mix(in oklab, oklch(0.24 0.010 260) 76%, transparent);
+  --glass-matte-line:   color-mix(in oklab, oklch(0.88 0.008 250) 14%, transparent);
+  --glass-focus-ring:   color-mix(in oklab, oklch(0.80 0.04 265) 34%, transparent);
+  /* 暗色玻璃高光：白霜压到很低 alpha——只留一丝边缘受光，不发亮白。 */
+  --glass-sheen:        rgba(255, 255, 255, 0.05);
+  --glass-bevel-strong: rgba(255, 255, 255, 0.13);
+  --glass-bevel:        rgba(255, 255, 255, 0.09);
+  --glass-bevel-soft:   rgba(255, 255, 255, 0.06);
+  --glass-chip:         rgba(255, 255, 255, 0.055);
+  --glass-chip-soft:    rgba(255, 255, 255, 0.04);
+  --glass-edge:         rgba(255, 255, 255, 0.10);
+  --glass-input:        rgba(255, 255, 255, 0.045);
+  background:
+    radial-gradient(circle at 16% 10%, color-mix(in oklab, oklch(0.58 0.045 270) 12%, transparent), transparent 26%),
+    radial-gradient(circle at 84% 18%, color-mix(in oklab, oklch(0.70 0.040 320) 9%, transparent), transparent 30%),
+    radial-gradient(circle at 72% 82%, color-mix(in oklab, oklch(0.72 0.035 150) 8%, transparent), transparent 36%),
+    linear-gradient(145deg, oklch(0.220 0.007 260) 0%, oklch(0.245 0.007 260) 48%, oklch(0.228 0.007 245) 100%);
+}
+
+/* chrome(侧栏 + 主卡外框)统一成一块平整的底色 —— 侧栏与卡片底下永远同色。 */
+.chaya-v2[data-theme="codex"][data-mode="dark"] .v2-app { background: var(--c-sidebar); }
+
+/* 暗色主卡片：去掉底部亮光晕(base 的投影用 c-ink，暗色里 c-ink 是亮色 → 成了一圈亮晕)，
+   改深色锚定投影；并把四周边缘线提清楚，让卡片从深底里干净切出来。 */
+.chaya-v2[data-theme="codex"][data-mode="dark"] .v2-main {
+  /* 主内容面板：比侧栏更深的单一中性灰(均匀、不透底)。 */
+  background: oklch(0.190 0.006 260);
+  border-color: color-mix(in oklab, var(--c-ink) 26%, transparent);
+  box-shadow:
+    inset 0 1px 0 var(--glass-bevel),
+    inset 0 0 0 1px color-mix(in oklab, var(--c-ink) 7%, transparent),
+    0 16px 38px -30px rgba(0, 0, 0, 0.55);
+}
+
+/* 亮色主卡片：平整近白(不用渐变)，从浅灰 chrome 里干净浮起 —— 与暗色同样精致。 */
+.chaya-v2[data-theme="codex"]:not([data-mode="dark"]) .v2-main {
+  background: oklch(0.994 0.002 255);
+  border-color: color-mix(in oklab, var(--c-ink) 9%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.5),
+    0 18px 40px -34px color-mix(in oklab, var(--c-ink) 30%, transparent);
+}
+
+/* Pure = 干净，不要颗粒噪点。 */
+
+.chaya-v2[data-theme="codex"] .v2-app { background: var(--c-sidebar); }
+
+.chaya-v2[data-theme="codex"] .v2-side.v2-sidebar,
+.chaya-v2[data-theme="codex"] .v2-main,
+.chaya-v2[data-theme="codex"] .v2-rowmenu,
+.chaya-v2[data-theme="codex"] .v2-modal,
+.chaya-v2[data-theme="codex"] .v2-drawer,
+.chaya-v2[data-theme="codex"] .v2-box,
+.chaya-v2[data-theme="codex"] .v2-kb-card,
+.chaya-v2[data-theme="codex"] .v2-kb-canvas,
+.chaya-v2[data-theme="codex"] .v2-lightbox-card {
+  -webkit-backdrop-filter: blur(22px) saturate(145%);
+  backdrop-filter: blur(22px) saturate(145%);
+}
+
+/* 侧边栏与底色不分家：完全透明、无右边线/无投影，读作同一张「桌面玻璃底」。
+   左右分隔交给主卡片自身的边与影来表达。 */
+.chaya-v2[data-theme="codex"] .v2-side.v2-sidebar {
+  background: transparent;
+  border-right: 0;
+  box-shadow: none;
+}
+
+/* 右侧主卡片明显从底色里浮起：用 mode-aware 的磨砂面(亮色更白净/暗色更抬亮)，比
+   雾面底色更"实"，配清晰一圈描边 + 落地投影，读作一张漂浮的玻璃卡。 */
+.chaya-v2[data-theme="codex"] .v2-main {
+  background: linear-gradient(180deg, var(--glass-matte-strong), var(--glass-matte));
+  border-color: color-mix(in oklab, var(--c-ink) 10%, transparent);
+  border-left-color: color-mix(in oklab, var(--c-ink) 10%, transparent);
+  /* 更厚的毛玻璃：blur 22→36、饱和微提，背后内容更「远」更磨砂 = 玻璃更厚。 */
+  -webkit-backdrop-filter: blur(36px) saturate(150%);
+  backdrop-filter: blur(36px) saturate(150%);
+  box-shadow:
+    inset 0 1px 0 var(--glass-bevel),                                     /* 顶沿柔光收一档，减光晕 */
+    inset 0 0 0 1px color-mix(in oklab, var(--c-ink) 6%, transparent),    /* 一圈玻璃缘，体现厚度 */
+    0 20px 46px -42px color-mix(in oklab, var(--c-ink) 36%, transparent); /* 落影更收，不外扩成晕 */
+}
+
+/* 斜向受光收弱：之前 52% 白 + 38% 覆盖太亮，读作光晕；压到 ~半强 + 收到 28%。 */
+.chaya-v2[data-theme="codex"] .v2-main::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(135deg, color-mix(in oklab, var(--glass-sheen) 55%, transparent), transparent 28%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.chaya-v2[data-theme="codex"] .v2-main > * { position: relative; z-index: 1; }
+.chaya-v2[data-theme="codex"] .v2-topbar::after { background: var(--glass-matte-line); opacity: 1; }
+
+/* ── 6 层灰阶落地 ──────────────────────────────────────────────────────────
+   L1–L4(ink…ink-4)已被各组件沿用，retune 后对比更分明；这里把扩展的 L5/L6 接到
+   语义最弱的两类，使「6 级」真正用满，层级一眼可分：
+     L5 ink-5 = 占位符 / 弱提示(比元信息更轻，但仍可读)
+     L6 ink-6 = 禁用 / 发丝级文字(最弱) */
+.chaya-v2[data-theme="codex"] .v2-side-hint,
+.chaya-v2[data-theme="codex"] input::placeholder,
+.chaya-v2[data-theme="codex"] textarea::placeholder { color: var(--c-ink-5); }
+.chaya-v2[data-theme="codex"] .v2-side-action kbd { color: var(--c-ink-5); }
+.chaya-v2[data-theme="codex"] :disabled { color: var(--c-ink-6); }
+
+/* ── Opal Glass · 侧栏图标 ────────────────────────────────────────────────
+   侧栏现在与底色合一(透明)，图标/色块直接坐在雾玻璃上，需要各自「成材质」：
+   · 置顶会话色块 .ch 用磨砂面打底(原本是半透明 c-bg，在玻璃上发糊)，留类型色调 +
+     顶沿一缕吃光，读作一枚枚小玻璃牌；
+   · 通知红点的描边环改磨砂(原本用不透明 c-sidebar，透明侧栏下成了一坨灰圈)；
+   · 静默图标在雾底上略提一档(ink-3→ink-2)，悬停/选中再走 accent，层次更清楚。 */
+.chaya-v2[data-theme="codex"] .v2-pin,
+.chaya-v2[data-theme="codex"] .v2-railbtn { color: color-mix(in oklab, var(--c-ink-2) 55%, var(--c-ink-3)); }
+.chaya-v2[data-theme="codex"] .v2-pin svg,
+.chaya-v2[data-theme="codex"] .v2-railbtn .ic { filter: drop-shadow(0 1px 0 var(--glass-bevel-soft)); }
+
+.chaya-v2[data-theme="codex"] .v2-pin-chip .ch {
+  background: color-mix(in oklab, var(--chip-bd) 12%, var(--glass-matte-strong));
+  box-shadow: inset 0 1px 0 var(--glass-bevel-soft), 0 1px 2px -1px color-mix(in oklab, var(--c-ink) 24%, transparent);
+}
+.chaya-v2[data-theme="codex"] .v2-pin-chip:hover .ch {
+  background: color-mix(in oklab, var(--chip-bd) 20%, var(--glass-matte-strong));
+}
+.chaya-v2[data-theme="codex"] .v2-pin-chip.active .ch {
+  background: color-mix(in oklab, var(--chip-bd) 28%, var(--glass-matte-strong));
+  border-color: color-mix(in oklab, var(--chip-bd) 85%, var(--c-ink));
+}
+/* Pure：会话色块按类型仍区分，但降彩度,跟去蓝的中性外观和谐(不在纯净里冒出几块高饱和)。 */
+.chaya-v2[data-theme="codex"] .v2-pin-chip[data-kind="agent"]   { --chip-bd: oklch(0.60 0.090 305); }
+.chaya-v2[data-theme="codex"] .v2-pin-chip[data-kind="chat"]    { --chip-bd: oklch(0.63 0.078 245); }
+.chaya-v2[data-theme="codex"] .v2-pin-chip[data-kind="kb"]      { --chip-bd: oklch(0.62 0.078 150); }
+.chaya-v2[data-theme="codex"] .v2-pin-chip[data-kind="gallery"] { --chip-bd: oklch(0.70 0.085 70);  }
+.chaya-v2[data-theme="codex"] .v2-pin-chip[data-kind="local"]   { --chip-bd: oklch(0.63 0.072 35);  }
+
+.chaya-v2[data-theme="codex"] .v2-pin .dot { box-shadow: 0 0 0 1.5px var(--glass-matte-strong); }
+.chaya-v2[data-theme="codex"] .v2-wiki .dot { box-shadow: 0 0 0 1px var(--glass-matte-line), inset 0 1px 0 var(--glass-bevel-soft); }
+
+.chaya-v2[data-theme="codex"] .v2-crumb,
+.chaya-v2[data-theme="codex"] .v2-tbtn,
+.chaya-v2[data-theme="codex"] .v2-theme-chip.active,
+.chaya-v2[data-theme="codex"] .v2-seg-item.active {
+  background: var(--glass-chip);
+  box-shadow: inset 0 1px 0 var(--glass-bevel), inset 0 0 0 1px color-mix(in oklab, var(--glass-matte-line) 50%, transparent), 0 12px 28px -24px rgba(56,57,64,0.34);
+}
+
+.chaya-v2[data-theme="codex"] .v2-rail-pins,
+.chaya-v2[data-theme="codex"] .v2-side-list,
+.chaya-v2[data-theme="codex"] .v2-topbar-rail { border-color: var(--glass-matte-line); }
+
+.chaya-v2[data-theme="codex"] .v2-pin.active,
+.chaya-v2[data-theme="codex"] .v2-railbtn.active,
+.chaya-v2[data-theme="codex"] .v2-wiki.active,
+.chaya-v2[data-theme="codex"] .v2-agents .v2-a.active,
+.chaya-v2[data-theme="codex"] .v2-recents .v2-r.active {
+  background: var(--glass-chip-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--glass-matte-line) 50%, transparent), inset 0 1px 0 var(--glass-bevel-soft);
+}
+
+.chaya-v2[data-theme="codex"] .v2-search:focus-within,
+.chaya-v2[data-theme="codex"] .v2-input,
+.chaya-v2[data-theme="codex"] .v2-side-action,
+.chaya-v2[data-theme="codex"] .v2-md .v2-code,
+.chaya-v2[data-theme="codex"] .v2-ref,
+.chaya-v2[data-theme="codex"] .v2-att,
+.chaya-v2[data-theme="codex"] .v2-spec-card {
+  background: var(--glass-input);
+  border-color: var(--glass-matte-line);
+}
+
+.chaya-v2[data-theme="codex"] .v2-box {
+  background: rgba(255, 255, 255, 0.46);
+  border-color: var(--glass-edge);
+  box-shadow:
+    inset 0 1px 0 var(--glass-bevel),
+    0 22px 50px -32px rgba(56,57,64,0.42);
+}
+
+.chaya-v2[data-theme="codex"] .v2-box:focus-within {
+  box-shadow:
+    inset 0 1px 0 var(--glass-bevel-strong),
+    0 0 0 1px var(--glass-focus-ring),
+    0 22px 50px -32px rgba(56,57,64,0.42);
+}
+
+.chaya-v2[data-theme="codex"] ::selection {
+  background: color-mix(in oklab, var(--c-ink) 16%, transparent);
+  color: var(--c-ink);
+}
+
+.chaya-v2[data-theme="codex"] ::-webkit-scrollbar-thumb { background: color-mix(in oklab, var(--c-ink) 16%, transparent); }
+.chaya-v2[data-theme="codex"] ::-webkit-scrollbar-thumb:hover { background: color-mix(in oklab, var(--c-ink) 30%, transparent); }
+
+.chaya-v2[data-theme="codex"] .v2-la-badge,
+.chaya-v2[data-theme="codex"] .v2-la-badge.prov-claude,
+.chaya-v2[data-theme="codex"] .v2-la-badge.prov-cursor,
+.chaya-v2[data-theme="codex"] .v2-la-badge.prov-codex,
+.chaya-v2[data-theme="codex"] .v2-la-badge.prov-gemini {
+  color: var(--c-ink);
+  background: var(--glass-chip);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--glass-matte-line) 50%, transparent), inset 0 1px 0 var(--glass-bevel-soft);
+}
+.chaya-v2[data-theme="codex"] .v2-la-badge:hover { filter: brightness(1.08) saturate(1.05); }
+.chaya-v2[data-theme="codex"] .v2-la-badge .v2-la-spinner.sm {
+  border-color: color-mix(in oklab, var(--c-ink) 22%, transparent);   /* mode-aware 轨道 */
+  border-top-color: var(--c-ink);
+}
+/* Pure 主题：CLI 头像（>. 印记）走朴素中性款 —— 不再用品牌橙/紫，统一中性
+   ink + glass chip 底，呼应 Pure 去饱和的极简调（与上面 la-badge 同处理）。 */
+.chaya-v2[data-theme="codex"] .v2-la-ava,
+.chaya-v2[data-theme="codex"] .v2-la-ava.prov-claude,
+.chaya-v2[data-theme="codex"] .v2-la-ava.prov-cursor,
+.chaya-v2[data-theme="codex"] .v2-la-ava.prov-codex,
+.chaya-v2[data-theme="codex"] .v2-la-ava.prov-gemini {
+  background: color-mix(in oklab, var(--c-ink) 6%, transparent);
+  color: var(--c-ink-2);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--glass-matte-line) 50%, transparent);
+}
+
+/* Glass legibility pass: every text-bearing layer that can overlap another
+   translucent layer receives a milky backing color. This preserves the glass
+   edges while preventing text from blending into whatever sits underneath. */
+.chaya-v2[data-theme="codex"] .v2-rowmenu,
+.chaya-v2[data-theme="codex"] .v2-modal,
+.chaya-v2[data-theme="codex"] .v2-drawer,
+.chaya-v2[data-theme="codex"] .v2-login-modal,
+.chaya-v2[data-theme="codex"] .v2-pickmodal,
+.chaya-v2[data-theme="codex"] .v2-kb-card,
+.chaya-v2[data-theme="codex"] .v2-kb-canvas,
+.chaya-v2[data-theme="codex"] .v2-note-cm,
+.chaya-v2[data-theme="codex"] .v2-lightbox-card {
+  background: var(--glass-matte);
+  border-color: var(--glass-matte-line);
+  box-shadow:
+    inset 0 1px 0 var(--glass-bevel-strong),
+    0 18px 44px -30px rgba(56, 57, 64, 0.36);
+}
+
+/* Pure 标签栏：浏览器式连排，不是一颗颗带投影的浮岛 —— 去掉每个 tab 的磨砂底 + 投影。
+   · 非激活 → 透明，融进顶栏，无缝无影；
+   · 激活   → 填一层抬升面 + 底部一道 accent 细线「接」到内容；
+   · 悬停   → 极淡抬升,不抢激活。 */
+.chaya-v2[data-theme="codex"] .v2-la-tab { background: transparent; box-shadow: none; color: var(--c-ink-3); }
+.chaya-v2[data-theme="codex"] .v2-la-tab:hover { background: var(--glass-matte-soft); box-shadow: none; color: var(--c-ink-2); }
+.chaya-v2[data-theme="codex"] .v2-toptabs > .v2-la-tab.active:not(.pinned),
+.chaya-v2[data-theme="codex"] .v2-la-tab.active {
+  color: var(--c-ink);
+  background: var(--glass-matte);
+  box-shadow: inset 0 -2px 0 0 color-mix(in oklab, var(--c-accent) 55%, transparent);
+}
+
+.chaya-v2[data-theme="codex"] .v2-modepills,
+.chaya-v2[data-theme="codex"] .v2-ref,
+.chaya-v2[data-theme="codex"] .v2-att,
+.chaya-v2[data-theme="codex"] .v2-spec-card,
+.chaya-v2[data-theme="codex"] .v2-md blockquote,
+.chaya-v2[data-theme="codex"] .v2-md table,
+.chaya-v2[data-theme="codex"] .v2-md .v2-mermaid {
+  background: var(--glass-matte-soft);
+  border-color: var(--glass-matte-line);
+}
+
+.chaya-v2[data-theme="codex"] .v2-md :not(pre) > code,
+.chaya-v2[data-theme="codex"] .v2-md .v2-code,
+.chaya-v2[data-theme="codex"] .v2-code-copy,
+.chaya-v2[data-theme="codex"] .v2-md th,
+.chaya-v2[data-theme="codex"] .v2-msg.user .v2-bubble,
+.chaya-v2[data-theme="codex"] .v2-modepills .v2-indicator,
+.chaya-v2[data-theme="codex"] .v2-domain-chip,
+.chaya-v2[data-theme="codex"] .v2-quote-cite,
+.chaya-v2[data-theme="codex"] .v2-domain-cite {
+  background: var(--glass-matte-strong);
+  border-color: var(--glass-matte-line);
+}
+
+.chaya-v2[data-theme="codex"] .v2-md td,
+.chaya-v2[data-theme="codex"] .v2-md th {
+  border-color: var(--glass-matte-line);
+}
+
+.chaya-v2[data-theme="codex"] .v2-msg.assistant .v2-bubble {
+  color: var(--c-ink);
+}
+
+/* 亮色 chat 输入框：不透明,比白主卡略沉一档的灰白,读作内嵌输入(暗色在下方覆盖)。 */
+.chaya-v2[data-theme="codex"] .v2-box,
+.chaya-v2[data-theme="codex"] .v2-box:focus-within {
+  background: oklch(0.970 0.003 255);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* chat 输入框：不透明——实心中性灰(比主面板略沉,读作内嵌输入)，并关掉 backdrop blur
+   (已无透明度可透,省合成层)。 */
+.chaya-v2[data-theme="codex"][data-mode="dark"] .v2-box,
+.chaya-v2[data-theme="codex"][data-mode="dark"] .v2-box:focus-within {
+  background: oklch(0.215 0.006 260);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.chaya-v2[data-theme="codex"] .v2-pin:hover,
+.chaya-v2[data-theme="codex"] .v2-railbtn:hover,
+.chaya-v2[data-theme="codex"] .v2-wiki:hover,
+.chaya-v2[data-theme="codex"] .v2-agents .v2-a:hover,
+.chaya-v2[data-theme="codex"] .v2-recents .v2-r:hover,
+.chaya-v2[data-theme="codex"] .v2-la-proj-row:hover,
+.chaya-v2[data-theme="codex"] .v2-la-sess:hover,
+.chaya-v2[data-theme="codex"] .v2-crumb:hover,
+.chaya-v2[data-theme="codex"] .v2-tbtn:hover {
+  background: var(--glass-matte-soft);
+  box-shadow: inset 0 1px 0 var(--glass-bevel-soft);
+}
+
+.chaya-v2[data-theme="codex"] .v2-pin:focus-visible,
+.chaya-v2[data-theme="codex"] .v2-railbtn:focus-visible,
+.chaya-v2[data-theme="codex"] .v2-me:focus-visible,
+.chaya-v2[data-theme="codex"] .v2-la-tab:focus-visible,
+.chaya-v2[data-theme="codex"] .v2-code-copy:focus-visible,
+.chaya-v2[data-theme="codex"] .v2-box:focus-within {
+  outline: none;
+  box-shadow:
+    inset 0 1px 0 var(--glass-bevel-soft),
+    0 0 0 1px var(--glass-focus-ring),
+    0 18px 44px -32px color-mix(in oklab, var(--c-ink) 28%, transparent);
+}
+
+.chaya-v2[data-theme="codex"] .v2-md table,
+.chaya-v2[data-theme="codex"] .v2-md .v2-code,
+.chaya-v2[data-theme="codex"] .v2-md .v2-mermaid {
+  box-shadow:
+    inset 0 1px 0 var(--glass-bevel-soft),
+    0 1px 0 color-mix(in oklab, var(--c-ink) 5%, transparent);
+}
+
+.chaya-v2[data-theme="codex"] .v2-md tr:hover td {
+  background: color-mix(in oklab, var(--glass-matte-strong) 72%, var(--c-accent-bg));
+}
+
+.chaya-v2[data-theme="codex"] .v2-msg.user .v2-bubble,
+.chaya-v2[data-theme="codex"] .v2-md :not(pre) > code,
+.chaya-v2[data-theme="codex"] .v2-domain-chip {
+  box-shadow: inset 0 0 0 1px var(--glass-matte-line);
+}
+
+.chaya-v2[data-theme="codex"] .v2-search:focus-within,
+.chaya-v2[data-theme="codex"] .v2-input:focus {
+  background: var(--glass-matte-strong);
+  border-color: var(--glass-focus-ring);
+}
+
+/* open project：不要明确边框，更优雅 —— 静态极淡填充、无边无影；悬停只是填充加深。 */
+.chaya-v2[data-theme="codex"] .v2-side-action {
+  background: color-mix(in oklab, var(--glass-matte-soft) 50%, transparent);
+  border-color: transparent;
+  box-shadow: none;
+}
+.chaya-v2[data-theme="codex"] .v2-side-action:hover {
+  background: var(--glass-matte-soft);
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.chaya-v2[data-theme="codex"] .v2-pin.active,
+.chaya-v2[data-theme="codex"] .v2-railbtn.active,
+.chaya-v2[data-theme="codex"] .v2-wiki.active,
+.chaya-v2[data-theme="codex"] .v2-agents .v2-a.active,
+.chaya-v2[data-theme="codex"] .v2-recents .v2-r.active,
+.chaya-v2[data-theme="codex"] .v2-la-proj-row.active,
+.chaya-v2[data-theme="codex"] .v2-la-sess.active,
+.chaya-v2[data-theme="codex"] .v2-chip.active,
+.chaya-v2[data-theme="codex"] .v2-modepills button.on {
+  color: var(--c-accent-strong);
+}
+
+.chaya-v2[data-theme="codex"] .v2-pin.active,
+.chaya-v2[data-theme="codex"] .v2-railbtn.active,
+.chaya-v2[data-theme="codex"] .v2-wiki.active,
+.chaya-v2[data-theme="codex"] .v2-agents .v2-a.active,
+.chaya-v2[data-theme="codex"] .v2-recents .v2-r.active,
+.chaya-v2[data-theme="codex"] .v2-la-proj-row.active,
+.chaya-v2[data-theme="codex"] .v2-la-sess.active {
+  /* 选中态：从「亮白卡片」降一档为中性雾面(matte，比 hover 的 soft 更实一档),只在「细边 +
+     图标/字」点 accent——不把整块染白也不染紫(同屏常有 导航/项目/会话 三处选中,accent 要省)。 */
+  background: color-mix(in oklab, var(--glass-matte) 90%, var(--c-accent-bg));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--c-accent) 10%, transparent), inset 0 1px 0 color-mix(in oklab, var(--glass-bevel-soft) 55%, transparent);
+}
+
+/* 选中态的图标只点一笔 accent 颜色——绝不给图标加底色(之前误把 .dot 的 accent 填充
+   一起套到 svg/.ic 上，图标背后多了一块深 accent 底板，很丑)。 */
+.chaya-v2[data-theme="codex"] .v2-pin.active svg,
+.chaya-v2[data-theme="codex"] .v2-railbtn.active .ic,
+.chaya-v2[data-theme="codex"] .v2-nav .v2-row.active .v2-ic,
+.chaya-v2[data-theme="codex"] .v2-agents .v2-a.active .v2-ic,
+.chaya-v2[data-theme="codex"] .v2-recents .v2-r.active .v2-ic {
+  color: var(--c-accent-strong);
+  background: transparent;
+}
+
+/* 真正需要 accent 实心填充的小圆点(引用 pill / spec 印章)。 */
+.chaya-v2[data-theme="codex"] .v2-domain-cite-pill .dot,
+.chaya-v2[data-theme="codex"] .v2-spec-stamp .dot {
+  color: var(--c-accent-strong);
+  background: var(--c-accent);
+}
+
+.chaya-v2[data-theme="codex"] .v2-chip.active,
+.chaya-v2[data-theme="codex"] .v2-modepills .v2-indicator {
+  background: color-mix(in oklab, var(--glass-matte-strong) 78%, var(--c-accent-bg));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--c-accent) 24%, transparent), inset 0 1px 0 var(--glass-bevel);
+}
+
+.chaya-v2[data-theme="codex"] .v2-create-pop {
+  /* 实色一档 + 轻磨砂：原先 26px 重磨砂 + 78% 半透 → 内容压在虚化背景上整体发灰。
+     提到 ~94% 不透明、blur 砍半，弹层里有效内容（卡片/输入/文字）边缘清晰。 */
+  background: color-mix(in oklab, var(--glass-matte-strong) 94%, var(--c-bg));
+  border-color: color-mix(in oklab, var(--c-accent) 20%, var(--glass-matte-line));
+  -webkit-backdrop-filter: blur(13px) saturate(122%);
+  backdrop-filter: blur(13px) saturate(122%);
+  box-shadow:
+    inset 0 1px 0 var(--glass-bevel),
+    0 24px 64px -34px color-mix(in oklab, var(--c-ink) 38%, transparent);
+}
+
+.chaya-v2[data-theme="codex"] .v2-create-pop .v2-panel,
+.chaya-v2[data-theme="codex"] .v2-create-pop .v2-refs,
+.chaya-v2[data-theme="codex"] .v2-create-pop textarea,
+.chaya-v2[data-theme="codex"] .v2-create-pop input,
+.chaya-v2[data-theme="codex"] .v2-ref input.v2-dir,
+.chaya-v2[data-theme="codex"] .v2-ref .v2-th,
+.chaya-v2[data-theme="codex"] .v2-ref.add {
+  background-color: var(--glass-matte-strong);
+  border-color: var(--glass-matte-line);
+}
+
+/* ---- Pure(codex) 暗色：创作面板分层可读性强化 ----
+   原先面板/输入/卡片同走 matte-strong 半透 → 同色糊在一起、层级不分。
+   把弹层内壳透明化，让卡片/输入各自成「比底面亮/暗一档」的清晰实色面。 */
+.chaya-v2[data-theme="codex"][data-mode="dark"] .v2-create-pop .v2-panel {
+  background-color: transparent;
+}
+.chaya-v2[data-theme="codex"][data-mode="dark"] .v2-style-card {
+  background: color-mix(in oklab, oklch(0.405 0.010 260) 98%, transparent);
+  border-color: color-mix(in oklab, var(--c-ink) 13%, transparent);
+}
+.chaya-v2[data-theme="codex"][data-mode="dark"] .v2-style-card:hover {
+  border-color: color-mix(in oklab, var(--c-ink) 28%, transparent);
+}
+.chaya-v2[data-theme="codex"][data-mode="dark"] .v2-style-card.active {
+  background: color-mix(in oklab, var(--c-accent) 16%, oklch(0.405 0.010 260));
+}
+.chaya-v2[data-theme="codex"][data-mode="dark"] .v2-style-card-foot {
+  background: rgba(0, 0, 0, 0.22);            /* 脚条压暗 → 卡片两层立体 */
+  border-top-color: color-mix(in oklab, var(--c-ink) 12%, transparent);
+}
+/* 输入框压暗成内嵌槽，明确区别于面板底 */
+.chaya-v2[data-theme="codex"][data-mode="dark"] .v2-create-pop textarea,
+.chaya-v2[data-theme="codex"][data-mode="dark"] .v2-create-pop input {
+  background-color: rgba(0, 0, 0, 0.24);
+  border-color: color-mix(in oklab, var(--c-ink) 13%, transparent);
+}
+
+.chaya-v2[data-theme="codex"] .v2-create-pop .v2-chip,
+.chaya-v2[data-theme="codex"] .v2-create-chips .v2-chip,
+.chaya-v2[data-theme="codex"] .v2-spec-chip {
+  background: var(--glass-matte-strong);
+  border: 1px solid color-mix(in oklab, var(--c-accent) 10%, transparent);
+  box-shadow: inset 0 1px 0 var(--glass-bevel-soft);
+}
+
+.chaya-v2[data-theme="codex"] .v2-ref.add:hover,
+.chaya-v2[data-theme="codex"] .v2-create-pop .v2-chip:hover,
+.chaya-v2[data-theme="codex"] .v2-create-chips .v2-chip:hover {
+  background: color-mix(in oklab, var(--glass-matte-strong) 80%, var(--c-accent-bg));
+  border-color: color-mix(in oklab, var(--c-accent) 28%, var(--glass-matte-line));
+}
+
+.chaya-v2[data-theme="codex"] .v2-ref .v2-th-idx,
+.chaya-v2[data-theme="codex"] .v2-spec-ref-directive {
+  color: var(--c-ink);
+  background: color-mix(in oklab, var(--glass-matte-strong) 78%, var(--c-accent-bg));
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+/* ============================================================
+   Pure × mac vibrancy —— 侧栏/外框透出模糊桌面，主内容保持不透明。
+   仅 data-vibrancy(mac) + Pure 生效；其它主题的不透明根底会盖住 vibrancy,不受影响。
+   ============================================================ */
+/* 1) 打通到窗口：html/body/#root 透明，让 vibrancy 能透上来(非 Pure 主题的不透明根仍遮住)。 */
+html[data-vibrancy="on"],
+html[data-vibrancy="on"] body,
+html[data-vibrancy="on"] #root { background: transparent; }
+/* 2) Pure 的根透明 → vibrancy 透上来。 */
+html[data-vibrancy="on"] .chaya-v2[data-theme="codex"] { background: transparent; }
+/* 3) 整块 chrome(.v2-app)= 一层半透 tint，叠在系统 vibrancy(已模糊的桌面)上。
+   侧栏与「卡片底下/外框」是同一块半透玻璃 → 颜色、模糊、透明度完全一致(统一)。
+   ~68% tint：桌面隐约可见(透明感在)，又不发飘;文字/图标对比由不透明主面板保证。 */
+html[data-vibrancy="on"] .chaya-v2[data-theme="codex"] .v2-app {
+  background: color-mix(in oklab, var(--c-sidebar) 68%, transparent);
+}
+/* 关键统一点：侧栏不要自己再叠一层 backdrop blur(否则比卡片底下多糊一次,看着不一体)。
+   系统 vibrancy 已经把桌面糊好了,整块 chrome 共用它。 */
+html[data-vibrancy="on"] .chaya-v2[data-theme="codex"] .v2-side.v2-sidebar {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* 4) 主内容面板/输入框不透明(.v2-main / .v2-box)，显示完全不受透明影响。 */
 
 /* ============================================================
    Razer 主体下：CLI provider 徽标 / 权限模式 / 头像背景 / 列表"默认"
@@ -980,6 +1242,7 @@ html[data-electron-platform="darwin"] .chaya-v2 .v2-rail-lights-gap { width: 70p
 .chaya-v2 .v2-railme-nm {
   flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 13px; font-weight: 500; color: var(--c-ink-2);
+  text-align: left;   /* 父级是 <button>，默认 text-align:center 会把用户名居中——靠左 */
 }
 .chaya-v2 .v2-railme:hover .v2-railme-nm { color: var(--c-ink); }
 .chaya-v2 .v2-railme .lb { flex: 0 0 auto; display: inline-flex; }
@@ -2019,31 +2282,112 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
   text-transform: uppercase;
 }
 .chaya-v2 .v2-panel .v2-opt.active small { color: var(--c-ink-3); }
-.chaya-v2 .v2-panel .v2-opt .v2-opt-del {
-  position: absolute; top: 50%; right: 5px; transform: translateY(-50%);
-  width: 16px; height: 16px;
-  display: grid; place-items: center;
-  color: var(--c-ink-4); border-radius: 50%;
-  opacity: 0; pointer-events: none;
-  background: color-mix(in oklab, var(--c-bg) 70%, transparent);
-  transition: opacity 140ms var(--c-ease), background 140ms var(--c-ease), color 140ms var(--c-ease);
-  cursor: pointer; font-size: 10px;
+/* ===== 风格预设卡片：分层结构（标题区 + 底部 meta/动作条），告别拥挤单行 =====
+   单行 pill 里名字、CUSTOM 标签、复制、删除全挤在一起，hover 才浮现 → 难点也难看。
+   改为竖向两段卡：上半 = 名字（大、可点选区），下半 = hairline 分隔的脚条，
+   左挂标签、右挂常显的复制/删除 icon 按钮，命中区大且互不遮挡。 */
+.chaya-v2 .v2-panel .v2-style-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(98px, 1fr));
+  gap: 6px;
+  max-height: 208px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;       /* 给滚动条留位，避免压住卡片右缘 */
+  margin-right: -4px;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--c-ink) 18%, transparent) transparent;
 }
-.chaya-v2 .v2-panel .v2-opt:hover .v2-opt-del { opacity: 1; pointer-events: auto; }
-.chaya-v2 .v2-panel .v2-opt .v2-opt-del:hover {
-  background: var(--c-danger-bg);
-  color: var(--c-danger);
+.chaya-v2 .v2-panel .v2-style-grid::-webkit-scrollbar { width: 8px; }
+.chaya-v2 .v2-panel .v2-style-grid::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--c-ink) 18%, transparent);
+  border-radius: 4px; border: 2px solid transparent; background-clip: padding-box;
 }
-.chaya-v2 .v2-panel .v2-opt .v2-opt-custom {
-  font-size: 9.5px; font-weight: 600;
-  padding: 1px 5px; border-radius: var(--c-radius-xs);
-  background: color-mix(in oklab, var(--c-accent) 14%, transparent);
-  color: var(--c-accent-strong);
-  margin-left: 4px;
+.chaya-v2 .v2-panel .v2-style-grid::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--c-ink) 30%, transparent); background-clip: padding-box;
+}
+.chaya-v2 .v2-panel .v2-style-card {
+  position: relative;
+  display: flex; flex-direction: column;
+  border-radius: var(--c-radius-md);
+  background: var(--c-surface);
+  border: 1px solid var(--c-rule);
+  cursor: pointer;
+  overflow: hidden;
+  transition: background 140ms var(--c-ease), border-color 140ms var(--c-ease),
+              box-shadow 140ms var(--c-ease), transform 120ms var(--c-ease);
+}
+.chaya-v2 .v2-panel .v2-style-card:hover {
+  border-color: color-mix(in oklab, var(--c-ink) 16%, var(--c-rule));
+  box-shadow: 0 2px 8px -4px color-mix(in oklab, var(--c-ink) 40%, transparent);
+}
+.chaya-v2 .v2-panel .v2-style-card:active { transform: translateY(0.5px); }
+/* 选中 = accent hairline + 微染整卡 + 左侧细 accent 条 */
+.chaya-v2 .v2-panel .v2-style-card.active {
+  background: var(--c-accent-bg);
+  border-color: color-mix(in oklab, var(--c-accent) 50%, var(--c-rule));
+}
+.chaya-v2 .v2-panel .v2-style-card.active::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2.5px;
+  background: var(--c-accent);
+}
+/* 上半：标题区 */
+.chaya-v2 .v2-panel .v2-style-card-body {
+  flex: 1 1 auto;
+  padding: 6px 8px 5px;
+  min-height: 30px;
+  display: flex; align-items: flex-start;
+}
+.chaya-v2 .v2-panel .v2-style-card-name {
+  font-size: 11.5px; line-height: 1.3; font-weight: 500;
+  color: var(--c-ink-2);
+  word-break: break-word;
+}
+.chaya-v2 .v2-panel .v2-style-card:hover .v2-style-card-name,
+.chaya-v2 .v2-panel .v2-style-card.active .v2-style-card-name { color: var(--c-ink); }
+/* 下半：脚条（标签 + 动作） */
+.chaya-v2 .v2-panel .v2-style-card-foot {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 4px 3px 8px;
+  min-height: 24px;
+  border-top: 1px solid color-mix(in oklab, var(--c-rule) 70%, transparent);
+  background: color-mix(in oklab, var(--c-ink) 3%, transparent);
+}
+.chaya-v2 .v2-panel .v2-style-card.active .v2-style-card-foot {
+  border-top-color: color-mix(in oklab, var(--c-accent) 28%, var(--c-rule));
+  background: color-mix(in oklab, var(--c-accent) 8%, transparent);
+}
+.chaya-v2 .v2-panel .v2-style-card-tag {
+  font-size: 8px; font-weight: 600;
   letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--c-ink-4);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.chaya-v2 .v2-panel .v2-opt.active .v2-opt-custom {
-  background: color-mix(in oklab, var(--c-accent) 22%, transparent);
+.chaya-v2 .v2-panel .v2-style-card-tag.custom {
+  padding: 1px 5px; border-radius: var(--c-radius-xs);
+  background: color-mix(in oklab, var(--c-accent) 15%, transparent);
+  color: var(--c-accent-strong);
+}
+.chaya-v2 .v2-panel .v2-style-card-acts {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 1px;
+}
+.chaya-v2 .v2-panel .v2-style-card-act {
+  width: 19px; height: 19px;
+  display: grid; place-items: center;
+  border: none; padding: 0; margin: 0;
+  background: transparent; color: var(--c-ink-3);
+  border-radius: var(--c-radius-sm); cursor: pointer;
+  transition: background 130ms var(--c-ease), color 130ms var(--c-ease);
+}
+.chaya-v2 .v2-panel .v2-style-card-act svg { width: 12px; height: 12px; }
+.chaya-v2 .v2-panel .v2-style-card-copy:hover {
+  background: var(--c-hover-soft); color: var(--c-accent-strong);
+}
+.chaya-v2 .v2-panel .v2-style-card-copy.done { color: var(--c-accent); }
+.chaya-v2 .v2-panel .v2-style-card-del:hover {
+  background: var(--c-danger-bg); color: var(--c-danger);
 }
 /* the knowledge memory modal reuses the option-grid chips but lives outside
    .v2-panel, so the grid styling above never reached it (chips fell back to raw
@@ -2130,6 +2474,13 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
   z-index: 100; display: grid; place-items: center;
   animation: v2-fadeIn var(--m-base) var(--ease-out) both;
   padding: 40px 24px;
+}
+/* Pure：弹框周围重磨砂(把背后糊掉,不透),聚焦弹框本身。 */
+.chaya-v2[data-theme="codex"] .v2-modal-mask,
+.chaya-v2[data-theme="codex"] .v2-login-mask {
+  background: color-mix(in oklab, oklch(0.12 0.006 260) 44%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(115%);
+  backdrop-filter: blur(24px) saturate(115%);
 }
 .chaya-v2 .v2-modal {
   background: var(--c-bg); border-radius: var(--c-radius-xl);
@@ -4693,6 +5044,9 @@ body.v2-la-resizing { user-select: none; }
 /* 权限模式 pill（Tab 切换；唯一带状态色的 chip，500 字重以示状态）。Default 走 ghost，
    其余档位才上柔和底色——「一屏只有该看的地方有色」。 */
 .chaya-v2 .v2-la-mode { font-weight: 500; }
+/* 默认(非 Pure)：仍走文字标签,icon 隐藏。 */
+.chaya-v2 .v2-la-mode-ic { display: none; }
+.chaya-v2 .v2-la-mode-ic svg { width: 15px; height: 15px; }
 .chaya-v2 .v2-la-mode.tone-default { color: var(--c-ink-3); }                                                /* Default 安静 ghost */
 .chaya-v2 .v2-la-mode.tone-default:hover { background: var(--c-hover); color: var(--c-ink-2); }
 .chaya-v2 .v2-la-mode.tone-plan   { background: rgba(59,130,246,0.14); color: #2f6fed; }                    /* Plan 蓝 */
@@ -4700,6 +5054,21 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .v2-la-mode.tone-bypass { background: rgba(216,120,150,0.16); color: #b05a7a; }                   /* Bypass 雾粉 */
 .chaya-v2 .v2-la-mode.tone-plan:hover, .chaya-v2 .v2-la-mode.tone-edit:hover, .chaya-v2 .v2-la-mode.tone-bypass:hover { filter: brightness(0.97); }
 .chaya-v2 .v2-la-mode:focus-visible { outline: 1.5px solid var(--c-accent); outline-offset: 1.5px; }
+
+/* Pure：权限档纯 icon —— 隐藏文字、只留 icon、去掉所有填充色块；icon 按档位点一缕很淡的色
+   (default 中性 / plan 蓝 / edit 橙 / bypass 暖红),既简约又留状态信号。 */
+.chaya-v2[data-theme="codex"] .v2-la-mode { padding: 0 6px; background: transparent; }
+.chaya-v2[data-theme="codex"] .v2-la-mode-ic { display: inline-flex; }
+.chaya-v2[data-theme="codex"] .v2-la-mode-lb { display: none; }
+.chaya-v2[data-theme="codex"] .v2-la-mode.tone-default,
+.chaya-v2[data-theme="codex"] .v2-la-mode.tone-plan,
+.chaya-v2[data-theme="codex"] .v2-la-mode.tone-edit,
+.chaya-v2[data-theme="codex"] .v2-la-mode.tone-bypass { background: transparent; }
+.chaya-v2[data-theme="codex"] .v2-la-mode.tone-default { color: var(--c-ink-3); }
+.chaya-v2[data-theme="codex"] .v2-la-mode.tone-plan   { color: color-mix(in oklab, var(--c-ink-2) 60%, oklch(0.62 0.12 250)); }
+.chaya-v2[data-theme="codex"] .v2-la-mode.tone-edit   { color: color-mix(in oklab, var(--c-ink-2) 58%, oklch(0.66 0.12 60)); }
+.chaya-v2[data-theme="codex"] .v2-la-mode.tone-bypass { color: color-mix(in oklab, var(--c-ink-2) 52%, oklch(0.63 0.13 8)); }
+.chaya-v2[data-theme="codex"] .v2-la-mode:hover { background: var(--glass-matte-soft); filter: none; color: var(--c-ink); }
 
 /* 模型选择器（/model 等价）：输入框旁的安静 pill + 向上弹出的列表 */
 .chaya-v2 .v2-la-modelwrap { position: relative; display: inline-flex; }
@@ -4822,8 +5191,7 @@ body.v2-la-resizing { user-select: none; }
     0 1px 0 color-mix(in oklab, var(--c-ink) 8%, transparent),
     0 2px 6px -2px color-mix(in oklab, var(--c-ink) 14%, transparent);
 }
-/* Cursor / Anthropic 主题：active 段加 1px accent hairline 暗示"在 X 主题里" */
-.chaya-v2[data-theme="cursor"] .v2-la-cfgtabs button.on,
+/* Anthropic 主题：active 段加 1px accent hairline 暗示"在 X 主题里" */
 .chaya-v2[data-theme="anthropic"] .v2-la-cfgtabs button.on {
   box-shadow:
     inset 0 0 0 1px color-mix(in oklab, var(--c-accent) 22%, transparent),
@@ -4960,18 +5328,43 @@ body.v2-la-resizing { user-select: none; }
   --glass-blur: 20px;
   --glass-alpha: 0.66;
   --glass-sat: 150%;
+
+  /* ---- frosted-glass texture (shared across themes; opt-in sidebar) ----
+     磨砂玻璃三件套的可调 token，明暗各一套，让全主题侧栏都读作「粗颗粒磨砂玻璃」
+     而非平涂灰漆。grain 是散射光颗粒（frosted 的灵魂）、gloss 是顶沿吃光、
+     bevel 是玻璃边缘的物理高光 + 底部坐沉。 */
+  --gl-noise:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='gn'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.6' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23gn)' opacity='0.1'/%3E%3C/svg%3E");
+  --gl-gloss: linear-gradient(180deg,
+    rgba(255, 255, 255, 0.5) 0%,
+    rgba(255, 255, 255, 0.14) 16%,
+    rgba(255, 255, 255, 0) 50%);
+  --gl-bright: 1;
+  --gl-bevel:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),        /* 顶沿吃光：玻璃边缘的亮 bevel */
+    inset -1px 0 0 rgba(255, 255, 255, 0.3),        /* 右缘微光，把侧栏从主区切开 */
+    inset 0 -44px 60px -56px rgba(30, 28, 40, 0.1); /* 底部柔和坐沉，让玻璃落地有重量 */
 }
 .chaya-v2[data-mode="dark"] {
   --glass-rgb: 32, 32, 34;
   --glass-hairline: 255, 255, 255;   /* light hairline lifts dark glass edges */
   --glass-hairline-a: 0.10;
+
+  /* 暗色：颗粒按灰阶噪点照常透出；gloss/bevel 改为淡白细缘 + 顶部柔和内发光，
+     绝不在暗玻璃上压暗（会出现深色空洞）。亮度微抬把背后光晕揉进来。 */
+  --gl-gloss: linear-gradient(180deg,
+    rgba(255, 255, 255, 0.06) 0%,
+    rgba(255, 255, 255, 0.015) 22%,
+    rgba(255, 255, 255, 0) 60%);
+  --gl-bright: 1.04;
+  --gl-bevel:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset -1px 0 0 rgba(255, 255, 255, 0.05),
+    inset 0 36px 56px -52px rgba(255, 255, 255, 0.07);
 }
 /* warm ivory themes → warm glass so it doesn't read as a cold gray patch */
 .chaya-v2[data-theme="anthropic"]                   { --glass-rgb: 250, 249, 245; }
 .chaya-v2[data-theme="anthropic"][data-mode="dark"] { --glass-rgb: 38, 36, 33; }
-/* Cursor — pure white in light, true near-black in dark to match the punched-up canvas. */
-.chaya-v2[data-theme="cursor"]                      { --glass-rgb: 251, 251, 252; }
-.chaya-v2[data-theme="cursor"][data-mode="dark"]    { --glass-rgb: 14, 15, 18; }
 /* Razer — black-only: near-black glass tint (= --c-bg #0a0a0a) + light hairline
    so the frosted sidebar reads as dark glass, not a translucent white patch
    over the black canvas. Mode-agnostic; sits after the [data-mode="dark"]
@@ -5061,16 +5454,63 @@ body.v2-la-resizing { user-select: none; }
 
 /* 弹框 / 顶栏 / 主界面：刻意不加任何玻璃规则 —— 保持实色、内容清晰。 */
 
-/* ---- 侧栏 vibrancy（唯一可调项）----
-   挂到 .v2-app 以兼容 absolute .v2-side / margin-left main 等布局；.v2-side 自身透明
-   让玻璃透上来。透明度由 data-glass-i（→ --gl-surface）控制；开启时 ClientShell 自动
-   追加 ambient 给模糊一点底色可采样。 */
+/* ---- 侧栏 vibrancy —— 全主题统一「粗颗粒磨砂玻璃」（唯一可调项）----
+   挂到 .v2-app（侧栏底层）以兼容 absolute .v2-side / margin-left main 等布局；.v2-side
+   自身透明让玻璃透上来。读作真正的磨砂玻璃而非平涂灰漆，靠三件套叠加：
+     1) backdrop blur+saturate —— 把背后内容（root 上的 ambient 光晕）揉成柔和远景，
+        「底面衬清楚但发虚」的通透感由此而来；
+     2) 半透 tint（--gl-surface）+ 顶部 gloss —— 保留透明感、顶沿吃光；
+     3) --gl-noise 颗粒 + --gl-bevel 边缘高光 —— frosted 的颗粒灵魂与玻璃物理感。
+   透明度由 data-glass-i（→ --gl-surface）控制；ClientShell 自动追加 ambient 给模糊采样。 */
 .chaya-v2[data-glass~="sidebar"] .v2-app {
-  background: rgba(var(--glass-rgb), var(--gl-surface));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(calc(var(--glass-sat) - 8%));
-  backdrop-filter: blur(var(--glass-blur)) saturate(calc(var(--glass-sat) - 8%));
+  background:
+    var(--gl-noise) repeat,
+    var(--gl-gloss),
+    rgba(var(--glass-rgb), var(--gl-surface));
+  background-size: 180px 180px, 100% 100%, auto;
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(calc(var(--glass-sat) - 8%)) brightness(var(--gl-bright));
+  backdrop-filter: blur(var(--glass-blur)) saturate(calc(var(--glass-sat) - 8%)) brightness(var(--gl-bright));
+  box-shadow: var(--gl-bevel);
 }
 .chaya-v2[data-glass~="sidebar"] .v2-side { background: transparent; }
+
+/* Opal Glass owns the whole desktop ground. Keep the sidebar, exposed gutter,
+   and main-card perimeter on one continuous misted material even when the
+   optional sidebar vibrancy layer is enabled. */
+.chaya-v2[data-theme="codex"][data-glass~="sidebar"] .v2-app {
+  background:
+    var(--gl-noise) repeat,
+    linear-gradient(180deg,
+      color-mix(in oklab, white 28%, transparent) 0%,
+      color-mix(in oklab, white 8%, transparent) 22%,
+      transparent 64%),
+    linear-gradient(145deg,
+      var(--c-sidebar) 0%,
+      var(--c-sidebar) 54%,
+      color-mix(in oklab, var(--c-sidebar) 82%, oklch(0.945 0.012 215)) 100%);
+  background-size: 180px 180px, 100% 100%, auto;
+  -webkit-backdrop-filter: blur(22px) saturate(132%);
+  backdrop-filter: blur(22px) saturate(132%);
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, white 58%, transparent),
+    inset -1px 0 0 color-mix(in oklab, var(--c-ink) 3%, transparent);
+}
+
+.chaya-v2[data-theme="codex"][data-mode="dark"][data-glass~="sidebar"] .v2-app {
+  background:
+    var(--gl-noise) repeat,
+    linear-gradient(180deg,
+      color-mix(in oklab, white 8%, transparent) 0%,
+      color-mix(in oklab, white 2%, transparent) 24%,
+      transparent 66%),
+    linear-gradient(145deg,
+      var(--c-sidebar) 0%,
+      var(--c-sidebar) 54%,
+      color-mix(in oklab, var(--c-sidebar) 84%, oklch(0.22 0.020 235)) 100%);
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, white 10%, transparent),
+    inset -1px 0 0 color-mix(in oklab, white 4%, transparent);
+}
 
 /* ============================================================
    Razer 毛玻璃侧栏 —— 真正的 Apple Vibrancy 磨砂玻璃。
@@ -5176,6 +5616,8 @@ body.v2-la-resizing { user-select: none; }
   .chaya-v2 .v2-rowmenu,
   .chaya-v2 .v2-drawer { background: var(--c-bg); }
   .chaya-v2 .v2-msg.user .v2-bubble { background: var(--c-hover-soft); }
+  /* 侧栏：清掉颗粒/光泽/半透 tint 与边缘高光，回退为实色 sidebar 面 */
+  .chaya-v2[data-glass~="sidebar"] .v2-app { background: var(--c-sidebar); box-shadow: none; }
   .chaya-v2[data-glass~="sidebar"] .v2-side { background: var(--c-sidebar); }
   /* 模型/MCP 玻璃浮层始终启用，故无条件回退为实色 */
   .chaya-v2 .v2-la-cfgmodal { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--c-bg); }
@@ -5265,6 +5707,82 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .v2-wiki-pop-ft .loc svg { width: 12px; height: 12px; }
 .chaya-v2 .v2-wiki-pop-ft .loc.reset { color: var(--c-ink-4); }
 .chaya-v2 .v2-wiki-pop-ft .loc.reset:hover { background: var(--c-hover); color: var(--c-ink-2); }
+
+/* ===== wiki 右侧抽屉（替代居中浮框）：贴应用右缘铺开，边用边看 ===== */
+.chaya-v2 .v2-wiki-drawer-mask {
+  position: fixed; inset: 0; z-index: 95; background: rgba(0,0,0,0.20);
+  backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+  animation: v2-fadeIn 180ms var(--c-ease) both;
+}
+/* wiki 占左栏，与主界面平行 —— 就是「底面上的左栏」(等同原侧栏)：透明无边无影,内容直接
+   坐在底色上;主界面照常浮起留同样的间隙(无硬分界)。 */
+.chaya-v2 .v2-wiki-drawer {
+  position: fixed; top: 0; left: 0; z-index: 40; height: 100%;
+  width: var(--wiki-w);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: transparent; border: 0; box-shadow: none;
+  animation: v2-wiki-slidein 240ms var(--c-ease) both;
+}
+@keyframes v2-wiki-slidein { from { transform: translateX(-12px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+/* mac：把搜索头让到交通灯右侧(同一行,不下压浪费纵向空间)。 */
+html[data-electron-platform="darwin"] .chaya-v2 .v2-wiki-drawer-hd { padding-left: 80px; }
+
+/* 打开 wiki 左栏时：收起侧栏、主界面右移让出 --wiki-w + 间隙(与原侧栏同间隙,卡片照常浮起)。 */
+.chaya-v2[data-wiki-left] .v2-side { transform: translate3d(-100%, 0, 0); opacity: 0; pointer-events: none; }
+.chaya-v2[data-wiki-left] .v2-app .v2-main { margin-left: calc(var(--wiki-w) + var(--sidebar-gap)); transition: margin-left 240ms var(--c-ease); }
+.chaya-v2 .v2-wiki-drawer-hd {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--c-ink) 8%, transparent);
+  background: transparent;
+}
+.chaya-v2 .v2-wiki-drawer-hd .ic { color: var(--c-note-strong); display: inline-flex; flex: 0 0 auto; }
+.chaya-v2 .v2-wiki-drawer-hd .ic svg { width: 16px; height: 16px; }
+.chaya-v2 .v2-wiki-drawer-hd .x { flex: 0 0 auto; width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--c-radius-md); border: 0; background: transparent; color: var(--c-ink-4); cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-wiki-drawer-hd .x:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-wiki-drawer-hd .x svg { width: 14px; height: 14px; }
+.chaya-v2 .v2-wiki-drawer-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: none; }
+.chaya-v2 .v2-wiki-drawer-list::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.chaya-v2 .v2-wiki-drawer .v2-wiki-list { scrollbar-width: none; }
+.chaya-v2 .v2-wiki-drawer .v2-wiki-list::-webkit-scrollbar { width: 0; height: 0; display: none; }
+/* 速记行内联关联控件(取代底部 bar) */
+.chaya-v2 .v2-wiki-row-act { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; }
+.chaya-v2 .v2-wiki-row-act .loc { display: inline-flex; align-items: center; gap: 3px; padding: 3px 7px; border-radius: var(--c-radius-pill); border: 0; background: transparent; color: var(--c-ink-4); cursor: pointer; font-size: 10.5px; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-wiki-row-act .loc:hover { background: var(--c-hover); color: var(--c-ink-2); }
+.chaya-v2 .v2-wiki-row-act .loc svg { width: 12px; height: 12px; }
+.chaya-v2 .v2-wiki-drawer-ft { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 13px; border-top: 1px solid color-mix(in oklab, var(--c-note) 12%, var(--c-rule)); }
+.chaya-v2 .v2-wiki-drawer-ft .hint { flex: 1 1 auto; min-width: 0; font-size: 10.5px; color: var(--c-ink-4); font-family: var(--c-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-wiki-drawer-ft .loc { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: var(--c-radius-pill); border: 0; background: transparent; color: var(--c-note-strong); cursor: pointer; font-size: 11px; transition: background 140ms var(--c-ease); }
+.chaya-v2 .v2-wiki-drawer-ft .loc:hover { background: var(--c-note-bg); }
+.chaya-v2 .v2-wiki-drawer-ft .loc svg { width: 12px; height: 12px; }
+.chaya-v2 .v2-wiki-drawer-ft .loc.reset { color: var(--c-ink-4); }
+.chaya-v2 .v2-wiki-drawer-ft .loc.reset:hover { background: var(--c-hover); color: var(--c-ink-2); }
+
+/* 抽屉内联文档视图（读/编辑/引用），替代旧的居中浮窗 */
+.chaya-v2 .v2-wiki-doc { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.chaya-v2 .v2-wiki-doc-hd { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid color-mix(in oklab, var(--c-note) 16%, var(--c-rule)); }
+.chaya-v2 .v2-wiki-doc-hd .back { flex: 0 0 auto; width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--c-radius-md); border: 0; background: transparent; color: var(--c-ink-3); cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-wiki-doc-hd .back:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-wiki-doc-hd .ic { color: var(--c-note-strong); display: inline-flex; flex: 0 0 auto; }
+.chaya-v2 .v2-wiki-doc-hd .ic svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-wiki-doc-hd .ttl { flex: 0 1 auto; min-width: 0; font-size: 13px; font-weight: 600; color: var(--c-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-wiki-doc-hd .def { color: var(--c-note-strong); display: inline-flex; flex: 0 0 auto; }
+.chaya-v2 .v2-wiki-doc-hd .def svg { width: 12px; height: 12px; }
+.chaya-v2 .v2-wiki-doc-hd .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-warn); flex: 0 0 auto; }
+.chaya-v2 .v2-wiki-doc-hd .grow { flex: 1 1 auto; }
+.chaya-v2 .v2-wiki-doc-hd .act { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 9px; border-radius: var(--c-radius-md); border: 1px solid var(--c-rule); background: var(--c-bg); color: var(--c-ink-2); cursor: pointer; font-size: 12px; transition: background 140ms var(--c-ease), color 140ms var(--c-ease), border-color 140ms var(--c-ease); }
+.chaya-v2 .v2-wiki-doc-hd .act:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-wiki-doc-hd .act svg { width: 13px; height: 13px; }
+.chaya-v2 .v2-wiki-doc-hd .act.primary { background: var(--c-ink); color: var(--c-bg); border-color: transparent; }
+.chaya-v2 .v2-wiki-doc-hd .act.primary:disabled { opacity: 0.4; cursor: default; }
+.chaya-v2 .v2-wiki-doc-body { flex: 1 1 auto; min-height: 0; width: 100%; resize: none; border: 0; outline: 0; padding: 14px 16px; background: transparent; color: var(--c-ink); font-family: var(--c-mono); font-size: 12.5px; line-height: 1.7; }
+.chaya-v2 .v2-wiki-doc-body::placeholder { color: var(--c-ink-4); }
+
+/* Pure：抽屉=底面上的左栏，透明无边(同侧栏)；头部分隔用中性发丝。 */
+.chaya-v2[data-theme="codex"] .v2-wiki-drawer-hd,
+.chaya-v2[data-theme="codex"] .v2-wiki-doc-hd { background: transparent; border-bottom-color: var(--glass-matte-line); }
+.chaya-v2[data-theme="codex"] .v2-wiki-drawer-hd .ic,
+.chaya-v2[data-theme="codex"] .v2-wiki-doc-hd .ic,
+.chaya-v2[data-theme="codex"] .v2-wiki-doc-hd .def { color: var(--c-ink-3); }
 
 /* @ 提及弹层：浮在输入框上方（复用 slash 的浮层位）。 */
 .chaya-v2 .v2-la-mention {

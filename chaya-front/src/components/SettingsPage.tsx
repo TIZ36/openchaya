@@ -24,7 +24,7 @@ export type FontId = 'default' | 'pixel' | 'terminal' | 'firacode' | 'rounded' |
 export type { TypeSpeed };
 
 export type AppearanceMode = 'light' | 'dark' | 'system';
-export type ColorTheme = 'default' | 'anthropic' | 'cursor' | 'xcode' | 'razer';
+export type ColorTheme = 'default' | 'anthropic' | 'razer' | 'codex';
 /** 可单独开启毛玻璃的界面区域。 */
 export type GlassZone = 'composer' | 'sidebar' | 'topbar' | 'menu' | 'modal' | 'bubble' | 'main';
 /** 毛玻璃整体强度（模糊+透明度）：subtle 轻 · standard 标准 · strong 强。 */

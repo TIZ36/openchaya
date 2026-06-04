@@ -23,6 +23,8 @@ export const PERM_META: Record<PermMode, { label: string; tone: string; hint: st
 const PERM_MODES_BY_PROVIDER: Partial<Record<ProviderId, PermMode[]>> = {
   claude: ['default', 'plan', 'acceptEdits', 'bypassPermissions'],
   cursor: ['plan', 'ask', 'force'],
+  // gemini approval-mode: default / auto_edit(→acceptEdits) / yolo(→bypassPermissions)
+  gemini: ['default', 'acceptEdits', 'bypassPermissions'],
 };
 export function permModesFor(provider: ProviderId): PermMode[] {
   return PERM_MODES_BY_PROVIDER[provider] || PERM_MODES_BY_PROVIDER.claude!;
