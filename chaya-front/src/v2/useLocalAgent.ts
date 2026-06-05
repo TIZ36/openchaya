@@ -534,13 +534,18 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   }, [provider, current, tabs, paneKeyForDir, addPaneTab, patchTab, setHistory]);
 
   // 新建会话：同样开成独立新窗格，紧挨触发它的标签。
-  const newSession = useCallback((projPath: string, sourceCwd?: string) => {
+  // providerOverride：从 composer 切 provider 时显式带入目标 provider —— 直接用它预热，
+  // 不依赖「先 setState 改全局 provider → 等重渲染」的时序（那条链路易踩 stale 闭包）。
+  const newSession = useCallback((projPath: string, sourceCwd?: string, providerOverride?: ProviderId) => {
+    const prov = providerOverride || provider;
     const dir = realDir(projPath);
     const paneKey = paneKeyForDir(dir);
     addPaneTab(paneKey, null, tr('local.newSession'), sourceCwd);
-    // 预热新会话：先把进程起好，首条消息即暖。
-    if (current?.live) void localAgent.warm({ provider, cwd: dir, lane: paneLane(paneKey), sessionId: null, permMode: defaultPermMode(provider), apiKey: provider === 'cursor' ? cursorKeyRef.current : undefined });
-  }, [provider, current, paneKeyForDir, addPaneTab, tr]);
+    // 预热新会话：先把进程起好，首条消息即暖。warm/send 本就按 call 传 provider，
+    // 所以新 lane 可立刻用目标 provider 起，无需等全局 provider 落定。
+    const det = providers.find((p) => p.id === prov);
+    if (det?.live) void localAgent.warm({ provider: prov, cwd: dir, lane: paneLane(paneKey), sessionId: null, permMode: defaultPermMode(prov), apiKey: prov === 'cursor' ? cursorKeyRef.current : undefined });
+  }, [provider, providers, paneKeyForDir, addPaneTab, tr]);
 
   const closeTab = useCallback((cwd: string) => {
     dropSmooth(cwd);

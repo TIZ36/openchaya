@@ -5,6 +5,7 @@ const { app, BrowserWindow, shell, ipcMain, dialog, nativeImage } = require('ele
 const path = require('path');
 const { registerLocalAgent, killAllSessions } = require('./localAgent.cjs');
 const { registerNotes } = require('./notes.cjs');
+const { registerFbot, stop: stopFbot } = require('./fbot.cjs');
 
 const isDev = !app.isPackaged;
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5177';
@@ -122,6 +123,8 @@ function createWindow() {
 // 本地 Agent 桥：纯本地功能，与后端无关。仅注册一次。
 registerLocalAgent(ipcMain, dialog);
 registerNotes(ipcMain, dialog);
+// 录入飞书助手桥（长连接 bot，纯本地；启停由渲染层控制，不自动启）。
+registerFbot(ipcMain);
 
 app.whenReady().then(() => {
   // Dev dock icon (packaged macOS uses build/icon.icns from the bundle).
@@ -139,7 +142,10 @@ app.on('window-all-closed', () => {
 });
 
 // 退出前回收所有常驻 claude 会话，别留孤儿进程在系统里。
-app.on('before-quit', () => { try { killAllSessions(); } catch { /* */ } });
+app.on('before-quit', () => {
+  try { killAllSessions(); } catch { /* */ }
+  try { stopFbot(); } catch { /* */ }   // 关掉飞书长连接，别留 WS 在后台
+});
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();

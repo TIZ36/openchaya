@@ -50,6 +50,27 @@ contextBridge.exposeInMainWorld('chateeElectron', {
     chooseDefault: () => ipcRenderer.invoke('notes:chooseDefault'),
     pickDefault: () => ipcRenderer.invoke('notes:pickDefault'),
   },
+
+  // 录入飞书助手桥（长连接 bot；启停 + 配置 + 事件订阅）
+  fbot: {
+    getConfig: () => ipcRenderer.invoke('fbot:getConfig'),
+    setConfig: (cfg) => ipcRenderer.invoke('fbot:setConfig', cfg),   // {appId, appSecret?, testChatId?}
+    start: () => ipcRenderer.invoke('fbot:start'),
+    stop: () => ipcRenderer.invoke('fbot:stop'),
+    status: () => ipcRenderer.invoke('fbot:status'),
+    sendCard: (chatId, kind) => ipcRenderer.invoke('fbot:sendCard', { chatId, kind }),  // kind: 'menu' | 'form'
+    getSpec: () => ipcRenderer.invoke('fbot:getSpec'),          // 读卡片配置 {menu, forms}
+    setSpec: (data) => ipcRenderer.invoke('fbot:setSpec', data),// 存卡片配置(热更新)
+    resetSpec: () => ipcRenderer.invoke('fbot:resetSpec'),      // 恢复默认
+    listSubmissions: () => ipcRenderer.invoke('fbot:listSubmissions'),  // 提交记录(新→旧)
+    clearSubmissions: () => ipcRenderer.invoke('fbot:clearSubmissions'),
+    // 订阅 bot 事件（log/message/card_action/status）；返回取消订阅函数。
+    onEvent: (cb) => {
+      const handler = (_e, data) => cb(data);
+      ipcRenderer.on('fbot:event', handler);
+      return () => ipcRenderer.removeListener('fbot:event', handler);
+    },
+  },
 });
 
 // 在 DOM 就绪前尽早标记，不依赖 React

@@ -47,6 +47,14 @@ const IconXSm = () => (
 const IconLink = () => (
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13.5a3.5 3.5 0 0 0 5 0l2.5-2.5a3.5 3.5 0 0 0-5-5l-1 1" /><path d="M14 10.5a3.5 3.5 0 0 0-5 0L6.5 13a3.5 3.5 0 0 0 5 5l1-1" /></svg>
 );
+const IconSearchSm = () => (
+  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+);
+
+/* inspector 拖宽：读写根节点 --wiki-w；持久化到 localStorage。clamp 与原型同量级。 */
+const WIKI_W_KEY = 'chaya_wiki_w';
+const WIKI_W_MIN = 320;
+const WIKI_W_MAX = 680;
 
 /* ---- relative age, via the shared local.time.* dictionary ---- */
 function fmtAge(ms: number, tr: (k: string, v?: Record<string, string | number>) => string): string {
@@ -286,33 +294,211 @@ const IconBack = () => (
 
 /** 抽屉内联文档视图：读/编辑/保存/引用。笔记写盘；云端文档 patch。无遮罩/portal —— 直接铺在
  *  右侧抽屉里(替代旧的居中浮窗)，看完点返回回到列表。 */
+/* ---- Notion 式块编辑器：blocks 数组模型，序列化为 markdown
+   (文本/标题/待办/项目符号/引用/分割线/图片/表格/代码) ---- */
+type Pri = 'today' | 'normal';
+type Block =
+  | { id: string; type: 'text' | 'h1' | 'h2' | 'h3' | 'quote' | 'bullet'; text: string }
+  | { id: string; type: 'todo'; text: string; done: boolean; pri: Pri }
+  | { id: string; type: 'divider' }
+  | { id: string; type: 'image'; src: string; alt: string }
+  | { id: string; type: 'code'; lang: string; text: string }
+  | { id: string; type: 'table'; rows: string[][] };
+type BType = Block['type'];
+let __bid = 0;
+const newId = () => `b${++__bid}`;
+const TEXTLIKE = new Set<BType>(['text', 'h1', 'h2', 'h3', 'quote', 'bullet', 'todo']);
+const blkText = (b: Block): string => ('text' in b ? b.text : '');
+
+function splitRow(line: string): string[] {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+}
+function parseSingle(line: string): Block {
+  if (/^\s*(---|\*\*\*|___)\s*$/.test(line)) return { id: newId(), type: 'divider' };
+  let m: RegExpMatchArray | null;
+  if ((m = line.match(/^(#{1,3})\s+(.*)$/))) return { id: newId(), type: (m[1].length === 1 ? 'h1' : m[1].length === 2 ? 'h2' : 'h3'), text: m[2] };
+  if ((m = line.match(/^\s*- \[([ xX])\]\s?(.*)$/))) { let text = m[2]; let pri: Pri = 'normal'; const pm = text.match(/\s*@today\s*$/); if (pm) { pri = 'today'; text = text.slice(0, pm.index); } return { id: newId(), type: 'todo', text, done: m[1].toLowerCase() === 'x', pri }; }
+  if ((m = line.match(/^\s*[-*]\s+(.*)$/))) return { id: newId(), type: 'bullet', text: m[1] };
+  if ((m = line.match(/^>\s?(.*)$/))) return { id: newId(), type: 'quote', text: m[1] };
+  return { id: newId(), type: 'text', text: line };
+}
+function parseMd(md: string): Block[] {
+  const ls = md.split('\n'); const out: Block[] = []; let i = 0;
+  while (i < ls.length) {
+    const line = ls[i];
+    const fence = line.match(/^```(\w*)\s*$/);
+    if (fence) { const lang = fence[1] || ''; const buf: string[] = []; i++; while (i < ls.length && !/^```\s*$/.test(ls[i])) { buf.push(ls[i]); i++; } i++; out.push({ id: newId(), type: 'code', lang, text: buf.join('\n') }); continue; }
+    if (/^\s*\|.*\|\s*$/.test(line)) { const tl: string[] = []; while (i < ls.length && /^\s*\|.*\|\s*$/.test(ls[i])) { tl.push(ls[i]); i++; } const rows = tl.map(splitRow).filter((r) => !r.every((c) => /^:?-+:?$/.test(c))); out.push({ id: newId(), type: 'table', rows: rows.length ? rows : [['', ''], ['', '']] }); continue; }
+    const im = line.match(/^!\[([^\]]*)\]\(([^)]*)\)\s*$/);
+    if (im) { out.push({ id: newId(), type: 'image', alt: im[1], src: im[2] }); i++; continue; }
+    out.push(parseSingle(line)); i++;
+  }
+  if (!out.length) out.push({ id: newId(), type: 'text', text: '' });
+  return out;
+}
+function fmtSingle(b: Block): string {
+  switch (b.type) {
+    case 'divider': return '---';
+    case 'h1': return `# ${b.text}`;
+    case 'h2': return `## ${b.text}`;
+    case 'h3': return `### ${b.text}`;
+    case 'quote': return `> ${b.text}`;
+    case 'bullet': return `- ${b.text}`;
+    case 'todo': return `- [${b.done ? 'x' : ' '}] ${b.text}${b.pri === 'today' ? ' @today' : ''}`;
+    default: return blkText(b);
+  }
+}
+function serialize(blocks: Block[]): string {
+  return blocks.map((b) => {
+    if (b.type === 'image') return `![${b.alt}](${b.src})`;
+    if (b.type === 'code') return '```' + b.lang + '\n' + b.text + '\n```';
+    if (b.type === 'table') {
+      const rows = b.rows.length ? b.rows : [['', '']];
+      const head = rows[0]; const sep = head.map(() => '---');
+      return [head, sep, ...rows.slice(1)].map((r) => `| ${r.join(' | ')} |`).join('\n');
+    }
+    return fmtSingle(b);
+  }).join('\n');
+}
+
+const BLOCK_MENU: { type: BType; key: string; glyph: string }[] = [
+  { type: 'text', key: 'local.wiki.block.text', glyph: 'Aa' },
+  { type: 'h1', key: 'local.wiki.block.h1', glyph: 'H1' },
+  { type: 'h2', key: 'local.wiki.block.h2', glyph: 'H2' },
+  { type: 'h3', key: 'local.wiki.block.h3', glyph: 'H3' },
+  { type: 'todo', key: 'local.wiki.block.todo', glyph: '☑' },
+  { type: 'bullet', key: 'local.wiki.block.bullet', glyph: '•' },
+  { type: 'quote', key: 'local.wiki.block.quote', glyph: '❝' },
+  { type: 'image', key: 'local.wiki.block.image', glyph: 'IMG' },
+  { type: 'table', key: 'local.wiki.block.table', glyph: '▦' },
+  { type: 'code', key: 'local.wiki.block.code', glyph: '</>' },
+  { type: 'divider', key: 'local.wiki.block.divider', glyph: '—' },
+];
+const IconCheck = () => (
+  <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 8.5l3.2 3.2L13 4.5" /></svg>
+);
+const IconPlusSm = () => (
+  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M8 3.5v9M3.5 8h9" /></svg>
+);
+const IconGrip = () => (
+  <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><circle cx="6" cy="4" r="1.1" /><circle cx="10" cy="4" r="1.1" /><circle cx="6" cy="8" r="1.1" /><circle cx="10" cy="8" r="1.1" /><circle cx="6" cy="12" r="1.1" /><circle cx="10" cy="12" r="1.1" /></svg>
+);
+
 const WikiDocView: React.FC<{ item: WikiItem; onBack: () => void; onInsertRef: () => void }> = ({ item, onBack, onInsertRef }) => {
   const { t: tr } = useI18n();
-  const [content, setContent] = useState<string | null>(null);
+  const [blocks, setBlocks] = useState<Block[] | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const taRef = useRef<HTMLTextAreaElement>(null);
+  const [menu, setMenu] = useState<{ i: number; mode: 'turn' | 'slash'; x: number; y: number; q: string; active: number } | null>(null);
+  const [overI, setOverI] = useState<number | null>(null);
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const menuItems = (q: string) => BLOCK_MENU.filter((bt) => { const s = q.toLowerCase(); return !s || tr(bt.key).toLowerCase().includes(s) || bt.type.includes(s); });
+  const refs = useRef<Map<string, HTMLTextAreaElement | null>>(new Map());
+  const dragRef = useRef<number | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const pendImg = useRef<string | null>(null);
+
   useEffect(() => {
     let alive = true;
     (async () => {
+      let md = '';
       try {
-        if (item.path) { const c = await readNote(item.path); if (alive) setContent(c); }
-        else if (item.docId) { const d = await smartnoteDocuments.get(item.docId); if (alive) setContent(d.content || ''); }
-        else if (alive) setContent('');
-      } catch { if (alive) setContent(''); }
-      if (alive) requestAnimationFrame(() => taRef.current?.focus());
+        if (item.path) md = await readNote(item.path);
+        else if (item.docId) { const d = await smartnoteDocuments.get(item.docId); md = d.content || ''; }
+      } catch { /* */ }
+      if (!alive) return;
+      const parsed = parseMd(md);
+      // 类 Notion：开头总留一个空块，方便随手在最上面插入内容(幂等:已是空块就不再加;
+      // 不标记 dirty —— 没真用就不污染文件)。
+      if (!(parsed[0] && parsed[0].type === 'text' && parsed[0].text === '')) parsed.unshift({ id: newId(), type: 'text', text: '' });
+      setBlocks(parsed);
+      requestAnimationFrame(() => refs.current.get(parsed[0]?.id)?.focus());
     })();
     return () => { alive = false; };
   }, [item]);
   const save = useCallback(async () => {
-    if (content == null) return;
-    setSaving(true);
+    if (!blocks) return; setSaving(true);
+    const md = serialize(blocks);
     try {
-      if (item.path) await writeNote(item.path, content);
-      else if (item.docId) await smartnoteDocuments.patch(item.docId, { content });
+      if (item.path) await writeNote(item.path, md);
+      else if (item.docId) await smartnoteDocuments.patch(item.docId, { content: md });
       setDirty(false);
-    } catch { /* surfaced via the unsaved dot */ } finally { setSaving(false); }
-  }, [content, item]);
+    } catch { /* unsaved dot */ } finally { setSaving(false); }
+  }, [blocks, item]);
+
+  const focusAt = (id: string, caret?: number) => requestAnimationFrame(() => { const el = refs.current.get(id); if (el) { el.focus(); if (caret != null) { try { el.setSelectionRange(caret, caret); } catch { /* */ } } } });
+  const replace = (i: number, nb: Block, focus = false, caret?: number) => { setBlocks((p) => { if (!p) return p; const a = [...p]; a[i] = nb; return a; }); setDirty(true); if (focus) focusAt(nb.id, caret); };
+  const patch = (i: number, fields: Partial<Block>) => setBlocks((p) => { if (!p) return p; const a = [...p]; a[i] = { ...a[i], ...fields } as Block; return a; });
+  const insertAfter = (i: number, nb: Block) => { setBlocks((p) => { const a = [...(p || [])]; a.splice(i + 1, 0, nb); return a; }); setDirty(true); focusAt(nb.id, 0); };
+  const removeAt = (i: number) => { setBlocks((p) => { if (!p) return p; const a = [...p]; a.splice(i, 1); if (!a.length) a.push({ id: newId(), type: 'text', text: '' }); return a; }); setDirty(true); };
+  const move = (from: number, to: number) => { setBlocks((p) => { if (!p || from === to) return p; const a = [...p]; const [m] = a.splice(from, 1); a.splice(from < to ? to - 1 : to, 0, m); return a; }); setDirty(true); };
+
+  const openMenu = (e: { currentTarget: EventTarget | null }, i: number, mode: 'turn' | 'slash') => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setMenu({ i, mode, x: r.left, y: r.bottom + 4, q: '', active: 0 }); };
+  const pickType = (type: BType) => {
+    if (!menu) return; const { i, mode } = menu; setMenu(null);
+    setBlocks((p) => {
+      if (!p) return p; const a = [...p]; const cur = a[i]; const id = cur.id; const keep = mode === 'turn' ? blkText(cur) : '';
+      let nb: Block;
+      switch (type) {
+        case 'divider': nb = { id, type: 'divider' }; break;
+        case 'image': nb = { id, type: 'image', src: '', alt: '' }; pendImg.current = id; break;
+        case 'table': nb = { id, type: 'table', rows: [['', ''], ['', '']] }; break;
+        case 'code': nb = { id, type: 'code', lang: '', text: keep }; break;
+        case 'todo': nb = { id, type: 'todo', text: keep, done: false, pri: 'normal' }; break;
+        default: nb = { id, type, text: keep } as Block;
+      }
+      a[i] = nb; return a;
+    });
+    setDirty(true);
+    if (type === 'image') requestAnimationFrame(() => fileRef.current?.click());
+    else if (type !== 'divider' && type !== 'table') { const b = blocks?.[i]; if (b) focusAt(b.id, 0); }
+  };
+  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]; e.target.value = ''; const id = pendImg.current; pendImg.current = null;
+    if (!f || !id) return;
+    const reader = new FileReader();
+    reader.onload = () => { const url = String(reader.result || ''); setBlocks((p) => p ? p.map((bl) => (bl.id === id && bl.type === 'image') ? { ...bl, src: url } : bl) : p); setDirty(true); };
+    reader.readAsDataURL(f);
+  };
+  const editCell = (i: number, r: number, c: number, val: string) => setBlocks((p) => { if (!p) return p; const a = [...p]; const t = a[i]; if (t.type !== 'table') return p; const rows = t.rows.map((row) => [...row]); rows[r][c] = val; a[i] = { ...t, rows }; return a; });
+  const addRow = (i: number) => { setBlocks((p) => { if (!p) return p; const a = [...p]; const t = a[i]; if (t.type !== 'table') return p; const cols = (t.rows[0] || ['']).length; a[i] = { ...t, rows: [...t.rows, Array(cols).fill('')] }; return a; }); setDirty(true); };
+  const addCol = (i: number) => { setBlocks((p) => { if (!p) return p; const a = [...p]; const t = a[i]; if (t.type !== 'table') return p; a[i] = { ...t, rows: t.rows.map((row) => [...row, '']) }; return a; }); setDirty(true); };
+
+  const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>, i: number) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); void save(); return; }
+    // slash 菜单打开时：上下选、回车确认、Esc 关闭(其余按键照常输入 → 实时筛选)。
+    if (menu && menu.mode === 'slash' && menu.i === i) {
+      const filt = menuItems(menu.q);
+      if (e.key === 'ArrowDown') { e.preventDefault(); setMenu((m) => m ? { ...m, active: Math.min(m.active + 1, Math.max(0, filt.length - 1)) } : m); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setMenu((m) => m ? { ...m, active: Math.max(0, m.active - 1) } : m); return; }
+      if (e.key === 'Enter') { e.preventDefault(); const pk = filt[menu.active] || filt[0]; if (pk) pickType(pk.type); return; }
+      if (e.key === 'Escape') { e.preventDefault(); setMenu(null); return; }
+    }
+    if (!blocks) return; const b = blocks[i]; if (!TEXTLIKE.has(b.type)) return;
+    const ta = e.currentTarget; const text = blkText(b);
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const caret = ta.selectionStart ?? text.length;
+      if ((b.type === 'todo' || b.type === 'bullet') && !text) { replace(i, { id: b.id, type: 'text', text: '' }, true, 0); return; }
+      const before = text.slice(0, caret), after = text.slice(caret);
+      const contType: BType = (b.type === 'todo' || b.type === 'bullet' || b.type === 'quote') ? b.type : 'text';
+      patch(i, { text: before } as Partial<Block>);
+      const nb: Block = contType === 'todo' ? { id: newId(), type: 'todo', text: after, done: false, pri: (b as any).pri || 'normal' } : { id: newId(), type: contType, text: after } as Block;
+      insertAfter(i, nb);
+    } else if (e.key === 'Backspace' && (ta.selectionStart ?? 0) === 0 && (ta.selectionEnd ?? 0) === 0) {
+      if (b.type !== 'text') { e.preventDefault(); replace(i, { id: b.id, type: 'text', text }, true, 0); return; }
+      if (i > 0) {
+        const prev = blocks[i - 1];
+        e.preventDefault();
+        if (!TEXTLIKE.has(prev.type)) { removeAt(i - 1); return; }
+        const j = blkText(prev).length;
+        setBlocks((p) => { if (!p) return p; const a = [...p]; a[i - 1] = { ...a[i - 1], text: blkText(prev) + text } as Block; a.splice(i, 1); return a; });
+        setDirty(true); focusAt(prev.id, j);
+      }
+    }
+  };
+
+  const host: Element = (typeof document !== 'undefined' && document.querySelector('.chaya-v2')) || document.body;
   return (
     <div className="v2-wiki-doc">
       <div className="v2-wiki-doc-hd">
@@ -325,18 +511,106 @@ const WikiDocView: React.FC<{ item: WikiItem; onBack: () => void; onInsertRef: (
         <button className="act" onClick={onInsertRef} title={tr('local.wiki.insertRef')}><IconLink /></button>
         <button className="act primary" disabled={!dirty || saving} onClick={() => void save()}>{saving ? '…' : tr('kb.save')}</button>
       </div>
-      <textarea
-        ref={taRef}
-        className="v2-wiki-doc-body"
-        value={content ?? ''}
-        placeholder={content == null ? '…' : tr('local.wiki.peekEmpty')}
-        spellCheck={false}
-        onChange={(e) => { setContent(e.target.value); setDirty(true); }}
-        onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); void save(); } }}
-      />
+      {blocks == null ? (
+        <div className="v2-wiki-doc-body v2-blocks"><div className="blk t-text"><span className="blk-body" style={{ color: 'var(--c-ink-4)' }}>{'…'}</span></div></div>
+      ) : (
+        <div className="v2-wiki-doc-body v2-blocks" onDragOver={(e) => e.preventDefault()}>
+          {blocks.map((b, i) => (
+            <div
+              className={`blk t-${b.type}${(b as any).done ? ' done' : ''}${overI === i ? ' over' : ''}`} key={b.id}
+              onDragOver={(e) => { e.preventDefault(); if (dragRef.current != null) setOverI(i); }}
+              onDrop={() => { if (dragRef.current != null) move(dragRef.current, i); dragRef.current = null; setOverI(null); }}
+            >
+              <div className="blk-ctl">
+                <button className="blk-add" onClick={() => insertAfter(i, { id: newId(), type: 'text', text: '' })} title={tr('local.wiki.block.add')} aria-label={tr('local.wiki.block.add')}><IconPlusSm /></button>
+                <button className="blk-grip" draggable title={tr('local.wiki.block.menu')} aria-label={tr('local.wiki.block.menu')}
+                  onDragStart={(e) => { dragRef.current = i; try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(i)); } catch { /* */ } }}
+                  onDragEnd={() => { dragRef.current = null; setOverI(null); }}
+                  onClick={(e) => openMenu(e, i, 'turn')}><IconGrip /></button>
+              </div>
+              {b.type === 'divider' ? (
+                <div className="blk-main"><hr className="blk-hr" /></div>
+              ) : b.type === 'image' ? (
+                <div className="blk-main blk-imgwrap">
+                  {b.src ? (
+                    <figure className="blk-img">
+                      <img src={b.src} alt={b.alt} />
+                      <input className="cap" value={b.alt} placeholder={tr('local.wiki.block.caption')} onChange={(e) => patch(i, { alt: e.target.value } as Partial<Block>)} />
+                    </figure>
+                  ) : (
+                    <button className="blk-img-empty" onClick={() => { pendImg.current = b.id; fileRef.current?.click(); }}>{tr('local.wiki.block.addImage')}</button>
+                  )}
+                </div>
+              ) : b.type === 'table' ? (
+                <div className="blk-main blk-tblwrap">
+                  <table className="blk-tbl"><tbody>
+                    {b.rows.map((row, r) => (
+                      <tr key={r} className={r === 0 ? 'hd' : ''}>
+                        {row.map((cell, c) => (
+                          <td key={c}><input value={cell} placeholder={r === 0 ? tr('local.wiki.block.colHd') : ''} onChange={(e) => editCell(i, r, c, e.target.value)} /></td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody></table>
+                  <div className="blk-tbl-acts">
+                    <button onClick={() => addRow(i)} title={tr('local.wiki.block.addRow')}>+ {tr('local.wiki.block.row')}</button>
+                    <button onClick={() => addCol(i)} title={tr('local.wiki.block.addCol')}>+ {tr('local.wiki.block.col')}</button>
+                  </div>
+                </div>
+              ) : b.type === 'code' ? (
+                <div className="blk-main blk-codewrap">
+                  <textarea ref={(el) => { refs.current.set(b.id, el); }} className="blk-code-body" rows={2} spellCheck={false} value={b.text}
+                    placeholder={tr('local.wiki.block.codePh')}
+                    onChange={(e) => patch(i, { text: e.target.value } as Partial<Block>)}
+                    onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); void save(); } }} />
+                </div>
+              ) : (
+                <div className="blk-main">
+                  {b.type === 'todo' && (
+                    <button className="blk-check" onClick={() => patch(i, { done: !b.done } as Partial<Block>)} title={tr('local.wiki.todo.toggle')} aria-label={tr('local.wiki.todo.toggle')}>{b.done ? <IconCheck /> : null}</button>
+                  )}
+                  {b.type === 'bullet' && <span className="blk-bul" aria-hidden>{'•'}</span>}
+                  <textarea ref={(el) => { refs.current.set(b.id, el); }} className="blk-body" rows={1} spellCheck={false}
+                    value={blkText(b)}
+                    placeholder={(focusId === b.id || blocks.length === 1) && !blkText(b) ? tr('local.wiki.blockPlaceholder') : ''}
+                    onFocus={() => setFocusId(b.id)}
+                    onBlur={() => setFocusId((f) => (f === b.id ? null : f))}
+                    onChange={(e) => {
+                      const v = e.target.value; patch(i, { text: v } as Partial<Block>); setDirty(true);
+                      if (b.type === 'text' && v.startsWith('/')) { const r = e.currentTarget.getBoundingClientRect(); setMenu({ i, mode: 'slash', x: r.left, y: r.bottom + 4, q: v.slice(1), active: 0 }); }
+                      else setMenu((m) => (m && m.mode === 'slash' && m.i === i) ? null : m);
+                    }}
+                    onKeyDown={(e) => onKey(e, i)} />
+                  {b.type === 'todo' && (
+                    <button className={`blk-pri pri-${b.pri}`} onClick={() => patch(i, { pri: b.pri === 'today' ? 'normal' : 'today' } as Partial<Block>)} title={tr('local.wiki.todo.priTip')}>{b.pri === 'today' ? tr('local.wiki.todo.today') : tr('local.wiki.todo.normal')}</button>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onFile} />
+      {menu && createPortal(
+        <>
+          <div className="blk-menu-mask" onMouseDown={() => setMenu(null)} />
+          <div className="blk-menu" style={{ left: Math.min(menu.x, (typeof window !== 'undefined' ? window.innerWidth : 9999) - 220), top: menu.y }} onMouseDown={(e) => e.stopPropagation()}>
+            {(() => { const its = menuItems(menu.q); return its.length ? its.map((bt, mi) => (
+              <button key={bt.type} className={`blk-menu-item${mi === menu.active ? ' active' : ''}`} onMouseEnter={() => setMenu((m) => m ? { ...m, active: mi } : m)} onClick={() => pickType(bt.type)}>
+                <span className="g">{bt.glyph}</span><span className="l">{tr(bt.key)}</span>
+              </button>
+            )) : <div className="blk-menu-empty">{tr('local.wiki.empty')}</div>; })()}
+            {menu.mode === 'turn' && (
+              <button className="blk-menu-item del" onClick={() => removeAt(menu.i)}><span className="g">{'✕'}</span><span className="l">{tr('common.delete')}</span></button>
+            )}
+          </div>
+        </>,
+        host,
+      )}
     </div>
   );
 };
+
 
 /* ================= composer pill ================= */
 
@@ -361,13 +635,46 @@ export const WikiNotes: React.FC<{
     return () => { window.removeEventListener('keydown', onKey); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
-  // 打开时给根节点打 data-wiki-left：CSS 据此收起侧栏、把主界面右移让出左栏给 wiki。
+  // 打开时给根节点打 data-wiki-right：CSS 据此把 grid 第三列(--insp-w)展开到 --wiki-w
+  // （main 1fr 自动让位，侧栏保持可见）。同时回填上次拖出的宽度。
   useEffect(() => {
-    const root = typeof document !== 'undefined' ? document.querySelector('.chaya-v2') : null;
+    const root = typeof document !== 'undefined' ? (document.querySelector('.chaya-v2') as HTMLElement | null) : null;
     if (!root) return;
-    if (open) root.setAttribute('data-wiki-left', 'on'); else root.removeAttribute('data-wiki-left');
-    return () => root.removeAttribute('data-wiki-left');
+    if (open) {
+      const saved = Number(localStorage.getItem(WIKI_W_KEY));
+      if (saved >= WIKI_W_MIN && saved <= WIKI_W_MAX) root.style.setProperty('--wiki-w', `${saved}px`);
+      root.setAttribute('data-wiki-right', 'on');
+    } else {
+      root.removeAttribute('data-wiki-right');
+    }
+    return () => root.removeAttribute('data-wiki-right');
   }, [open]);
+  // 左缘拖宽：mousemove 改根节点 --wiki-w（同时驱动 grid --insp-w），拖动期间关列宽过渡跟手。
+  const startResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    const root = document.querySelector('.chaya-v2') as HTMLElement | null;
+    const app = document.querySelector('.chaya-v2 .v2-app') as HTMLElement | null;
+    if (!root) return;
+    const startX = e.clientX;
+    const startW = parseFloat(getComputedStyle(root).getPropertyValue('--wiki-w')) || 440;
+    app?.classList.add('wiki-dragging');
+    document.body.style.cursor = 'col-resize';
+    const onMove = (ev: MouseEvent) => {
+      // 向左拖 → 更宽（抽屉贴右缘）。
+      const w = Math.max(WIKI_W_MIN, Math.min(WIKI_W_MAX, startW + (startX - ev.clientX)));
+      root.style.setProperty('--wiki-w', `${w}px`);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      app?.classList.remove('wiki-dragging');
+      document.body.style.cursor = '';
+      const w = parseFloat(getComputedStyle(root).getPropertyValue('--wiki-w'));
+      if (w) localStorage.setItem(WIKI_W_KEY, String(Math.round(w)));
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
   const items = useMemo(() => buildWikiItems(wiki, q), [wiki, q, wiki.notes, wiki.docs, wiki.defaultPath]);
   // 点条目 → 在抽屉内联打开查看/编辑；其「引用」才插入。@ 提及仍是直接插入。
   const openPeek = useCallback((it: WikiItem) => setPeek(it), []);
@@ -376,7 +683,9 @@ export const WikiNotes: React.FC<{
     onInsert(await resolveWikiRef(it));
   }, [onInsert]);
   if (!wiki.available) return null;
-  const host: Element = (typeof document !== 'undefined' && document.querySelector('.chaya-v2')) || document.body;
+  // grid 第三列槽：挂进 .v2-app 内部，成为真正的弹性列（main 自动让位）。退化到根 / body。
+  const host: Element = (typeof document !== 'undefined'
+    && (document.getElementById('v2-inspector-slot') || document.querySelector('.chaya-v2'))) || document.body;
   return (
     <div className="v2-note" ref={wrapRef}>
       <button className={`v2-note-pill${open ? ' on' : ''}`} title={tr('local.wiki.openTitle')} onClick={() => setOpen((o) => !o)}>
@@ -385,10 +694,19 @@ export const WikiNotes: React.FC<{
       </button>
       {open && createPortal(
         <>
-          {/* wiki 占据左栏，与主界面平行（非浮层遮罩）：侧栏收起、主界面右移让位，边用边看。 */}
+          {/* wiki 作为右侧检视栏(grid 第三列)，与主界面平行（非浮层遮罩）：侧栏保持可见，
+              main 1fr 让位，边用边看；左缘可拖宽。与全屏库同形（标题 + 模式标签 + 搜索）。 */}
           <aside className="v2-wiki-drawer" role="region" aria-label={tr('local.wiki.pill')} onMouseDown={(e) => e.stopPropagation()}>
+            <div className="v2-wiki-grip" onMouseDown={startResize} title="" aria-hidden />
             <div className="v2-wiki-drawer-hd">
               <span className="ic"><IconNoteBook /></span>
+              <span className="ttl-tx">{tr('local.wiki.pill')}</span>
+              <span className="mode-tag">{tr('local.wiki.modeQuote')}</span>
+              <span className="grow" />
+              <button className="x" onClick={() => setOpen(false)} title={tr('common.close')} aria-label={tr('common.close')}><IconXSm /></button>
+            </div>
+            <div className="v2-wiki-search-row">
+              <span className="ic"><IconSearchSm /></span>
               <input
                 ref={inputRef}
                 className="v2-wiki-search"
@@ -396,7 +714,6 @@ export const WikiNotes: React.FC<{
                 placeholder={tr('local.wiki.searchPlaceholder')}
                 onChange={(e) => setQ(e.target.value)}
               />
-              <button className="x" onClick={() => setOpen(false)} title={tr('common.close')} aria-label={tr('common.close')}><IconXSm /></button>
             </div>
             {peek ? (
               <WikiDocView item={peek} onBack={() => setPeek(null)} onInsertRef={() => void insertFromPeek(peek)} />

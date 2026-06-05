@@ -122,7 +122,7 @@ const chayaTheme = EditorView.theme({
   '&': {
     color: 'var(--c-ink)',
     backgroundColor: 'transparent',
-    fontSize: '14px',
+    fontSize: '15px',   /* 与 wiki 阅读正文(.v2-note-preview .v2-md)同档，编辑↔预览不跳字号 */
     height: '100%',
   },
   '.cm-scroller': {

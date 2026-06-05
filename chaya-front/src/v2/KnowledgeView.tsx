@@ -1,5 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   smartnoteProbe, smartnoteMemories, smartnoteDocuments, smartnoteTags,
   smartnoteChunks, smartnoteSearchHistory, smartnoteRetrieve,
@@ -20,7 +19,7 @@ import {
   defaultNote, getDefaultNotePath, associateDefaultNote, saveDefaultNoteAs, resetDefaultNoteLocation,
   type LocalNoteFile,
 } from './services/localNotes';
-import { IconPin, IconEdit, IconTrash, IconDoc, IconPlus, IconSearch, IconModel, IconChevron, IconKB, IconCloud, IconEye, IconSync } from './icons';
+import { IconPin, IconEdit, IconTrash, IconDoc, IconPlus, IconSearch, IconModel, IconKB, IconCloud, IconEye, IconSync, IconGear } from './icons';
 import { NoteEditor, type NoteEditorHandle } from './kb/NoteEditor';
 import { CodeBlock, PreBlock, mdRehypePlugins } from './codeBlock';
 import { useI18n } from '../i18n';
@@ -91,8 +90,32 @@ type Selection =
   | { kind: 'note'; path: string }
   | { kind: 'doc'; id: string };
 
-// standalone：分屏里的 wiki 窗格用 —— 强制走内联两栏（自带左树），不抢主侧栏的
-// #v2-kb-tree-slot（否则多个实例会争同一个 portal 槽位 → 串台）。
+/** Peek（浏览浮层）当前列出的范围。
+ *  all=全部 · local=本地笔记 · cloud=云端文档 · domains=知识域管理 · {dom}=某域内文档。 */
+type PeekFilter = 'all' | 'local' | 'cloud' | 'memories' | 'domains' | { dom: string };
+const samePeekFilter = (a: PeekFilter, b: PeekFilter): boolean =>
+  typeof a === 'object' || typeof b === 'object'
+    ? typeof a === 'object' && typeof b === 'object' && a.dom === b.dom
+    : a === b;
+
+/** 账号入口信息 —— 由 ClientShell 注入，供 KB rail 底部显示账号/设置（侧栏对 kb 收起后
+ *  这是 KB 里唯一的账号入口）。null = 不在 app 容器内（如独立预览），不渲染。 */
+export interface KbAccount {
+  authed: boolean;
+  name: string;
+  initials: string;
+  online: boolean;     // WS 已连接
+  onOpen: () => void;  // authed → 设置；游客 → 登录
+}
+export const KbAccountContext = createContext<KbAccount | null>(null);
+
+/** 停靠列表栏的开合状态 —— 由 ClientShell 持有，使顶栏右上角的折叠按钮（侧栏对 kb
+ *  收起后本无作用）能复用为「展开/收起 KB 列表栏」。null = 分屏窗格自管本地状态。 */
+export interface KbList { open: boolean; setOpen: (v: boolean | ((p: boolean) => boolean)) => void; }
+export const KbListContext = createContext<KbList | null>(null);
+
+// Focus 布局自包含（rail + canvas + peek，都在本视图内），不再 portal 树进主侧栏，
+// 故 standalone（分屏 wiki 窗格）与主 KB nav 走同一套布局；standalone 仅作 data 标记。
 const KnowledgeView: React.FC<{ standalone?: boolean }> = ({ standalone }) => {
   const { t: tr } = useI18n();
   const [conn, setConn] = useState<ConnState>('probing');
@@ -103,18 +126,31 @@ const KnowledgeView: React.FC<{ standalone?: boolean }> = ({ standalone }) => {
   const [docs, setDocs] = useState<Document[] | null>(null);
   const [notes, setNotes] = useState<LocalNoteFile[]>([]);
   const [sel, setSel] = useState<Selection>({ kind: 'all' });
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [domainModal, setDomainModal] = useState<Tag | 'new' | null>(null);
   const [createUnder, setCreateUnder] = useState<string | null | undefined>(undefined); // doc-upload modal; value = preset domain
   const [searchOpen, setSearchOpen] = useState(false);
-  const [treeCollapsed, setTreeCollapsed] = useState(!!standalone);   // 左侧栏折叠 → 右侧画布全宽（分屏窄窗格默认折叠）
   const localOk = isLocalNotesAvailable();
-  // The app's left sidebar hosts the KB tree (unified single sidebar). Find its
-  // portal slot after mount; if present we render the tree there and the canvas
-  // takes the full width. Falls back to the inline two-column layout otherwise.
-  const [treeSlot, setTreeSlot] = useState<HTMLElement | null>(null);
-  useEffect(() => { if (!standalone) setTreeSlot(document.getElementById('v2-kb-tree-slot')); }, [standalone]);
-  const embedded = !standalone && !!treeSlot;
+  // Focus 布局：60px 图标栏 + 单文档画布 + Peek 浏览浮层（全部自包含在本视图内，
+  // 不再 portal 树进主侧栏）。peek.open 时从栏缘滑出密集列表；filter 决定列出范围。
+  // 列表栏「开/合」状态：主 KB 走 ClientShell 注入的 KbListContext（让顶栏右上角折叠
+  // 按钮也能驱动）；分屏 wiki 窗格无 provider，退回本地状态自管。filter（看哪类）始终本地。
+  const kbList = useContext(KbListContext);
+  const [filter, setFilter] = useState<PeekFilter>('all');
+  const [standaloneOpen, setStandaloneOpen] = useState(false);
+  const listOpen = standalone ? standaloneOpen : (kbList?.open ?? false);
+  const setListOpen = useCallback((v: boolean) => {
+    if (standalone) setStandaloneOpen(v); else kbList?.setOpen(v);
+  }, [standalone, kbList]);
+  const peek = useMemo(() => ({ open: listOpen, filter }), [listOpen, filter]);
+  // 点 rail 类目 = 切换停靠列表：同 filter 已开 → 收起；否则展开/换 filter。
+  const togglePeek = useCallback((f: PeekFilter) => {
+    if (listOpen && samePeekFilter(filter, f)) setListOpen(false);
+    else { setFilter(f); setListOpen(true); }
+  }, [listOpen, filter, setListOpen]);
+  const setPeekFilter = useCallback((f: PeekFilter) => { setFilter(f); setListOpen(true); }, [setListOpen]);
+  // 记忆筛选状态（提升到此，供左栏 kind 列表 + 画布卡片共享）。
+  const [memKind, setMemKind] = useState<MemoryKind | 'all'>('all');
+  const [memQuery, setMemQuery] = useState('');
 
   const probe = useCallback(async () => {
     setConn('probing'); setConnErr(null);
@@ -148,8 +184,6 @@ const KnowledgeView: React.FC<{ standalone?: boolean }> = ({ standalone }) => {
   useEffect(() => { void probe(); }, [probe]);
   useEffect(() => { if (conn === 'ok') { void loadDomains(); void loadDocs(); } }, [conn, loadDomains, loadDocs]);
   useEffect(() => { void loadNotes(); }, [loadNotes]);
-  // 笔记域默认展开（新建笔记落进这里，要立刻看得到）。
-  useEffect(() => { setExpanded((p) => new Set(p).add(NOTES_DOMAIN)); }, []);
 
   // ⌘K focuses search · ⌘N new note · Esc closes search overlay · 双击 Shift 也开搜索
   useEffect(() => {
@@ -157,7 +191,7 @@ const KnowledgeView: React.FC<{ standalone?: boolean }> = ({ standalone }) => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setSearchOpen(true); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); void addNote(); }
-      else if (e.key === 'Escape' && searchOpen) setSearchOpen(false);
+      else if (e.key === 'Escape') { if (searchOpen) setSearchOpen(false); else if (listOpen) setListOpen(false); }
       else if (e.key === 'Shift' && !e.repeat) {
         const now = e.timeStamp || Date.now();
         if (now - lastShift < 400) { setSearchOpen(true); lastShift = 0; } else lastShift = now;
@@ -168,16 +202,12 @@ const KnowledgeView: React.FC<{ standalone?: boolean }> = ({ standalone }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchOpen]);
 
-  const toggleExpand = (key: string) =>
-    setExpanded((p) => { const n = new Set(p); n.has(key) ? n.delete(key) : n.add(key); return n; });
-
   // 新建笔记 = 保存对话框选位置（任意目录）→ 建空 .md → 平铺登记 → 打开。
   const addNote = useCallback(async () => {
     if (!localOk) { window.alert(tr('kb.localOnlyDesktop')); return; }
     try {
       const p = await newNoteFile(tr('kb.untitledNoteFile'));
       if (!p) return;
-      setExpanded((s) => new Set(s).add(NOTES_DOMAIN));
       await loadNotes();
       setSel({ kind: 'note', path: p });
     } catch (e: any) { window.alert(e?.message || tr('kb.createFailed')); }
@@ -189,7 +219,6 @@ const KnowledgeView: React.FC<{ standalone?: boolean }> = ({ standalone }) => {
     try {
       const added = await importNotes();
       if (!added.length) return;
-      setExpanded((s) => new Set(s).add(NOTES_DOMAIN));
       await loadNotes();
       setSel({ kind: 'note', path: added[0] });
     } catch (e: any) { window.alert(e?.message || tr('kb.importFailed')); }
@@ -218,54 +247,61 @@ const KnowledgeView: React.FC<{ standalone?: boolean }> = ({ standalone }) => {
       {conn === 'down' && <div className="v2-kb-body"><Down err={connErr} onRetry={probe} /></div>}
       {conn === 'probing' && <div className="v2-kb-body"><KbEmpty title={tr('kb.connecting')} /></div>}
 
-      {conn === 'ok' && (() => {
-        {/* 左侧栏：搜索 + sncloud 状态 + 上传 + 知识域树。embedded 时整块 portal 进
-            主侧栏槽位，画布吃满整宽；否则走原内联两栏布局（折叠/展开动画保留）。 */}
-        const kbTree = (
-          <KbTree
-            domains={domains}
-            docs={docs}
-            notes={notes}
-            localOk={localOk}
-            sel={sel}
-            expanded={expanded}
+      {conn === 'ok' && (
+        <div className="v2-kb-shell" data-list={peek.open ? '1' : undefined} data-standalone={standalone ? '1' : undefined}>
+          <KbRail
             conn={conn}
-            embedded={embedded}
-            onOpenSearch={() => setSearchOpen(true)}
-            onUpload={() => setCreateUnder(null)}
-            onCollapse={() => setTreeCollapsed(true)}
-            onSelect={setSel}
-            onToggle={toggleExpand}
-            onNewDomain={() => setDomainModal('new')}
-            onEditDomain={(t) => setDomainModal(t)}
-            onAddNote={addNote}
+            sel={sel}
+            localOk={localOk}
+            noteCount={notes.length}
+            docCount={(docs || []).filter((d) => !isNote(d)).length}
+            peek={peek}
+            onSearch={() => setSearchOpen(true)}
+            onPeek={togglePeek}
+            onMemories={() => { setSel({ kind: 'memories' }); togglePeek('memories'); }}
+            onNewNote={addNote}
             onImportNote={importNote}
+            onUpload={() => setCreateUnder(null)}
           />
-        );
-        return (
-          <div className={`v2-kb-workspace${embedded ? ' embedded' : (treeCollapsed ? ' tree-collapsed' : '')}`}>
-            {embedded ? (treeSlot && createPortal(kbTree, treeSlot)) : kbTree}
-            <div className="v2-kb-canvaswrap">
-              {!embedded && treeCollapsed && (
-                <button className="v2-kb-expandbtn" title={tr('kb.expandSidebar')} onClick={() => setTreeCollapsed(false)}>
-                  <IconChevron />
-                </button>
-              )}
-              <KbCanvas
-                sel={sel}
-                docs={docs}
-                notes={notes}
-                domains={domains}
-                llmConfigId={llmConfigId}
-                onDocsChanged={loadDocs}
-                onNotesChanged={loadNotes}
-                onSelect={setSel}
-                onAddNote={addNote}
-              />
-            </div>
+          {/* 停靠列表栏：点 rail 类目展开（推开画布）；KbPeek 常挂，靠列宽 0↔W 过渡显隐。 */}
+          <div className="v2-kb-listcol">
+            <KbPeek
+              open={peek.open}
+              filter={peek.filter}
+              domains={domains}
+              docs={docs}
+              notes={notes}
+              localOk={localOk}
+              sel={sel}
+              memKind={memKind}
+              memQuery={memQuery}
+              onMemKind={setMemKind}
+              onMemQuery={setMemQuery}
+              onSetFilter={setPeekFilter}
+              onSelect={setSel}
+              onDeepSearch={() => setSearchOpen(true)}
+              onNewNote={addNote}
+              onNewDomain={() => setDomainModal('new')}
+              onEditDomain={(t) => setDomainModal(t)}
+            />
           </div>
-        );
-      })()}
+          <div className="v2-kb-canvaswrap">
+            <KbCanvas
+              sel={sel}
+              docs={docs}
+              notes={notes}
+              domains={domains}
+              llmConfigId={llmConfigId}
+              memKind={memKind}
+              memQuery={memQuery}
+              onDocsChanged={loadDocs}
+              onNotesChanged={loadNotes}
+              onSelect={setSel}
+              onAddNote={addNote}
+            />
+          </div>
+        </div>
+      )}
 
       {searchOpen && (
         <SearchOverlay domain={null} llmConfigId={llmConfigId} noteDocIds={noteDocIds} onOpen={openFromSearch} onClose={() => setSearchOpen(false)} />
@@ -290,184 +326,263 @@ const KnowledgeView: React.FC<{ standalone?: boolean }> = ({ standalone }) => {
   );
 };
 
-/* ============ Left resource tree ============ */
+/* ============ Left icon rail —— Focus 布局唯一导航（60px） ============
+   搜索 / 本地笔记 / 云端文档 / 记忆 / 知识域 / ＋新建。点类目 → 从栏缘滑出 Peek。 */
 
-const KbTree: React.FC<{
+const KbRail: React.FC<{
+  conn: ConnState;
+  sel: Selection;
+  localOk: boolean;
+  noteCount: number;
+  docCount: number;
+  peek: { open: boolean; filter: PeekFilter };
+  onSearch: () => void;
+  onPeek: (f: PeekFilter) => void;
+  onMemories: () => void;
+  onNewNote: () => void;
+  onImportNote: () => void;
+  onUpload: () => void;
+}> = ({ conn, sel, localOk, noteCount, docCount, peek, onSearch, onPeek, onMemories, onNewNote, onImportNote, onUpload }) => {
+  const { t: tr } = useI18n();
+  const acct = useContext(KbAccountContext);
+  const [plusMenu, setPlusMenu] = useState(false);
+  const pf = peek.open ? peek.filter : null;
+  const localActive = pf === 'local';
+  const cloudActive = pf === 'cloud';
+  const domainsActive = pf === 'domains' || (pf !== null && typeof pf === 'object');
+  const connTone = conn === 'ok' ? 'ok' : conn === 'probing' ? 'probing' : conn === 'no-key' ? 'nokey' : 'down';
+  const connLabel = conn === 'ok' ? tr('kb.connected') : conn === 'probing' ? tr('kb.connecting2') : conn === 'no-key' ? tr('kb.notConfigured') : tr('kb.unreachable');
+  return (
+    <aside className="v2-kb-rail">
+      <button className="v2-kb-rb" data-tip={tr('kb.searchEllipsis')} aria-label={tr('kb.searchEllipsis')} onClick={onSearch}>
+        <IconSearch /><span className="kbd">⌘K</span>
+      </button>
+      <div className="v2-kb-rsep" />
+      <button className={`v2-kb-rb note${localActive ? ' active' : ''}`} data-tip={tr('kb.notes')} aria-label={tr('kb.notes')} onClick={() => onPeek('local')}>
+        <IconEdit />{noteCount ? <span className="badge">{noteCount > 99 ? '99+' : noteCount}</span> : null}
+      </button>
+      <button className={`v2-kb-rb${cloudActive ? ' active' : ''}`} data-tip={tr('kb.document')} aria-label={tr('kb.document')} onClick={() => onPeek('cloud')}>
+        <IconDoc />{docCount ? <span className="badge">{docCount > 99 ? '99+' : docCount}</span> : null}
+      </button>
+      <button className={`v2-kb-rb${sel.kind === 'memories' ? ' active' : ''}`} data-tip={tr('kb.memory')} aria-label={tr('kb.memory')} onClick={onMemories}>
+        <IconPin />
+      </button>
+      <div className="v2-kb-rsep" />
+      <button className={`v2-kb-rb${domainsActive ? ' active' : ''}`} data-tip={tr('kb.domains')} aria-label={tr('kb.domains')} onClick={() => onPeek('domains')}>
+        <IconKB />
+      </button>
+      <div className="v2-kb-rspace" />
+      <div className="v2-kb-rplus">
+        <button className={`v2-kb-rb${plusMenu ? ' active' : ''}`} data-tip={tr('kb.newNote')} aria-label={tr('kb.newNote')} onClick={() => setPlusMenu((v) => !v)}>
+          <IconPlus />
+        </button>
+        {plusMenu && (
+          <>
+            <div className="v2-kb-rplus-scrim" onClick={() => setPlusMenu(false)} />
+            <div className="v2-kb-rplus-menu" role="menu">
+              <button onClick={() => { setPlusMenu(false); onNewNote(); }} disabled={!localOk}><span className="i"><IconEdit /></span>{tr('kb.newNote')}</button>
+              <button onClick={() => { setPlusMenu(false); onImportNote(); }} disabled={!localOk}><span className="i"><IconDoc /></span>{tr('kb.importExistingNote')}</button>
+              <button onClick={() => { setPlusMenu(false); onUpload(); }} disabled={conn !== 'ok'}><span className="i"><IconCloud /></span>{tr('kb.uploadWiki')}</button>
+            </div>
+          </>
+        )}
+      </div>
+      <div className={`v2-kb-rconn tone-${connTone}`} title={connLabel} aria-label={connLabel}><span className="dot" /></div>
+      {acct && (
+        <button
+          className={`v2-kb-racct${acct.authed ? '' : ' guest'}`}
+          data-tip={acct.authed ? acct.name : tr('shell.login')}
+          aria-label={acct.authed ? acct.name : tr('shell.login')}
+          onClick={acct.onOpen}
+        >
+          <span className={`av${acct.online ? ' online' : ''}`}>{acct.authed ? acct.initials : '·'}</span>
+          <span className="gear" aria-hidden><IconGear /></span>
+        </button>
+      )}
+    </aside>
+  );
+};
+
+/* ============ Peek —— 临时密集浏览浮层（替代常驻树/中列） ============
+   从 rail 缘滑出。搜索框 + 类型/域筛选胶囊 + 紧凑行。选中即载画布并收起（浏览→阅读不跳屏）。
+   filter='domains' 时切换成「知识域管理」面板（列域、点域→看域内文档、新建/编辑域）。 */
+
+const KbPeek: React.FC<{
+  open: boolean;
+  filter: PeekFilter;
   domains: Tag[];
   docs: Document[] | null;
   notes: LocalNoteFile[];
   localOk: boolean;
   sel: Selection;
-  expanded: Set<string>;
-  conn: ConnState;
-  onOpenSearch: () => void;
-  onUpload: () => void;
-  onCollapse: () => void;
+  memKind: MemoryKind | 'all';
+  memQuery: string;
+  onMemKind: (k: MemoryKind | 'all') => void;
+  onMemQuery: (q: string) => void;
+  onSetFilter: (f: PeekFilter) => void;
   onSelect: (s: Selection) => void;
-  onToggle: (key: string) => void;
+  onDeepSearch: () => void;
+  onNewNote: () => void;
   onNewDomain: () => void;
   onEditDomain: (t: Tag) => void;
-  onAddNote: () => void;
-  onImportNote: () => void;
-  /** Rendered inside the app's left sidebar (portal) — hide the self-collapse. */
-  embedded?: boolean;
-}> = ({ domains, docs, notes, localOk, sel, expanded, conn, embedded, onOpenSearch, onUpload, onCollapse, onSelect, onToggle, onNewDomain, onEditDomain, onAddNote, onImportNote }) => {
+}> = ({ open, filter, domains, docs, notes, localOk, sel, memKind, memQuery, onMemKind, onMemQuery, onSetFilter, onSelect, onDeepSearch, onNewNote, onNewDomain, onEditDomain }) => {
   const { t: tr } = useI18n();
-  // 云端文档按域分桶。包含上传文档 + 历史云端笔记（如「东方玄学」），但排除
-  // 已是本地笔记镜像的云 note（避免与「笔记」组重复）。
+  const [q, setQ] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  // 展开时聚焦搜索框（常挂组件，靠 open 上升沿触发，而非 autoFocus）。
+  useEffect(() => { if (open) { const id = window.setTimeout(() => inputRef.current?.focus(), 60); return () => window.clearTimeout(id); } }, [open]);
   const mirrorIds = useMemo(() => syncedDocIds(), [notes]);
-  const byDomain = useMemo(() => {
-    const m = new Map<string, Document[]>();
-    const push = (k: string, d: Document) => (m.get(k) ?? m.set(k, []).get(k)!).push(d);
+  const others = useMemo(() => domains.filter((t) => t.name !== NOTES_DOMAIN), [domains]);
+  const domainsMode = filter === 'domains';
+  const memMode = filter === 'memories';
+
+  type Row = { key: string; kind: 'note' | 'doc'; title: string; sub: string; ts: number; sel: Selection };
+  const rows = useMemo<Row[]>(() => {
+    if (domainsMode) return [];
+    const wantDom = typeof filter === 'object' ? filter.dom : null;
+    const wantLocal = filter === 'all' || filter === 'local' || wantDom === NOTES_DOMAIN;
+    const wantCloud = filter === 'all' || filter === 'cloud' || (wantDom !== null && wantDom !== NOTES_DOMAIN);
+    const out: Row[] = [];
+    if (wantLocal) {
+      for (const f of notes) out.push({ key: 'n:' + f.path, kind: 'note', title: noteTitle(f), sub: NOTES_DOMAIN, ts: f.mtimeMs, sel: { kind: 'note', path: f.path } });
+    }
+    if (wantCloud) {
+      for (const d of docs || []) {
+        if (mirrorIds.has(d.id) || isNote(d)) continue;
+        const dms = docDomains(d).filter((x) => x !== NOTES_DOMAIN);
+        if (wantDom && wantDom !== NOTES_DOMAIN && !dms.includes(wantDom)) continue;
+        out.push({ key: 'd:' + d.id, kind: 'doc', title: d.name || tr('kb.untitled'), sub: dms[0] || tr('kb.untagged'), ts: Date.parse(d.updated_at || d.created_at) || 0, sel: { kind: 'doc', id: d.id } });
+      }
+    }
+    const needle = q.trim().toLowerCase();
+    const filtered = needle ? out.filter((r) => r.title.toLowerCase().includes(needle)) : out;
+    return filtered.sort((a, b) => b.ts - a.ts);
+  }, [domainsMode, filter, notes, docs, mirrorIds, q, tr]);
+
+  const docCountByDom = useMemo(() => {
+    const m = new Map<string, number>();
     for (const d of docs || []) {
-      if (mirrorIds.has(d.id)) continue;   // 本地镜像 → 不在云树重复
-      const ds = docDomains(d).filter((x) => x !== NOTES_DOMAIN);  // 「笔记」域不在云树里出现
-      if (ds.length === 0) { push('__none__', d); continue; }
-      for (const name of ds) push(name, d);
+      if (mirrorIds.has(d.id) || isNote(d)) continue;
+      for (const dm of docDomains(d)) if (dm !== NOTES_DOMAIN) m.set(dm, (m.get(dm) || 0) + 1);
     }
     return m;
   }, [docs, mirrorIds]);
 
-  const others = domains.filter((t) => t.name !== NOTES_DOMAIN);
-  // 各子域内文档按名字典序排列（zh-aware）。
-  const restGroups: Array<{ key: string; tag: Tag | null; items: Document[] }> = [
-    ...others.map((t) => ({ key: t.name, tag: t, items: (byDomain.get(t.name) || []).slice().sort(byDocName) })),
-  ];
-  const untagged = (byDomain.get('__none__') || []).slice().sort(byDocName);
-  if (untagged.length) restGroups.push({ key: '__none__', tag: null, items: untagged });
+  const isSel = (s: Selection): boolean =>
+    (s.kind === 'note' && sel.kind === 'note' && s.path === sel.path) ||
+    (s.kind === 'doc' && sel.kind === 'doc' && s.id === sel.id);
 
-  const docCount = (docs || []).filter((d) => !mirrorIds.has(d.id)).length;
-  const noteCount = notes.length;
-
-  const renderGroup = (g: { key: string; tag: Tag | null; items: Document[] }) => {
-    const open = expanded.has(g.key);
-    return (
-      <div key={g.key} className="v2-kb-group">
-        <div className="v2-kb-group-row" onClick={() => onToggle(g.key)}>
-          <span className={`caret${open ? ' open' : ''}`}><IconChevron /></span>
-          <span className="dot" style={{ background: g.tag ? domainColor(g.tag) : 'var(--c-ink-4)' }} />
-          <span className="nm">{g.tag ? g.tag.name : tr('kb.untagged')}</span>
-          <span className="cnt">{g.items.length || ''}</span>
-          {/* 未归类不可编辑；用户自建域有铅笔。actions 浮在右侧，不挤占 cnt 列。 */}
-          {g.tag && (
-            <span className="row-acts">
-              <button className="row-act" title={tr('kb.editDomain')} onClick={(e) => { e.stopPropagation(); onEditDomain(g.tag!); }}><IconEdit /></button>
-            </span>
-          )}
-        </div>
-        {open && g.items.map((d) => (
-          <button
-            key={d.id}
-            className={`v2-kb-node leaf${sel.kind === 'doc' && sel.id === d.id ? ' active' : ''}`}
-            onClick={() => onSelect({ kind: 'doc', id: d.id })}
-            title={d.name}
-          >
-            <span className="ic"><IconDoc /></span>
-            <span className="nm">{d.name || tr('kb.untitled')}</span>
-          </button>
-        ))}
-        {open && g.items.length === 0 && <div className="v2-kb-node-empty">{tr('kb.empty')}</div>}
-      </div>
-    );
-  };
-
-  // 底部「上传 wiki」融合了 sn 连接状态：状态点是这控件唯一的彩色焦点（克制用色）。
-  const connTone = conn === 'ok' ? 'ok' : conn === 'probing' ? 'probing' : conn === 'no-key' ? 'nokey' : 'down';
-  const connLabel = conn === 'ok' ? tr('kb.connected') : conn === 'probing' ? tr('kb.connecting2') : conn === 'no-key' ? tr('kb.notConfigured') : tr('kb.unreachable');
+  const chip = (f: PeekFilter, label: string) => (
+    <button className={`v2-kb-pk-chip${samePeekFilter(filter, f) ? ' on' : ''}`} onClick={() => { setQ(''); onSetFilter(f); }}>{label}</button>
+  );
 
   return (
-    <aside className={`v2-kb-tree${embedded ? ' embedded' : ''}`}>
-      {/* 左栏头：搜索（占主）+ 折叠按钮（embedded 时省去，由主侧栏统一折叠）。 */}
-      <div className="v2-kb-tree-hd">
-        <button className="v2-kb-searchbtn" onClick={onOpenSearch} title={tr('kb.searchAllTip')}>
-          <IconSearch /><span>{tr('kb.searchEllipsis')}</span><kbd>⌘K</kbd>
-        </button>
-        {!embedded && (
-          <button className="v2-kb-collapse" onClick={onCollapse} title={tr('kb.collapseSidebar')}><IconChevron /></button>
-        )}
-      </div>
-      <div className="v2-kb-tree-scroll">
-        {/* 笔记组置顶（在「全部」之上）—— 本地 .md 文件。导入/新建都是 icon 按钮；
-            没有笔记时不可展开（无 caret、点头不展开）。 */}
-        {(() => {
-          const empty = notes.length === 0;
-          const open = !empty && expanded.has(NOTES_DOMAIN);
-          return (
-        <div className="v2-kb-group v2-kb-group-notes">
-          <div className="v2-kb-group-row" onClick={() => { if (!empty) onToggle(NOTES_DOMAIN); }}>
-            <span className={`caret${open ? ' open' : ''}${empty ? ' hidden' : ''}`}>{!empty && <IconChevron />}</span>
-            <span className="ic-lead" style={{ color: NOTES_DOMAIN_COLOR }}><IconEdit /></span>
-            <span className="nm">{tr('kb.notes')}</span>
-            <span className="cnt">{noteCount || ''}</span>
-            {localOk && (
-              <span className="row-acts">
-                <button className="row-act" title={tr('kb.importExistingNote')} onClick={(e) => { e.stopPropagation(); onImportNote(); }}><IconDoc /></button>
-                <button className="row-act" title={tr('kb.newNote')} onClick={(e) => { e.stopPropagation(); onAddNote(); }}><IconPlus /></button>
-              </span>
+      <div className="v2-kb-peek" aria-hidden={!open}>
+        <div className="v2-kb-pk-srch">
+          <div className="sb">
+            <IconSearch />
+            {memMode ? (
+              <input
+                ref={inputRef}
+                value={memQuery}
+                onChange={(e) => onMemQuery(e.target.value)}
+                placeholder={tr('kb.filterMemoryPlaceholder')}
+                aria-label={tr('kb.filterMemoryPlaceholder')}
+                tabIndex={open ? 0 : -1}
+              />
+            ) : (
+              <input
+                ref={inputRef}
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && q.trim()) onDeepSearch(); }}
+                placeholder={tr('kb.searchPlaceholder')}
+                aria-label={tr('kb.searchPlaceholder')}
+                tabIndex={open ? 0 : -1}
+              />
             )}
           </div>
-          {open && notes.slice().sort(byNoteName).map((f) => (
-            <button
-              key={f.path}
-              className={`v2-kb-node leaf${sel.kind === 'note' && sel.path === f.path ? ' active' : ''}`}
-              onClick={() => onSelect({ kind: 'note', path: f.path })}
-              title={f.path}
-            >
-              <span className="ic"><IconEdit /></span>
-              <span className="nm">{noteTitle(f)}</span>
-              {f.mtimeMs ? <span className="meta">{fmtRelTime(f.mtimeMs, tr)}</span> : null}
-            </button>
-          ))}
-        </div>
-          );
-        })()}
-
-        {/* 特殊入口 */}
-        <button className={`v2-kb-node top${sel.kind === 'all' ? ' active' : ''}`} onClick={() => onSelect({ kind: 'all' })}>
-          <span className="ic"><IconKB /></span><span className="nm">{tr('kb.all')}</span><span className="cnt">{docCount || ''}</span>
-        </button>
-        <button className={`v2-kb-node top${sel.kind === 'memories' ? ' active' : ''}`} onClick={() => onSelect({ kind: 'memories' })}>
-          <span className="ic"><IconPin /></span><span className="nm">{tr('kb.memory')}</span>
-        </button>
-
-        <div className="v2-kb-tree-sec">
-          <span>{tr('kb.domains')}</span>
-          <button className="v2-kb-tree-add" title={tr('kb.newDomain')} onClick={onNewDomain}><IconPlus /></button>
         </div>
 
-        {restGroups.length === 0 && <div className="v2-kb-tree-empty">{tr('kb.noOtherDomains')}</div>}
-        {restGroups.map(renderGroup)}
-      </div>
+        {!domainsMode && !memMode && (
+          <div className="v2-kb-pk-filters">
+            {chip('all', tr('kb.all'))}
+            {chip('local', tr('kb.notes'))}
+            {chip('cloud', tr('kb.document'))}
+            {others.map((t) => (
+              <button
+                key={t.name}
+                className={`v2-kb-pk-chip${samePeekFilter(filter, { dom: t.name }) ? ' on' : ''}`}
+                onClick={() => { setQ(''); onSetFilter({ dom: t.name }); }}
+              >
+                <span className="dot" style={{ background: domainColor(t) }} />{t.name}
+              </button>
+            ))}
+          </div>
+        )}
 
-      {/* 左栏底：sn 状态与上传融为一个控件 —— 云图标的状态点即连接态，sn 没连上则整条禁用。 */}
-      <div className="v2-kb-tree-ft">
-        <button
-          className={`v2-kb-snbar tone-${connTone}`}
-          onClick={onUpload}
-          disabled={conn !== 'ok'}
-          title={conn === 'ok' ? tr('kb.uploadReadyTip') : tr('kb.uploadDisabledTip', { state: connLabel })}
-          aria-label={tr('kb.uploadAria', { state: connLabel })}
-        >
-          <span className="sn" aria-hidden>
-            <IconCloud />
-            {conn === 'probing' ? <span className="spin" /> : <span className="st" />}
-          </span>
-          <span className="lb">{tr('kb.uploadWiki')}</span>
-          {/* 已连接时只留那颗 accent 状态点作唯一焦点；未连接才补一句状态词（且不可点）。 */}
-          {conn !== 'ok' && <span className="hint">{connLabel}</span>}
-        </button>
+        <div className="v2-kb-pk-list">
+          {memMode ? (
+            <>
+              <div className="v2-kb-pk-sec"><span>{tr('kb.memory')}</span></div>
+              {(['all', ...Object.keys(KIND_LABELS)] as Array<MemoryKind | 'all'>).map((k) => (
+                <button
+                  key={k}
+                  className={`v2-kb-pk-kindrow${memKind === k ? ' cur' : ''}`}
+                  onClick={() => onMemKind(k)}
+                >
+                  <span className={`tone tone-${k === 'all' ? 'mute' : KIND_TONES[k as MemoryKind]}`} />
+                  <span className="nm">{k === 'all' ? tr('kb.all') : tr('kb.kind.' + k)}</span>
+                </button>
+              ))}
+            </>
+          ) : domainsMode ? (
+            <>
+              <div className="v2-kb-pk-sec">
+                <span>{tr('kb.domains')}</span>
+                <button className="v2-kb-pk-add" title={tr('kb.newDomain')} onClick={onNewDomain}><IconPlus /></button>
+              </div>
+              <button className="v2-kb-pk-domrow" onClick={() => onSetFilter({ dom: NOTES_DOMAIN })}>
+                <span className="dot" style={{ background: NOTES_DOMAIN_COLOR }} />
+                <span className="nm">{tr('kb.notes')}</span>
+                <span className="cnt">{notes.length || ''}</span>
+              </button>
+              {others.length === 0 && <div className="v2-kb-pk-empty">{tr('kb.noOtherDomains')}</div>}
+              {others.map((t) => (
+                <div key={t.name} className="v2-kb-pk-domrow" role="button" tabIndex={0} onClick={() => onSetFilter({ dom: t.name })}>
+                  <span className="dot" style={{ background: domainColor(t) }} />
+                  <span className="nm">{t.name}</span>
+                  <span className="cnt">{docCountByDom.get(t.name) || ''}</span>
+                  <span className="edit" title={tr('kb.editDomain')} onClick={(e) => { e.stopPropagation(); onEditDomain(t); }}><IconEdit /></span>
+                </div>
+              ))}
+            </>
+          ) : rows.length === 0 ? (
+            <div className="v2-kb-pk-empty">{q.trim() ? tr('kb.noMatches') : tr('kb.empty')}</div>
+          ) : (
+            rows.map((r) => (
+              <button key={r.key} className={`v2-kb-pk-row${isSel(r.sel) ? ' cur' : ''}`} onClick={() => onSelect(r.sel)} title={r.title}>
+                <span className={`pi ${r.kind === 'note' ? 'local' : 'cloud'}`}>{r.kind === 'note' ? <IconEdit /> : <IconDoc />}</span>
+                <span className="pmain">
+                  <span className="pttl">{r.title}</span>
+                  <span className="psub">{r.sub}{r.ts ? ' · ' + fmtRelTime(r.ts, tr) : ''}</span>
+                </span>
+                <span className={`ptype ${r.kind === 'note' ? 'local' : 'cloud'}`}>{r.kind === 'note' ? tr('kb.typeLocal') : tr('kb.typeCloud')}</span>
+              </button>
+            ))
+          )}
+        </div>
+
+        {!memMode && !domainsMode && (
+          <div className="v2-kb-pk-foot">
+            <button className="deep" onClick={onDeepSearch}><IconSearch />{tr('kb.deepSearch')}</button>
+            {localOk && <button className="new" onClick={onNewNote}><IconPlus />{tr('kb.newNote')}</button>}
+          </div>
+        )}
       </div>
-    </aside>
   );
 };
 
-/** 文档名字典序（zh-aware）。 */
-function byDocName(a: Document, b: Document): number {
-  return (a.name || '').localeCompare(b.name || '', 'zh-Hans-CN');
-}
-function byNoteName(a: LocalNoteFile, b: LocalNoteFile): number {
-  return a.name.localeCompare(b.name, 'zh-Hans-CN');
-}
 /** Compact relative age for note rows, via the shared local.time.* dictionary. */
 function fmtRelTime(ms: number, tr: (k: string, v?: Record<string, string | number>) => string): string {
   if (!ms) return '';
@@ -488,13 +603,15 @@ const KbCanvas: React.FC<{
   notes: LocalNoteFile[];
   domains: Tag[];
   llmConfigId?: string;
+  memKind: MemoryKind | 'all';
+  memQuery: string;
   onDocsChanged: () => void | Promise<void>;
   onNotesChanged: () => void | Promise<void>;
   onSelect: (s: Selection) => void;
   onAddNote: () => void;
-}> = ({ sel, docs, notes, domains, onDocsChanged, onNotesChanged, onSelect, onAddNote }) => {
+}> = ({ sel, docs, notes, domains, memKind, memQuery, onDocsChanged, onNotesChanged, onSelect, onAddNote }) => {
   const { t: tr } = useI18n();
-  if (sel.kind === 'memories') return <div className="v2-kb-canvas pad"><MemoriesTab domain={null} /></div>;
+  if (sel.kind === 'memories') return <div className="v2-kb-canvas pad"><MemoriesTab domain={null} kind={memKind} q={memQuery} controlled /></div>;
   if (sel.kind === 'all') return <KbAllList docs={docs} notes={notes} onSelect={onSelect} onAddNote={onAddNote} />;
   if (sel.kind === 'note') {
     const f = notes.find((n) => n.path === sel.path);
@@ -627,13 +744,16 @@ const DomainEditModal: React.FC<{
 
 /* ============ Memories ============ */
 
-const MemoriesTab: React.FC<{ domain: string | null }> = ({ domain }) => {
+/** controlled：kind/q 由外部（KB 左栏）驱动，画布内不再渲染筛选 tab/搜索，只留卡片 + 新建。 */
+const MemoriesTab: React.FC<{ domain: string | null; kind?: MemoryKind | 'all'; q?: string; controlled?: boolean }> = ({ domain, kind: kindProp, q: qProp, controlled }) => {
   const { t: tr } = useI18n();
   const [list, setList] = useState<Memory[] | null>(null);
-  const [kindFilter, setKindFilter] = useState<MemoryKind | 'all'>('all');
-  const [q, setQ] = useState('');
+  const [kindFilterLocal, setKindFilter] = useState<MemoryKind | 'all'>('all');
+  const [qLocal, setQ] = useState('');
   const [editing, setEditing] = useState<Memory | 'new' | null>(null);
   const [loading, setLoading] = useState(false);
+  const kindFilter = controlled ? (kindProp ?? 'all') : kindFilterLocal;
+  const q = controlled ? (qProp ?? '') : qLocal;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -664,24 +784,31 @@ const MemoriesTab: React.FC<{ domain: string | null }> = ({ domain }) => {
 
   return (
     <>
-      <div className="v2-kb-toolbar">
-        <div className="v2-kb-filters">
-          <button className={`v2-kb-pill${kindFilter === 'all' ? ' on' : ''}`} onClick={() => setKindFilter('all')}>{tr('kb.all')}</button>
-          {(Object.keys(KIND_LABELS) as MemoryKind[]).map((k) => (
-            <button
-              key={k}
-              className={`v2-kb-pill${kindFilter === k ? ' on' : ''}`}
-              onClick={() => setKindFilter(k)}
-            >
-              {tr('kb.kind.' + k)}
-            </button>
-          ))}
+      {controlled ? (
+        <div className="v2-kb-toolbar slim">
+          <span className="grow" />
+          <button className="v2-set-btn primary" onClick={() => setEditing('new')}>＋ {tr('kb.newMemory')}</button>
         </div>
-        <div className="v2-kb-search">
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr('kb.filterMemoryPlaceholder')} onKeyDown={(e) => { if (e.key === 'Enter') void load(); }} />
+      ) : (
+        <div className="v2-kb-toolbar">
+          <div className="v2-kb-filters">
+            <button className={`v2-kb-pill${kindFilter === 'all' ? ' on' : ''}`} onClick={() => setKindFilter('all')}>{tr('kb.all')}</button>
+            {(Object.keys(KIND_LABELS) as MemoryKind[]).map((k) => (
+              <button
+                key={k}
+                className={`v2-kb-pill${kindFilter === k ? ' on' : ''}`}
+                onClick={() => setKindFilter(k)}
+              >
+                {tr('kb.kind.' + k)}
+              </button>
+            ))}
+          </div>
+          <div className="v2-kb-search">
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr('kb.filterMemoryPlaceholder')} onKeyDown={(e) => { if (e.key === 'Enter') void load(); }} />
+          </div>
+          <button className="v2-set-btn primary" onClick={() => setEditing('new')}>＋ {tr('kb.newMemory')}</button>
         </div>
-        <button className="v2-set-btn primary" onClick={() => setEditing('new')}>＋ {tr('kb.newMemory')}</button>
-      </div>
+      )}
 
       {loading && !list && <KbEmpty title={tr('kb.loading')} />}
       {list && list.length === 0 && <KbEmpty title={tr('kb.noMemories')} hint={tr('kb.noMemoriesHint')} />}
@@ -889,6 +1016,7 @@ const DocCanvas: React.FC<{
     <section className="v2-kb-canvas v2-doc-canvas">
       <div className="v2-note-toolbar">
         <span className="v2-note-title" title={doc.name}>{doc.name}</span>
+        <span className="v2-kb-typechip cloud"><span className="dotg" />{tr('kb.typeCloud')}</span>
         <span className="v2-pill mute">{formatBytes(doc.byte_size)}</span>
         {doc.ingested_at ? <span className="v2-pill ok">{tr('kb.chunked')}</span> : <span className="v2-pill warn">{tr('kb.pendingChunk')}</span>}
         {docDomains(doc).map((dm) => <span key={dm} className="v2-pill soft">@{dm}</span>)}
@@ -1187,6 +1315,7 @@ const LocalNoteCanvas: React.FC<{
         ) : (
           <button className="v2-note-title" onClick={() => setRenaming(true)} title={tr('kb.clickToRename')}>{title || tr('kb.untitled')}</button>
         )}
+        <span className="v2-kb-typechip local" title={file.path}><IconEdit />{tr('kb.typeLocal')}</span>
         <span className="v2-note-status">{saving ? tr('kb.saving') : dirty ? tr('kb.unsaved') : tr('kb.savedLocal')}</span>
         <span className={`v2-pill ${synced ? 'ok' : 'mute'}`}>{synced ? tr('kb.synced') : tr('kb.notSynced')}</span>
         {isDefault && (

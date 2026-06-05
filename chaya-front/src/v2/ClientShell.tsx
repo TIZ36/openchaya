@@ -7,7 +7,7 @@ import { api } from '../utils/apiClient';
 import type { Session, Message } from '../services/chat';
 import { useChatBackend } from './useChatBackend';
 import { mediaApi, type MediaOutputItem } from '../services/mediaApi';
-import KnowledgeView, { domainColor } from './KnowledgeView';
+import KnowledgeView, { domainColor, KbAccountContext, type KbAccount, KbListContext } from './KnowledgeView';
 import {
   smartnoteTags, smartnoteRetrieve, getSmartnoteApiKey, type Tag as DomainTag,
 } from '../services/smartnoteApi';
@@ -45,7 +45,7 @@ import LoginPage from './LoginPage';
 import { useI18n, t } from '../i18n';
 import {
   IconAgentCode, IconAgentDoc, IconAgentPainter, IconAgentPrimary,
-  IconAttach, IconChat, IconTeahouse, IconGallery, IconGear, IconKB, IconTerminal,
+  IconAttach, IconChat, IconTeahouse, IconGallery, IconGear, IconKB, IconTerminal, IconFbot,
   IconPlus, IconSend, IconSidebar,
   IconAspect, IconModel,
   IconEdit, IconRevert, IconQuote,
@@ -55,16 +55,18 @@ import { getLLMConfigs, type LLMConfigFromDB } from '../services/llmApi';
 import { updateSessionLLMConfig, getSessionMessages } from '../services/chat';
 import { updateRoleProfile } from '../services/roleApi';
 import { mcpApi, type MCPServer } from '../services/integrationsApi';
-import { LocalAgentTree, LocalAgentConversation, PROVIDER_LABELS, ForeignPaneContext } from './LocalAgentView';
+import { LocalAgentTree, LocalAgentConversation, ForeignPaneContext, ProviderSwitcher } from './LocalAgentView';
 import { useLocalAgent } from './useLocalAgent';
 import { isLocalAgentAvailable, type ProviderId } from './services/localAgent';
+import { isFbotAvailable } from './services/fbot';
+import FbotView from './FbotView';
 import { TopTabs } from './TopTabs';
 import {
   useTopTabs, localTabId, chatTabId, GALLERY_TAB_ID, KB_TAB_ID,
   type TopTab,
 } from './useTopTabs';
 
-type NavKey = 'chat' | 'gallery' | 'kb' | 'local';
+type NavKey = 'chat' | 'gallery' | 'kb' | 'local' | 'fbot';
 type Mode = 'chat' | 'create';
 
 interface Batch {
@@ -156,6 +158,17 @@ const ShellInner: React.FC = () => {
   const [generating, setGenerating] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 知识库视图侧栏对 kb 收起 → 账号入口改由 KB rail 底部承载（经 KbAccountContext 注入）。
+  const kbAccount = useMemo<KbAccount>(() => ({
+    authed,
+    name: userName(),
+    initials: userInitials(),
+    online: wsState === 'open',
+    onOpen: () => { if (authed) setSettingsOpen(true); else requireLogin(); },
+  }), [authed, wsState, requireLogin]);
+  // KB 停靠列表栏开合（提到 shell，使顶栏右上角折叠按钮也能驱动）。
+  const [kbListOpen, setKbListOpen] = useState(false);
+  const kbListCtx = useMemo(() => ({ open: kbListOpen, setOpen: setKbListOpen }), [kbListOpen]);
   const [rowMenu, setRowMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
   const [agentSettingsFor, setAgentSettingsFor] = useState<Session | null>(null);
   /** Full-screen lightbox for any chat image (persisted or live-batch). */
@@ -441,18 +454,18 @@ const ShellInner: React.FC = () => {
   const updateSettings = useCallback((patch: Partial<ClientSettings>) => {
     setSettings((p) => ({ ...p, ...patch }));
   }, []);
-  // Click the CLI badge to cycle provider — only through INSTALLED + live ones
-  // (so e.g. codex, a detect-only stub, isn't a dead stop, and gemini is reachable
-  // once its CLI is installed). Falls back to claude before detection lands.
-  const cycleLocalAgentProvider = useCallback(() => {
-    const avail = la.providers.filter((p) => p.installed && p.live).map((p) => p.id);
-    const order: ProviderId[] = avail.length ? avail : ['claude'];
-    setSettings((p) => {
-      const cur = p.localAgentProvider ?? 'claude';
-      const i = order.indexOf(cur);
-      return { ...p, localAgentProvider: order[(i + 1) % order.length] };
-    });
-  }, [la.providers]);
+  // 直接切到指定 provider（供 composer 里的常规选择框用；底层仍是同一份 settings）。
+  const setLocalAgentProvider = useCallback((id: ProviderId) => {
+    setSettings((p) => (p.localAgentProvider === id ? p : { ...p, localAgentProvider: id }));
+  }, []);
+  // composer 里选 provider = 「在这目录下用新 provider 开新 session」：
+  // ① 立刻用目标 provider 开一条新 lane（newSession 显式带 provider，warm 即用它，
+  //    不依赖全局 provider 落定的时序）；② 同步把全局 provider 切过去，让卡头/tab/
+  //    选择框 UI 一致反映当前 provider。
+  const switchProviderNewSession = useCallback((cwd: string, id: ProviderId) => {
+    la.newSession(cwd, undefined, id);
+    setLocalAgentProvider(id);
+  }, [la, setLocalAgentProvider]);
   const handleLogout = useCallback(() => {
     api.clearToken();
     window.location.reload();
@@ -914,6 +927,8 @@ const ShellInner: React.FC = () => {
   }, [activeSessionId]);
   // LocalAgentTree.onEnter 必须稳定，否则它的 React.memo 在 ShellInner 每次重渲时都失效。
   const enterLocal = useCallback(() => setActiveNav('local'), []);
+  // 飞书录入助手：纯本地桌面功能，免登录（同 local）。
+  const enterFbot = useCallback(() => setActiveNav('fbot'), []);
   // 侧栏 ⋯ 菜单：稳定 handler，让 AgentRow/ChatRow 的 React.memo 真正生效。
   const onSidebarMore = useCallback((s: Session, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1122,114 +1137,102 @@ const ShellInner: React.FC = () => {
 
   return (
     <div className="chaya-v2" data-mode={resolvedMode} data-theme={theme} data-glass={glassAttr} data-glass-i={glassIntensity} onDragOver={swallowDragOver} onDrop={onDrop}>
-      <div className="v2-tb"><div className="v2-dots"><i /><i /><i /></div></div>
+      {/* ===== 全宽统一顶栏：红绿灯 + 图标导航 + 置顶 + tab + 折叠，全在这一行（跨整窗宽） ===== */}
+      <div className="v2-titlebar">
+        <div className="v2-dots" aria-hidden><i /><i /><i /></div>
+        <nav className="v2-tnav">
+          <button
+            className={`v2-pin v2-pin-fn${activeNav === 'chat' ? ' active' : ''}`}
+            title={tr('shell.nav.chat')} aria-label={tr('shell.nav.chat')}
+            onClick={() => { if (!authed) { requireLogin(); return; } setActiveNav('chat'); setMode('chat'); }}
+          ><IconChat /><span className="lb">chat</span></button>
+          {isLocalAgentAvailable() && (
+            <button
+              className={`v2-pin v2-pin-fn${activeNav === 'local' ? ' active' : ''}`}
+              title={tr('shell.nav.localCli')} aria-label={tr('shell.nav.localCli')}
+              onClick={enterLocal}
+            ><IconTerminal /><span className="lb">code</span></button>
+          )}
+          <button
+            className={`v2-pin v2-pin-fn${activeNav === 'kb' ? ' active' : ''}`}
+            title={tr('shell.nav.kb')} aria-label={tr('shell.nav.kb')}
+            onClick={() => { if (!authed) { requireLogin(); return; } openKBTab(); }}
+          ><IconKB /><span className="lb">wiki</span></button>
+          <button
+            className={`v2-pin v2-pin-fn${activeNav === 'gallery' ? ' active' : ''}`}
+            title={tr('shell.nav.gallery')} aria-label={tr('shell.nav.gallery')}
+            onClick={() => { if (!authed) { requireLogin(); return; } openGalleryTab(); }}
+          ><IconGallery /><span className="lb">gallery</span></button>
+          {isFbotAvailable() && (
+            <button
+              className={`v2-pin v2-pin-fn${activeNav === 'fbot' ? ' active' : ''}`}
+              title="飞书录入助手" aria-label="飞书录入助手"
+              onClick={enterFbot}
+            ><IconFbot /><span className="lb">feishu</span></button>
+          )}
+        </nav>
+        <span className="v2-tnav-sep" aria-hidden />
+        {/* 自定义置顶（pin）—— 与 tab 同处一行 */}
+        <div className="v2-tpins">
+          {topTabs.tabs.filter((t) => t.pinned && (t.kind === 'local' || authed)).map((t) => {
+            const typeKey = t.kind === 'chat' && (t.isPrimary || t.sessionType === 'agent') ? 'agent' : t.kind;
+            const ch = (Array.from((t.label || '').trim())[0] || '·').toUpperCase();
+            return (
+              <button
+                key={t.id}
+                className={`v2-pin v2-pin-chip${topTabs.activeId === t.id ? ' active' : ''}${t.attn ? ' attn' : ''}`}
+                data-kind={typeKey}
+                title={tr('tabs.pinnedTitle', { label: t.label })}
+                aria-label={t.label}
+                onClick={() => activateTopTab(t)}
+                onContextMenu={(e) => { e.preventDefault(); topTabs.togglePin(t.id); }}
+              >
+                <span className="ch" aria-hidden>{ch}</span>
+                {t.unread && topTabs.activeId !== t.id && <span className="dot" aria-hidden />}
+                {t.attn && <span className="attn-mark" aria-hidden>!</span>}
+              </button>
+            );
+          })}
+        </div>
+        {/* 打开的 tab —— 占满顶栏剩余宽度、自身横向滚动 */}
+        <TopTabs
+          la={la}
+          tabs={authed ? topTabs.tabs : topTabs.tabs.filter((t) => t.kind === 'local')}
+          activeId={topTabs.activeId}
+          onActivate={activateTopTab}
+          onClose={closeTopTab}
+          onTogglePin={(t) => topTabs.togglePin(t.id)}
+          pinnedLocalCwds={pinnedLocalCwds}
+          onLocalTogglePin={(cwd) => topTabs.togglePin(localTabId(cwd))}
+        />
+        {/* 知识库下侧栏本就收起，此按钮改为「展开/收起 KB 停靠列表栏」（复用同一个右上角按钮）。 */}
+        {activeNav === 'kb' ? (
+          <button
+            className={`v2-pin v2-titlebar-collapse${kbListOpen ? ' active' : ''}`}
+            title={tr(kbListOpen ? 'shell.collapseSidebar' : 'shell.expandSidebar')}
+            aria-label={tr(kbListOpen ? 'shell.collapseSidebar' : 'shell.expandSidebar')}
+            onClick={() => setKbListOpen((o) => !o)}
+          ><IconSidebar /></button>
+        ) : (
+          <button
+            className="v2-pin v2-titlebar-collapse"
+            title={tr(collapsed ? 'shell.expandSidebar' : 'shell.collapseSidebar')}
+            aria-label={tr(collapsed ? 'shell.expandSidebar' : 'shell.collapseSidebar')}
+            onClick={() => setCollapsed((c) => !c)}
+          ><IconSidebar /></button>
+        )}
+      </div>
 
-      <div className={`v2-app${collapsed ? ' collapsed' : ''}`}>
+      <div className={`v2-app${collapsed ? ' collapsed' : ''}`} data-nav={activeNav}>
         {/* ===== 功能轨（图标+文字）：唯一一层全局导航。点一个功能 → 右侧是该功能自己的
              「列表 + 内容」（见 view-frame 里的 v2-feat），不再出现两层侧栏。 ===== */}
         {/* ===== 统一侧栏：icon+文字横排导航 + 当前功能列表 + 底部账号，单栏同底色；
              白卡片只裹右侧内容（对话 / 画廊 / 知识库）。 ===== */}
         <aside className="v2-side v2-sidebar">
-          {/* 标题栏一行：交通灯右侧 4 个固定功能图标（聊天 / 知识库 / CLI / 折叠），
-              不可取消；换行后是用户自定义置顶（圆角方块 + 首字 + 按类型描边，右键取消）。 */}
-          <div className="v2-rail-pins">
-            <span className="v2-rail-lights-gap" aria-hidden />
-            {/* 顺序与下方文字导航一致：chat · cli · wiki */}
-            <button
-              className={`v2-pin v2-pin-fn${activeNav === 'chat' ? ' active' : ''}`}
-              title={tr('shell.nav.chat')}
-              aria-label={tr('shell.nav.chat')}
-              onClick={() => { if (!authed) { requireLogin(); return; } setActiveNav('chat'); setMode('chat'); }}
-            ><IconChat /></button>
-            {isLocalAgentAvailable() && (
-              <button
-                className={`v2-pin v2-pin-fn${activeNav === 'local' ? ' active' : ''}`}
-                title={tr('shell.nav.localCli')}
-                aria-label={tr('shell.nav.localCli')}
-                onClick={enterLocal}
-              ><IconTerminal /></button>
-            )}
-            <button
-              className={`v2-pin v2-pin-fn${activeNav === 'kb' ? ' active' : ''}`}
-              title={tr('shell.nav.kb')}
-              aria-label={tr('shell.nav.kb')}
-              onClick={() => { if (!authed) { requireLogin(); return; } openKBTab(); }}
-            ><IconKB /></button>
-            <button
-              className="v2-pin v2-pin-fn v2-rail-collapse"
-              title={tr('shell.collapseSidebar')}
-              aria-label={tr('shell.collapseSidebar')}
-              onClick={() => setCollapsed(true)}
-            ><IconSidebar /></button>
-
-            {/* wrap → 自定义置顶 */}
-            <span className="v2-rail-break" aria-hidden />
-            {topTabs.tabs.filter((t) => t.pinned && (t.kind === 'local' || authed)).map((t) => {
-              const typeKey = t.kind === 'chat' && (t.isPrimary || t.sessionType === 'agent') ? 'agent' : t.kind;
-              const ch = (Array.from((t.label || '').trim())[0] || '·').toUpperCase();
-              return (
-                <button
-                  key={t.id}
-                  className={`v2-pin v2-pin-chip${topTabs.activeId === t.id ? ' active' : ''}${t.attn ? ' attn' : ''}`}
-                  data-kind={typeKey}
-                  title={tr('tabs.pinnedTitle', { label: t.label })}
-                  aria-label={t.label}
-                  onClick={() => activateTopTab(t)}
-                  onContextMenu={(e) => { e.preventDefault(); topTabs.togglePin(t.id); }}
-                >
-                  <span className="ch" aria-hidden>{ch}</span>
-                  {t.unread && topTabs.activeId !== t.id && <span className="dot" aria-hidden />}
-                  {t.attn && <span className="attn-mark" aria-hidden>!</span>}
-                </button>
-              );
-            })}
-          </div>
-          {/* 原有的功能入口（带文字标签）保留：标题栏的 4 个图标是「常驻置顶」快捷，
-              这里仍是完整导航。画廊不进置顶图标，但作为非核心功能在此展示。 */}
-          <nav className="v2-rail-nav">
-            <button
-              className={`v2-railbtn${activeNav === 'chat' ? ' active' : ''}`}
-              onClick={() => { if (!authed) { requireLogin(); return; } setActiveNav('chat'); setMode('chat'); }}
-              title={tr('shell.nav.chat')}
-            ><span className="ic"><IconChat /></span><span className="lb">{tr('shell.nav.chat')}</span></button>
-
-            {isLocalAgentAvailable() && (
-              <button
-                className={`v2-railbtn v2-railbtn-cli${activeNav === 'local' ? ' active' : ''}`}
-                onClick={enterLocal}
-                title={tr('shell.nav.localCli')}
-              >
-                <span className="ic"><IconTerminal /></span>
-                <span className="lb">CLI</span>
-                {/* provider 徽标移上来：单击循环切换 claude → codex → gemini（阻止冒泡，不触发进入）。 */}
-                <span
-                  className={`v2-la-badge prov-${la.provider}${(!la.detecting && !!la.current?.installed && !!la.current?.live) ? ' ready' : ''}`}
-                  role="button"
-                  tabIndex={0}
-                  onClick={(e) => { e.stopPropagation(); cycleLocalAgentProvider(); }}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); cycleLocalAgentProvider(); } }}
-                  title={tr('local.tree.providerBadge', { provider: PROVIDER_LABELS[la.provider] })}
-                >
-                  <span className="ic">
-                    {la.detecting ? <span className="v2-la-spinner sm" /> : (!!la.current?.installed && !!la.current?.live) ? <span className="ck">✓</span> : null}
-                  </span>
-                  {PROVIDER_LABELS[la.provider]}
-                </span>
-              </button>
-            )}
-
-            <button
-              className={`v2-railbtn${activeNav === 'kb' ? ' active' : ''}`}
-              onClick={() => { if (!authed) { requireLogin(); return; } openKBTab(); }}
-              title={tr('shell.nav.kb')}
-            ><span className="ic"><IconKB /></span><span className="lb">{tr('shell.nav.kb')}</span></button>
-
-            <button
-              className={`v2-railbtn${activeNav === 'gallery' ? ' active' : ''}`}
-              onClick={() => { if (!authed) { requireLogin(); return; } openGalleryTab(); }}
-              title={tr('shell.nav.gallery')}
-            ><span className="ic"><IconGallery /></span><span className="lb">{tr('shell.nav.gallery')}</span></button>
-          </nav>
+          {/* 文字导航已移除——顶栏图标导航是唯一一层（对齐原型「单层导航」）。
+              此处只留当前栏目标题，给下方列表一个语境（对齐原型 .list-hd）。 */}
+          {/* 顶部留一抹极简风格栏（功能名已在顶栏胶囊；CLI 的 provider 改放到「打开新项目」右侧）。 */}
+          <div className="v2-side-hd v2-style-bar" data-style="mini" />
 
           {/* 子目录列表随顶部主功能切换（参考 design 的 .sb-list 面板切换）：
               对话 → Agents + Chats · CLI → Projects · 知识库 → Wikis · 画廊 → 相册。 */}
@@ -1277,25 +1280,27 @@ const ShellInner: React.FC = () => {
               )
             )}
 
-            {/* CLI：基础动作（打开新项目）置顶 + 本地 Agent 项目树 */}
+            {/* CLI：基础动作行（打开新项目 + 右侧 provider 切换，紧凑、大图标）置顶 + 项目树 */}
             {activeNav === 'local' && isLocalAgentAvailable() && (
               <>
-                <button className="v2-side-action" onClick={() => { void la.addProject(); }}>
-                  <IconPlus /><span>{tr('shell.cliNewProject')}</span>
-                </button>
+                <div className="v2-cli-actionrow">
+                  <button className="v2-side-action" onClick={() => { void la.addProject(); }}>
+                    <IconPlus /><span>{tr('shell.cliNewProject')}</span>
+                  </button>
+                  <ProviderSwitcher
+                    compact
+                    provider={(settings.localAgentProvider ?? 'claude') as ProviderId}
+                    providers={la.providers}
+                    onPick={(id) => { if (la.activeCwd) switchProviderNewSession(la.activeCwd, id); else setLocalAgentProvider(id); }}
+                  />
+                </div>
                 <LocalAgentTree la={la} onEnter={enterLocal} />
               </>
             )}
 
-            {/* 知识库：Wikis 完整面板（搜索 / 笔记 / 全部 / 记忆 / 知识域 / 上传）由
-                KnowledgeView 通过 portal 注入此槽位 —— 统一进单侧栏，右侧只留文档。
-                槽位与 KnowledgeViewKA 同为 keep-alive（visitedNav）：KnowledgeView 只在挂载时
-                getElementById 一次并缓存该节点；若槽位按 activeNav 卸载，离开再回到 wiki 时
-                portal 会指向已脱离文档的旧节点 → 侧栏树消失。故这里也用 visitedNav + hidden，
-                保持节点稳定。 */}
-            {visitedNav.has('kb') && (
-              <div className="v2-kb-tree-slot" id="v2-kb-tree-slot" hidden={activeNav !== 'kb'} />
-            )}
+            {/* 知识库改 Focus 布局：60px 图标栏 + 单文档画布 + Peek 浮层全部自包含在
+                KnowledgeView 内（main 区），app 侧栏对 kb 收起（见 theme.css data-nav=kb）。
+                不再 portal 树进侧栏槽位。 */}
 
             {/* 画廊：相册 */}
             {activeNav === 'gallery' && (
@@ -1312,77 +1317,39 @@ const ShellInner: React.FC = () => {
 
           {authed ? (
             <button className="v2-railme" onClick={() => setSettingsOpen(true)} title={`${userName()} · WS ${wsState} · ${tr('shell.settings')}`}>
-              <span className="v2-av">{userInitials()}</span>
-              <span className="v2-railme-nm">{userName()}</span>
+              <span className={`v2-av${wsState === 'open' ? ' online' : ''}`}>{userInitials()}</span>
+              <span className="v2-railme-meta">
+                <span className="n">{userName()}</span>
+                <span className="s">{tr('shell.acct.signedIn')}</span>
+              </span>
               <span className="lb"><IconGear /></span>
             </button>
           ) : (
             <button className="v2-railme guest" onClick={requireLogin} title={tr('shell.guestLoginHint')}>
               <span className="v2-av">·</span>
-              <span className="v2-railme-nm">{tr('shell.login')}</span>
+              <span className="v2-railme-meta">
+                <span className="n">{tr('shell.login')}</span>
+                <span className="s">{tr('shell.acct.localOnly')}</span>
+              </span>
             </button>
           )}
         </aside>
 
-        {/* ===== main ===== */}
+        {/* ===== main ===== 顶栏(tab/导航)已上移到全宽 .v2-titlebar；主卡只剩内容。 */}
         <main className="v2-main">
-          <div className="v2-topbar v2-topbar-tabs">
-            {/* When the sidebar collapses, its pin row slides off-screen and this
-                rail (expand control + pinned tabs) slides into the tab bar's left.
-                Always mounted so the slide animates both ways — `.on` drives it. */}
-            <div className={`v2-topbar-rail${collapsed ? ' on' : ''}`} aria-hidden={!collapsed}>
-              <button
-                className="v2-pin v2-rail-collapse"
-                title={tr('shell.expandSidebar')}
-                aria-label={tr('shell.expandSidebar')}
-                tabIndex={collapsed ? 0 : -1}
-                onClick={() => setCollapsed(false)}
-              ><IconSidebar /></button>
-              {topTabs.tabs.filter((t) => t.pinned && (t.kind === 'local' || authed)).map((t) => {
-                const typeKey = t.kind === 'chat' && (t.isPrimary || t.sessionType === 'agent') ? 'agent' : t.kind;
-                const ch = (Array.from((t.label || '').trim())[0] || '·').toUpperCase();
-                return (
-                  <button
-                    key={t.id}
-                    className={`v2-pin v2-pin-chip${topTabs.activeId === t.id ? ' active' : ''}${t.attn ? ' attn' : ''}`}
-                    data-kind={typeKey}
-                    title={tr('tabs.pinnedTitle', { label: t.label })}
-                    aria-label={t.label}
-                    tabIndex={collapsed ? 0 : -1}
-                    onClick={() => activateTopTab(t)}
-                    onContextMenu={(e) => { e.preventDefault(); topTabs.togglePin(t.id); }}
-                  >
-                    <span className="ch" aria-hidden>{ch}</span>
-                    {t.unread && topTabs.activeId !== t.id && <span className="dot" aria-hidden />}
-                    {t.attn && <span className="attn-mark" aria-hidden>!</span>}
-                  </button>
-                );
-              })}
-            </div>
-            <TopTabs
-              la={la}
-              // 未登录：顶栏只保留本地（CLI）tab，隐藏云端 tab（聊天/画廊/知识库）——
-              // 它们持久化在 localStorage，登出 reload 后会被恢复，故在渲染层按 authed 过滤；
-              // 重新登录后自然再现（不销毁持久化状态）。
-              tabs={authed ? topTabs.tabs : topTabs.tabs.filter((t) => t.kind === 'local')}
-              activeId={topTabs.activeId}
-              onActivate={activateTopTab}
-              onClose={closeTopTab}
-              onTogglePin={(t) => topTabs.togglePin(t.id)}
-              pinnedLocalCwds={pinnedLocalCwds}
-              onLocalTogglePin={(cwd) => topTabs.togglePin(localTabId(cwd))}
-            />
-            <div className="v2-grow" />
-          </div>
-
           {/* keep-alive：重的视图首访后常驻、用 hidden 切显隐（不再 key={activeNav} 整树
              重挂）。切换=切 CSS 显隐，瞬时；首访仍挂载一次。chat 是首页/较轻，仍走条件渲染。 */}
           <div className="v2-view-frame">
+          <KbAccountContext.Provider value={kbAccount}>
+          <KbListContext.Provider value={kbListCtx}>
           {visitedNav.has('gallery') && (
             <div className="v2-view-slot" hidden={activeNav !== 'gallery'}><GalleryViewKA /></div>
           )}
           {visitedNav.has('kb') && (
             <div className="v2-view-slot" hidden={activeNav !== 'kb'}><KnowledgeViewKA /></div>
+          )}
+          {visitedNav.has('fbot') && (
+            <div className="v2-view-slot" hidden={activeNav !== 'fbot'}><FbotViewKA /></div>
           )}
           {visitedNav.has('local') && (
             <div className="v2-view-slot" hidden={activeNav !== 'local'}>
@@ -1613,8 +1580,14 @@ const ShellInner: React.FC = () => {
             </div>
           </div>
           )}
+          </KbListContext.Provider>
+          </KbAccountContext.Provider>
           </div>{/* /.v2-view-frame */}
         </main>
+
+        {/* ===== inspector ===== wiki 伴随面板的 grid 第三列槽位（--insp-w 控宽）。
+             WikiNotes 通过 portal 把抽屉挂进这里 —— 真正的弹性第三区，main 自动让位。 */}
+        <div className="v2-inspector-slot" id="v2-inspector-slot" />
       </div>
 
       {previewSrc && (
@@ -3736,6 +3709,7 @@ ChatRow.displayName = 'ChatRow';
 // 聊天流式）而重渲；只在自身内部状态变化时重渲。避免「常驻」引入隐藏视图空转的回归。
 const KnowledgeViewKA = React.memo(KnowledgeView);
 const GalleryViewKA = React.memo(GalleryView);
+const FbotViewKA = React.memo(FbotView);
 // 分屏 wiki 窗格：standalone（自带左树、不抢主侧栏 portal 槽位），memo 避免随父重渲。
 const KnowledgeViewPane = React.memo(() => <KnowledgeView standalone />);
 KnowledgeViewPane.displayName = 'KnowledgeViewPane';

@@ -37,6 +37,9 @@ export default defineConfig({
         '**/../../backend/venv/**',
         '**/node_modules/**',
         '**/.git/**',
+        // claude-flow 的 hook 会往源码树里的 .claude-flow/ 持续写 jsonl/json，
+        // 这些非模块文件触发 Vite full-reload，会打断 CSS 的 HMR 热补丁
+        '**/.claude-flow/**',
       ],
     },
   },

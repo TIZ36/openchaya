@@ -363,3 +363,11 @@ export const IconLogo = () => (
     <ellipse cx="22" cy="21" rx="10" ry="5.5" fill="url(#mobSpec)" opacity="0.5" />
   </svg>
 );
+
+// 飞书录入助手：聊天气泡 + 角标点（代表「机器人接收消息/卡片」）
+export const IconFbot = () => (
+  <svg viewBox="0 0 24 24" {...stroke}>
+    <path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H9l-4 3v-3H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5Z" />
+    <path d="M8 10.5h8M8 13h5" strokeWidth={1.5} />
+  </svg>
+);
