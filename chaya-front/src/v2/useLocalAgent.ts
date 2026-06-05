@@ -64,6 +64,14 @@ function emptyTab(cwd: string, sessionId: string | null, title: string, color?: 
   return { cwd, sessionId, title, color: color || nextColor(), messages: [], liveMsgs: [], livePreview: '', status: '', running: false, loading: false, draft: '', permMode };
 }
 
+function normalizePermissionShortcut(text: string): 'allow' | 'deny' | null {
+  const s = text.trim().toLowerCase().replace(/\s+/g, '');
+  if (!s) return null;
+  if (['可以', '允许', '同意', '批准', '确认', '好', 'ok', 'okay', 'yes', 'y', 'allow', 'approve'].includes(s)) return 'allow';
+  if (['不可以', '拒绝', '取消', '否', '不要', 'no', 'n', 'deny', 'reject', 'cancel'].includes(s)) return 'deny';
+  return null;
+}
+
 /* ------------------------------------------------------------------ *
  * 分屏布局树（类 Wave）：叶子 = 一个会话窗格(cwd)；split = 把空间一分为二。
  *   dir='row' → 左右分（竖直分隔线）；dir='col' → 上下分（水平分隔线）。
@@ -758,7 +766,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       finalizeTurn(cwd, (ev.subtype && ev.subtype !== 'success') ? `⚠ ${tr('local.status.turnAbnormal')}` : '');
       return;
     }
-    if (t === 'error') { patchTab(cwd, { status: `⚠ ${ev.error || tr('local.status.execError')}` }); return; }
+    if (t === 'error') { finalizeTurn(cwd, `⚠ ${ev.error || tr('local.status.execError')}`); return; }
     // 进程真正退出（关标签/切会话/出错）：兜底收尾。
     if (t === 'session_closed') { finalizeTurn(cwd, ''); return; }
   }
@@ -828,6 +836,16 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     const text = tab.draft.trim();
     const attachments = tab.attachments || [];
     if (!text && attachments.length === 0) return;
+    if (tab.perm && attachments.length === 0) {
+      const shortcut = normalizePermissionShortcut(text);
+      if (shortcut) {
+        patchTab(cwd, { draft: '', attachments: [] });
+        respondPermission(cwd, tab.perm.permId, shortcut === 'allow'
+          ? { behavior: 'allow' }
+          : { behavior: 'deny', message: tr('local.perm.denyMessage') });
+        return;
+      }
+    }
     // AI 处理中（含等权限/选择）→ 不阻塞输入，入队；本轮收尾后由 flush 副作用打包发出。
     if (tab.running) {
       patchTab(cwd, (t) => ({
@@ -837,7 +855,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       return;
     }
     await dispatchTurn(cwd, text, attachments, true);
-  }, [tabs, patchTab, dispatchTurn]);
+  }, [tabs, patchTab, respondPermission, dispatchTurn, tr]);
 
   /** 衍生：在当前 cwd 新开一个全新 session，并立刻把 text 作为首条发出。
    *  与原 session 地位一致（普通会话、进项目树、可再次衍生）。必须先 sessionClose 关掉

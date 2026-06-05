@@ -22,6 +22,9 @@ export const PERM_META: Record<PermMode, { label: string; tone: string; hint: st
 /** 每个 provider 可循环切换的权限档（Tab 键）。 */
 const PERM_MODES_BY_PROVIDER: Partial<Record<ProviderId, PermMode[]>> = {
   claude: ['default', 'plan', 'acceptEdits', 'bypassPermissions'],
+  // Codex exec has no Claude-style canUseTool callback. Keep the user-facing
+  // modes to the behaviors Chaya can actually enforce.
+  codex: ['default', 'plan', 'bypassPermissions'],
   cursor: ['plan', 'ask', 'force'],
   // gemini approval-mode: default / auto_edit(→acceptEdits) / yolo(→bypassPermissions)
   gemini: ['default', 'acceptEdits', 'bypassPermissions'],

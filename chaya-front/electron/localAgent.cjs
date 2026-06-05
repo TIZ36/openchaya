@@ -498,6 +498,7 @@ async function codexListSessions(cwd) {
   const sessions = await Promise.all(items.map(async ({ file, meta }) => {
     const id = meta.id || codexSessionIdFromFile(file);
     if (!id) return null;
+    if (!index.has(id)) return null;
     const st = await fsp.stat(file).catch(() => null);
     const idx = index.get(id) || {};
     const peek = await codexPeekSession(file);
@@ -519,6 +520,7 @@ async function codexListAllSessions() {
     const meta = await codexReadMeta(file);
     const id = meta.id || codexSessionIdFromFile(file);
     if (!id || !meta.cwd) return null;
+    if (!index.has(id)) return null;
     const st = await fsp.stat(file).catch(() => null);
     const idx = index.get(id) || {};
     const peek = await codexPeekSession(file);
@@ -1166,11 +1168,97 @@ function codexExtractEventText(p) {
   return '';
 }
 
+function codexIsSandboxPermissionFailure(text) {
+  return /Operation not permitted|Permission denied|failed due sandbox|sandbox permissions/i.test(String(text || ''));
+}
+
+function codexRememberPermissionFailure(ctx, command, output) {
+  const text = [command, output].filter(Boolean).join('\n');
+  if (!codexIsSandboxPermissionFailure(text)) return;
+  ctx.permissionFailure = {
+    command: command || '',
+    output: String(output || '').slice(0, 2000),
+  };
+}
+
+function codexMessageEvent(text, uuid) {
+  const body = String(text || '');
+  if (!body.trim()) return null;
+  return { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: body }] }, uuid: uuid || null };
+}
+
+function codexToolEvent(item) {
+  if (!item || item.type !== 'command_execution') return null;
+  return {
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [{
+        type: 'tool_use',
+        name: 'exec_command',
+        input: { cmd: item.command || '' },
+        id: item.id,
+      }],
+    },
+    uuid: item.id || null,
+  };
+}
+
+function codexToolResultEvent(item) {
+  if (!item || item.type !== 'command_execution') return null;
+  const text = item.aggregated_output || (item.exit_code == null ? '' : `exit_code: ${item.exit_code}`);
+  return {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [{
+        type: 'tool_result',
+        content: String(text || '').slice(0, 8000),
+        tool_use_id: item.id,
+        is_error: item.status === 'failed' || (typeof item.exit_code === 'number' && item.exit_code !== 0),
+      }],
+    },
+    uuid: item.id || null,
+  };
+}
+
 function codexNormalizeStdoutEvent(o, ctx) {
   const out = [];
   const p = (o && o.payload) || o || {};
   const typ = o && o.type;
   const payloadType = p.type;
+
+  if (typ === 'thread.started' && p.thread_id) {
+    ctx.sessionId = p.thread_id;
+    out.push({ type: 'system', subtype: 'init', session_id: p.thread_id });
+    return out;
+  }
+
+  if (typ === 'item.started' || typ === 'item.completed') {
+    const item = p.item || {};
+    if (item.type === 'agent_message') {
+      codexRememberPermissionFailure(ctx, '', item.text);
+      const ev = codexMessageEvent(item.text, item.id);
+      if (ev) { ctx.sawAssistant = true; ctx.sawVisible = true; out.push(ev); }
+      return out;
+    }
+    if (item.type === 'command_execution') {
+      codexRememberPermissionFailure(ctx, item.command, item.aggregated_output);
+      if (typ === 'item.started') {
+        const ev = codexToolEvent(item);
+        if (ev) { ctx.sawVisible = true; out.push(ev); }
+      } else {
+        const ev = codexToolResultEvent(item);
+        if (ev) { ctx.sawVisible = true; out.push(ev); }
+      }
+      return out;
+    }
+  }
+
+  if (typ === 'turn.completed') {
+    if (!ctx.permissionFailure) out.push({ type: 'result', subtype: 'success', session_id: ctx.sessionId || undefined });
+    return out;
+  }
 
   const sid = p.id || p.session_id || p.sessionId || p.thread_id || p.conversation_id;
   if (typ !== 'session_meta' && /session|thread/i.test(String(typ || '')) && sid) {
@@ -1191,6 +1279,7 @@ function codexNormalizeStdoutEvent(o, ctx) {
         const parts = codexPartsFromMessage(item);
         if (parts.length) {
           ctx.sawAssistant = true;
+          ctx.sawVisible = true;
           out.push({ type: 'assistant', message: { role: 'assistant', content: parts.map((part) => ({ type: 'text', text: part.text })).filter((part) => part.text) }, uuid: item.id || null });
         }
       }
@@ -1198,12 +1287,12 @@ function codexNormalizeStdoutEvent(o, ctx) {
     }
     if (item.type === 'function_call') {
       const part = codexPartFromResponseItem(item);
-      if (part) out.push({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: part.name, input: part.input, id: part.id }] }, uuid: item.call_id || null });
+      if (part) { ctx.sawVisible = true; out.push({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: part.name, input: part.input, id: part.id }] }, uuid: item.call_id || null }); }
       return out;
     }
     if (item.type === 'function_call_output') {
       const part = codexToolResultFromResponseItem(item);
-      if (part) out.push({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_result', content: part.text, tool_use_id: part.toolUseId }] }, uuid: item.call_id || null });
+      if (part) { ctx.sawVisible = true; out.push({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_result', content: part.text, tool_use_id: part.toolUseId }] }, uuid: item.call_id || null }); }
       return out;
     }
   }
@@ -1211,10 +1300,10 @@ function codexNormalizeStdoutEvent(o, ctx) {
   if (typ === 'event_msg') {
     if (payloadType === 'agent_message_delta' || payloadType === 'agent_message_chunk') {
       const ev = codexTextDeltaEvent(codexExtractEventText(p));
-      if (ev) out.push(ev);
+      if (ev) { ctx.sawVisible = true; out.push(ev); }
     }
     if (payloadType === 'task_complete' || payloadType === 'turn_complete' || payloadType === 'turn_completed') {
-      out.push({ type: 'result', subtype: 'success', session_id: ctx.sessionId || undefined });
+      if (!ctx.permissionFailure) out.push({ type: 'result', subtype: 'success', session_id: ctx.sessionId || undefined });
     }
     if (payloadType === 'error') out.push({ type: 'error', error: p.message || p.error || 'Codex 执行失败' });
     return out;
@@ -1222,15 +1311,26 @@ function codexNormalizeStdoutEvent(o, ctx) {
 
   if (/delta/i.test(String(typ || payloadType || ''))) {
     const ev = codexTextDeltaEvent(codexExtractEventText(p));
-    if (ev) out.push(ev);
+    if (ev) { ctx.sawVisible = true; out.push(ev); }
   }
   if (typ === 'result' || payloadType === 'result') {
-    out.push({ type: 'result', subtype: p.subtype || 'success', session_id: ctx.sessionId || sid || undefined });
+    if (!ctx.permissionFailure) out.push({ type: 'result', subtype: p.subtype || 'success', session_id: ctx.sessionId || sid || undefined });
   }
   if (typ === 'error' || payloadType === 'error') {
     out.push({ type: 'error', error: p.message || p.error || 'Codex 执行失败' });
   }
   return out;
+}
+
+function codexDrainStdoutBuffer(buf, ctx, onEvent) {
+  const rest = String(buf || '').trim();
+  if (!rest) return;
+  for (const line of rest.split(/\n+/)) {
+    if (!line.trim()) continue;
+    let o;
+    try { o = JSON.parse(line); } catch { continue; }
+    for (const ev of codexNormalizeStdoutEvent(o, ctx)) onEvent(ev);
+  }
 }
 
 async function codexLatestSessionIdForCwd(cwd, sinceMs) {
@@ -1267,6 +1367,36 @@ function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model }) {
     catch { try { ac.abort(); } catch { /* */ } return false; }
   };
 
+  const offerSandboxRetry = () => {
+    if (wantPerm === 'bypassPermissions' || wantPerm === 'force') return false;
+    if (wantPerm === 'plan' || wantPerm === 'ask') return false;
+    if (!ctx.permissionFailure) return false;
+    const permId = `perm-${Math.random().toString(36).slice(2, 10)}`;
+    const failedCommand = ctx.permissionFailure.command || 'codex exec';
+    pendingPerms.set(permId, {
+      cwd: key,
+      settle: (decision) => {
+        if (decision && decision.behavior === 'allow') {
+          codexSend(sender, { cwd, lane, sessionId: session.sessionId || resumeId, prompt, permMode: 'bypassPermissions', model: wantModel });
+        } else {
+          emit({ type: 'error', error: (decision && decision.message) || '已拒绝' });
+          emit({ type: 'session_closed' });
+        }
+      },
+    });
+    emit({
+      type: 'permission_request',
+      permId,
+      toolName: 'Bash',
+      input: { command: failedCommand, error: ctx.permissionFailure.output },
+      title: 'Codex 需要在 bypass 模式下重跑当前请求',
+      displayName: 'Codex permission',
+      description: '刚才的命令被沙箱拦截。允许后，Chaya 会用 Codex bypass 权限重跑这一整轮请求。',
+      suggestions: null,
+    });
+    return true;
+  };
+
   let child;
   try {
     child = spawn(bin, args, { cwd, env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
@@ -1280,10 +1410,15 @@ function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model }) {
   ac.signal.addEventListener('abort', () => { try { child.kill('SIGTERM'); } catch { /* */ } });
   if (resumeId) emit({ type: 'system', subtype: 'init', session_id: resumeId });
 
-  const ctx = { sessionId: resumeId, sawAssistant: false };
+  const ctx = { sessionId: resumeId, sawAssistant: false, sawVisible: false };
   let sawResult = false;
   let stderrBuf = '';
   let buf = '';
+  const handleCodexEvent = (ev) => {
+    if (ev.type === 'result') sawResult = true;
+    if (ev.session_id) session.sessionId = ev.session_id;
+    return emit(ev);
+  };
   child.stdout.on('data', (d) => {
     buf += d.toString('utf8');
     let nl;
@@ -1294,9 +1429,7 @@ function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model }) {
       let o;
       try { o = JSON.parse(line); } catch { continue; }
       for (const ev of codexNormalizeStdoutEvent(o, ctx)) {
-        if (ev.type === 'result') sawResult = true;
-        if (ev.session_id) session.sessionId = ev.session_id;
-        if (!emit(ev)) return;
+        if (!handleCodexEvent(ev)) return;
       }
       if (ctx.sessionId) session.sessionId = ctx.sessionId;
     }
@@ -1306,17 +1439,28 @@ function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model }) {
   child.on('close', (code) => {
     session.child = null;
     (async () => {
+      codexDrainStdoutBuffer(buf, ctx, handleCodexEvent);
+      if (ctx.sessionId) session.sessionId = ctx.sessionId;
       if (!session.sessionId) {
         const sid = await codexLatestSessionIdForCwd(cwd, startedAt).catch(() => null);
         if (sid) { session.sessionId = sid; emit({ type: 'system', subtype: 'init', session_id: sid }); }
       }
+      if (sawResult && !ctx.sawVisible) {
+        const msg = stderrBuf.trim() || 'Codex 已结束，但没有返回任何可显示内容';
+        emit({ type: 'error', error: msg });
+        emit({ type: 'session_closed' });
+        return;
+      }
       if (!sawResult) {
         if (code === 0 || ctx.sawAssistant) {
-          emit({ type: 'result', subtype: 'success', session_id: session.sessionId || undefined });
+          if (!offerSandboxRetry()) emit({ type: 'result', subtype: 'success', session_id: session.sessionId || undefined });
         } else {
           const msg = stderrBuf.trim() || (code ? `codex 退出码 ${code}` : 'Codex 会话结束');
-          emit({ type: 'error', error: msg });
-          emit({ type: 'session_closed' });
+          codexRememberPermissionFailure(ctx, '', msg);
+          if (!offerSandboxRetry()) {
+            emit({ type: 'error', error: msg });
+            emit({ type: 'session_closed' });
+          }
         }
       }
     })();

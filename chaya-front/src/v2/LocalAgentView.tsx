@@ -510,7 +510,10 @@ const PermissionPrompt: React.FC<{
   const input = perm.input || {};
   const heading = perm.title || perm.displayName || tr('local.perm.requests', { tool: perm.toolName });
   let detail: React.ReactNode = null;
-  if (lower === 'bash') detail = <pre className="cmd">{input.command || ''}</pre>;
+  if (lower === 'bash') detail = <>
+    <pre className="cmd">{input.command || ''}</pre>
+    {perm.description && <div className="desc">{perm.description}</div>}
+  </>;
   else if (lower === 'edit' || lower === 'write' || lower === 'multiedit' || lower === 'notebookedit') {
     detail = <code className="file">{basename(input.file_path || input.notebook_path || '')}</code>;
   } else if (lower === 'exitplanmode' && input.plan) detail = <div className="plan"><MD text={String(input.plan)} /></div>;
