@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('chateeElectron', {
     sessionClose: (cwd, lane) => ipcRenderer.invoke('localAgent:sessionClose', { cwd, lane }),
     setPermMode: (cwd, permMode, lane) => ipcRenderer.invoke('localAgent:setPermMode', { cwd, permMode, lane }),
     setModel: (cwd, model, lane) => ipcRenderer.invoke('localAgent:setModel', { cwd, model, lane }),
+    setReasoning: (cwd, reasoning, lane) => ipcRenderer.invoke('localAgent:setReasoning', { cwd, reasoning, lane }),
     listMcp: (cwd) => ipcRenderer.invoke('localAgent:listMcp', { cwd }),
     setMcp: (cwd, mcp, lane) => ipcRenderer.invoke('localAgent:setMcp', { cwd, mcp, lane }),
     mcpStatus: (cwd, lane) => ipcRenderer.invoke('localAgent:mcpStatus', { cwd, lane }),

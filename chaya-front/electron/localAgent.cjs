@@ -906,9 +906,9 @@ function buildClaudeContent(prompt, attachments) {
  *  模型在发送这一刻才应用：冷启已用 options.model 起；暖会话且模型变了才 setModel
  *  （setModel 会注入「Set model to …」回显，渲染层会过滤掉，不当对话显示）。
  *  attachments：拖入/选取的文件 + 粘贴的图片（见上方注入逻辑）。 */
-async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode, model, mcp, apiKey, attachments, lane }) {
+async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode, model, reasoning, mcp, apiKey, attachments, lane }) {
   if (provider === 'cursor' && !lane) return cursorSend(sender, { cwd, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, apiKey });
-  if (provider === 'codex') return codexSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model });
+  if (provider === 'codex') return codexSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, reasoning });
   // gemini 无 streaming-input/视觉 → 附件按 @路径 文本引用（与 cursor 同）；支持 lane。
   if (provider === 'gemini') return geminiSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model });
   const key = runKey(cwd, lane);
@@ -926,9 +926,9 @@ async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode,
 
 /** 预热：打开/聚焦会话时就起常驻进程（提前付冷启 + resume 读盘），
  *  等用户真正发送时已是暖的——首 token 从 ~10s 降到 ~2s。已有则不重起。 */
-function sessionWarm(sender, { cwd, provider, sessionId, permMode, model, mcp, apiKey, lane }) {
+function sessionWarm(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, apiKey, lane }) {
   if (provider === 'cursor' && !lane) return cursorWarm(sender, { cwd, sessionId, permMode, model, apiKey });
-  if (provider === 'codex') return codexWarm(sender, { cwd, lane, sessionId, permMode, model });
+  if (provider === 'codex') return codexWarm(sender, { cwd, lane, sessionId, permMode, model, reasoning });
   if (provider === 'gemini') return geminiWarm(sender, { cwd, lane, sessionId, permMode, model });
   if (sessions.has(runKey(cwd, lane))) return { ok: true };
   const s = startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, lane });
@@ -991,6 +991,13 @@ async function sessionSetModel({ cwd, model, lane }) {
     s.model = model || null;   // 记录已应用，发送时不再重复 setModel
     return { ok: true };
   }
+  return { ok: false };
+}
+
+/** 运行中切 Codex 思考强度。会话不存在则忽略（下次发送会按选中值起）。 */
+async function sessionSetReasoning({ cwd, reasoning, lane }) {
+  const cx = codexSessions.get(runKey(cwd, lane));
+  if (cx) { cx.reasoning = reasoning || null; return { ok: true }; }
   return { ok: false };
 }
 
@@ -1127,7 +1134,7 @@ function permissionRespond(permId, decision) {
  * 新会话用 `codex -C <cwd> exec ...`，续接用 `codex exec resume <sessionId> ...`。
  * stdout JSONL 被翻成 Claude SDK 同形事件，渲染层无需分叉。
  * ------------------------------------------------------------------ */
-const codexSessions = new Map();   // runKey(cwd,lane) -> { child, ac, sessionId, model, permMode }
+const codexSessions = new Map();   // runKey(cwd,lane) -> { child, ac, sessionId, model, reasoning, permMode }
 
 function codexTopPermArgs(permMode) {
   if (permMode === 'bypassPermissions' || permMode === 'force') return ['--dangerously-bypass-approvals-and-sandbox'];
@@ -1140,15 +1147,21 @@ function codexExecSandboxArgs(permMode) {
   return ['-s', 'workspace-write'];
 }
 
-function codexSpawnArgs({ cwd, prompt, sessionId, model, permMode }) {
+function codexReasoningArgs(reasoning) {
+  const val = String(reasoning || '').trim().toLowerCase();
+  if (!/^(minimal|low|medium|high|xhigh)$/.test(val)) return [];
+  return ['-c', `model_reasoning_effort="${val}"`];
+}
+
+function codexSpawnArgs({ cwd, prompt, sessionId, model, reasoning, permMode }) {
   const text = prompt || '';
   if (sessionId) {
-    const args = [...codexTopPermArgs(permMode), 'exec', 'resume', '--json', '--skip-git-repo-check'];
+    const args = [...codexTopPermArgs(permMode), ...codexReasoningArgs(reasoning), 'exec', 'resume', '--json', '--skip-git-repo-check'];
     if (model) args.push('-m', model);
     args.push(sessionId, text);
     return args;
   }
-  const args = [...codexTopPermArgs(permMode), '-C', cwd, 'exec', '--json', '--skip-git-repo-check'];
+  const args = [...codexTopPermArgs(permMode), ...codexReasoningArgs(reasoning), '-C', cwd, 'exec', '--json', '--skip-git-repo-check'];
   if (model) args.push('-m', model);
   args.push(...codexExecSandboxArgs(permMode), text);
   return args;
@@ -1339,15 +1352,53 @@ async function codexLatestSessionIdForCwd(cwd, sinceMs) {
   return hit ? hit.sessionId : null;
 }
 
-function codexWarm(_sender, { cwd, lane, sessionId, permMode, model }) {
+let _codexModels = null;
+let _codexModelsInflight = null;
+
+function parseCodexModels(stdout) {
+  let o;
+  try { o = JSON.parse(String(stdout || '{}')); } catch { return []; }
+  const list = Array.isArray(o.models) ? o.models : [];
+  return list
+    .filter((m) => m && m.slug && m.visibility !== 'hidden')
+    .map((m) => ({
+      value: m.slug,
+      displayName: m.display_name || m.slug,
+      description: m.description || undefined,
+      defaultReasoningLevel: m.default_reasoning_level || undefined,
+      supportedReasoningLevels: Array.isArray(m.supported_reasoning_levels)
+        ? m.supported_reasoning_levels
+          .filter((x) => x && x.effort)
+          .map((x) => ({ effort: String(x.effort), description: x.description || undefined }))
+        : undefined,
+    }));
+}
+
+function fetchCodexModels(bin, emit) {
+  if (_codexModels) { if (_codexModels.length) emit({ type: 'models', models: _codexModels }); return; }
+  if (!_codexModelsInflight) {
+    _codexModelsInflight = new Promise((resolve) => {
+      execFile(bin, ['debug', 'models', '--bundled'], { env: childEnv(), timeout: 10000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
+        _codexModels = err ? [] : parseCodexModels(stdout);
+        _codexModelsInflight = null;
+        resolve(_codexModels);
+      });
+    });
+  }
+  _codexModelsInflight.then((models) => { if (models && models.length) emit({ type: 'models', models }); });
+}
+
+function codexWarm(_sender, { cwd, lane, sessionId, permMode, model, reasoning }) {
+  const bin = resolveBin('codex');
   const key = runKey(cwd, lane);
   const prev = codexSessions.get(key);
-  if (!prev) codexSessions.set(key, { child: null, ac: null, sessionId: sessionId || null, model: model || null, permMode: permMode || 'default', touched: Date.now() });
-  else { if (sessionId !== undefined) prev.sessionId = sessionId || null; if (model !== undefined) prev.model = model || null; if (permMode) prev.permMode = permMode; prev.touched = Date.now(); }
+  if (!prev) codexSessions.set(key, { child: null, ac: null, sessionId: sessionId || null, model: model || null, reasoning: reasoning || null, permMode: permMode || 'default', touched: Date.now() });
+  else { if (sessionId !== undefined) prev.sessionId = sessionId || null; if (model !== undefined) prev.model = model || null; if (reasoning !== undefined) prev.reasoning = reasoning || null; if (permMode) prev.permMode = permMode; prev.touched = Date.now(); }
+  if (bin) fetchCodexModels(bin, (ev) => { try { _sender && _sender.send('localAgent:event', { cwd: key, ev }); } catch { /* ignore */ } });
   return { ok: true };
 }
 
-function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model }) {
+function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model, reasoning }) {
   const bin = resolveBin('codex');
   const key = runKey(cwd, lane);
   if (!bin) { sender.send('localAgent:event', { cwd: key, ev: { type: 'error', error: '未找到 codex，请确认已安装 Codex CLI' } }); return { ok: false }; }
@@ -1357,9 +1408,10 @@ function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model }) {
   const ac = new AbortController();
   const resumeId = (prev && prev.sessionId) || sessionId || null;
   const wantModel = model || (prev && prev.model) || null;
+  const wantReasoning = reasoning || (prev && prev.reasoning) || null;
   const wantPerm = permMode || (prev && prev.permMode) || 'default';
   const startedAt = Date.now();
-  const args = codexSpawnArgs({ cwd, prompt, sessionId: resumeId, model: wantModel, permMode: wantPerm });
+  const args = codexSpawnArgs({ cwd, prompt, sessionId: resumeId, model: wantModel, reasoning: wantReasoning, permMode: wantPerm });
 
   const emit = (ev) => {
     if (sender.isDestroyed()) { try { ac.abort(); } catch { /* */ } return false; }
@@ -1377,7 +1429,7 @@ function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model }) {
       cwd: key,
       settle: (decision) => {
         if (decision && decision.behavior === 'allow') {
-          codexSend(sender, { cwd, lane, sessionId: session.sessionId || resumeId, prompt, permMode: 'bypassPermissions', model: wantModel });
+          codexSend(sender, { cwd, lane, sessionId: session.sessionId || resumeId, prompt, permMode: 'bypassPermissions', model: wantModel, reasoning: wantReasoning });
         } else {
           emit({ type: 'error', error: (decision && decision.message) || '已拒绝' });
           emit({ type: 'session_closed' });
@@ -1405,10 +1457,11 @@ function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model }) {
     return { ok: false };
   }
 
-  const session = { child, ac, sessionId: resumeId, model: wantModel, permMode: wantPerm, touched: Date.now() };
+  const session = { child, ac, sessionId: resumeId, model: wantModel, reasoning: wantReasoning, permMode: wantPerm, touched: Date.now() };
   codexSessions.set(key, session);
   ac.signal.addEventListener('abort', () => { try { child.kill('SIGTERM'); } catch { /* */ } });
   if (resumeId) emit({ type: 'system', subtype: 'init', session_id: resumeId });
+  fetchCodexModels(bin, emit);
 
   const ctx = { sessionId: resumeId, sawAssistant: false, sawVisible: false };
   let sawResult = false;
@@ -1935,6 +1988,7 @@ function registerLocalAgent(ipcMain, dialog) {
   ipcMain.handle('localAgent:sessionClose', (_e, { cwd, lane }) => sessionClose({ cwd, lane }));
   ipcMain.handle('localAgent:setPermMode', (_e, { cwd, permMode, lane }) => sessionSetPermMode({ cwd, permMode, lane }));
   ipcMain.handle('localAgent:setModel', (_e, { cwd, model, lane }) => sessionSetModel({ cwd, model, lane }));
+  ipcMain.handle('localAgent:setReasoning', (_e, { cwd, reasoning, lane }) => sessionSetReasoning({ cwd, reasoning, lane }));
   ipcMain.handle('localAgent:listMcp', (_e, { cwd }) => listMcpConfigs(cwd));
   ipcMain.handle('localAgent:setMcp', (_e, { cwd, mcp, lane }) => sessionSetMcp({ cwd, mcp, lane }));
   ipcMain.handle('localAgent:mcpStatus', (_e, { cwd, lane }) => sessionMcpStatus({ cwd, lane }));

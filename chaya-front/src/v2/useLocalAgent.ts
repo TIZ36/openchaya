@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   localAgent, loadProjects, addProject as addProjectStore, removeProject as removeProjectStore,
   loadTabsState, saveTabsState, loadPermBySession, savePermBySession, loadModelBySession, saveModelBySession,
+  loadReasoningBySession, saveReasoningBySession,
   loadMcpBySession, saveMcpBySession, permModesFor, defaultPermMode,
   loadExpandedProjects, saveExpandedProjects, loadCodexImportedSessions,
   type DetectedProvider, type ProviderId, type SessionSummary, type TranscriptMessage, type LocalProject,
@@ -42,6 +43,7 @@ export interface Tab {
   groupId?: string | null; // 所属标签分组（类 Chrome 标签组），null = 未分组
   permMode: PermMode;      // 每个会话独立的权限模式（切一个不影响其他）
   model?: string;          // 每个会话选用的模型（空 = provider 默认）
+  reasoning?: string;      // Codex 思考强度（空 = Codex 默认）
   mcp?: string[];          // 该会话启用的 MCP server 名字（空 = 不启用）
   mcpStatus?: McpStatus[]; // MCP 连接状态（来自 init / setMcp 回执）
   attachments?: Attachment[]; // 待发送的参考附件（拖入/选取的文件 + 粘贴图片），发送后清空
@@ -207,11 +209,12 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     const { tabs: s, activeCwd: a, groups: g, layout: l } = loadTabsState();
     const gidSet = new Set(g.map((x) => x.id));
     const modelMem = loadModelBySession();
+    const reasoningMem = loadReasoningBySession();
     const mcpMem = loadMcpBySession();
     // 恢复的标签属于当前 provider：把不属于该 provider 档位集的权限模式归一到该 provider 的默认
     //（如 cursor 不认 default/acceptEdits → 落到 force；避免显示/行为串档）。
     const okPerm = permModesFor(provider);
-    const t: Tab[] = s.map((x) => ({ ...emptyTab(x.cwd, x.sessionId, x.title), groupId: (x.groupId && gidSet.has(x.groupId)) ? x.groupId : null, permMode: (x.permMode && okPerm.includes(x.permMode)) ? x.permMode : defaultPermMode(provider), model: (x.sessionId && modelMem[x.sessionId]) || undefined, mcp: (x.sessionId && mcpMem[x.sessionId]) || undefined, pendingLoad: !!x.sessionId }));
+    const t: Tab[] = s.map((x) => ({ ...emptyTab(x.cwd, x.sessionId, x.title), groupId: (x.groupId && gidSet.has(x.groupId)) ? x.groupId : null, permMode: (x.permMode && okPerm.includes(x.permMode)) ? x.permMode : defaultPermMode(provider), model: (x.sessionId && modelMem[x.sessionId]) || undefined, reasoning: (x.sessionId && reasoningMem[x.sessionId]) || undefined, mcp: (x.sessionId && mcpMem[x.sessionId]) || undefined, pendingLoad: !!x.sessionId }));
     const valid = new Set(t.map((x) => x.cwd));
     let lay: LayoutNode | null = null;
     if (l) { const pruned = pruneLayout(l as LayoutNode, valid); if (pruned && pruned.kind === 'split') lay = pruned; }
@@ -230,6 +233,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   const detectedRef = useRef(false);
   const permMemRef = useRef<Record<string, PermMode>>(loadPermBySession());   // sessionId → 上次发送时的权限级别
   const modelMemRef = useRef<Record<string, string>>(loadModelBySession());   // sessionId → 选用的模型
+  const reasoningMemRef = useRef<Record<string, string>>(loadReasoningBySession()); // sessionId → Codex 思考强度
   const mcpMemRef = useRef<Record<string, string[]>>(loadMcpBySession());      // sessionId → 启用的 MCP
   // 事件处理函数放 ref，订阅一次也总调用最新闭包（避免 provider/projects 变了仍用旧的）。
   const handleEventRef = useRef<(cwd: string, ev: any) => void>(() => {});
@@ -391,6 +395,13 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (sid) { if (model) modelMemRef.current[sid] = model; else delete modelMemRef.current[sid]; saveModelBySession(modelMemRef.current); }
   }, [tabs, patchTab]);
 
+  const setReasoning = useCallback((cwd: string, reasoning: string) => {
+    void localAgent.setReasoning(realDir(cwd), reasoning, paneLane(cwd));
+    patchTab(cwd, { reasoning: reasoning || undefined });
+    const sid = pendingByCwd.current.get(cwd) || tabs.find((t) => t.cwd === cwd)?.sessionId;
+    if (sid) { if (reasoning) reasoningMemRef.current[sid] = reasoning; else delete reasoningMemRef.current[sid]; saveReasoningBySession(reasoningMemRef.current); }
+  }, [tabs, patchTab]);
+
   // 启用/停用某 cwd 的 MCP server（/mcp 等价）：实时 setMcpServers + 记忆 + 回执状态。
   const setMcp = useCallback((cwd: string, names: string[]) => {
     patchTab(cwd, { mcp: names });
@@ -531,12 +542,13 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     const remembered = permMemRef.current[sid];
     const pm = (remembered && permModesFor(provider).includes(remembered)) ? remembered : defaultPermMode(provider);
     const md = modelMemRef.current[sid] || undefined;
+    const rs = reasoningMemRef.current[sid] || undefined;
     const mc = mcpMemRef.current[sid] || undefined;
     // 回显：默认切到该会话上次记住的权限级别 + 模型 + MCP。
-    patchTab(paneKey, { loading: true, permMode: pm, model: md, mcp: mc });
+    patchTab(paneKey, { loading: true, permMode: pm, model: md, reasoning: rs, mcp: mc });
     // 预热：立刻起常驻进程（含 resume 读盘）；冷启在「载入会话…」期间付掉，发送时已暖。
     // cursor 无常驻进程，warm 只登记状态 + 拉模型；apiKey 注入（已预拉则同步可得）。
-    if (current?.live) void localAgent.warm({ provider, cwd: dir, lane: paneLane(paneKey), sessionId: sid, permMode: pm, model: md, mcp: mc, apiKey: provider === 'cursor' ? cursorKeyRef.current : undefined });
+    if (current?.live) void localAgent.warm({ provider, cwd: dir, lane: paneLane(paneKey), sessionId: sid, permMode: pm, model: md, reasoning: rs, mcp: mc, apiKey: provider === 'cursor' ? cursorKeyRef.current : undefined });
     const { messages: msgs } = await localAgent.readSession(provider, dir, sid);
     setHistory(paneKey, sid, msgs);
   }, [provider, current, tabs, paneKeyForDir, addPaneTab, patchTab, setHistory]);
@@ -680,7 +692,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   }, [tabs]);
 
   /** 删除会话（移到回收站）。乐观从列表移除；若某标签正开着它则清空该标签会话。
-   *  顺手清掉该 sessionId 在 perm/model/mcp 三处记忆里的残留（否则 localStorage 会无界增长）。 */
+   *  顺手清掉该 sessionId 在 perm/model/reasoning/mcp 记忆里的残留（否则 localStorage 会无界增长）。 */
   const deleteSession = useCallback(async (cwd: string, sid: string) => {
     setSessionsByPath((m) => {
       const cur = m[cwd];
@@ -693,6 +705,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     }));
     if (permMemRef.current[sid]) { delete permMemRef.current[sid]; savePermBySession(permMemRef.current); }
     if (modelMemRef.current[sid]) { delete modelMemRef.current[sid]; saveModelBySession(modelMemRef.current); }
+    if (reasoningMemRef.current[sid]) { delete reasoningMemRef.current[sid]; saveReasoningBySession(reasoningMemRef.current); }
     if (mcpMemRef.current[sid]) { delete mcpMemRef.current[sid]; saveMcpBySession(mcpMemRef.current); }
     const res = await localAgent.deleteSession(provider, realDir(cwd), sid);
     if (!res.ok) void loadSessionsFor(cwd);
@@ -823,7 +836,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       messages: [...t.messages, { role: 'user', parts: [{ kind: 'text', text: text + attNote }], ts: null, uuid: null }],
       liveMsgs: [], livePreview: '', running: true, status: tr('local.status.processingShort'), perm: null, question: null,
     }));
-    const res = await localAgent.send({ provider, cwd: realDir(cwd), lane: paneLane(cwd), sessionId: sid, prompt: text, permMode: tab.permMode, model: tab.model, mcp: tab.mcp, apiKey, attachments });
+    const res = await localAgent.send({ provider, cwd: realDir(cwd), lane: paneLane(cwd), sessionId: sid, prompt: text, permMode: tab.permMode, model: tab.model, reasoning: tab.reasoning, mcp: tab.mcp, apiKey, attachments });
     if (!res.ok) patchTab(cwd, (t) => ({ running: false, status: t.status.startsWith('⚠') ? t.status : `⚠ ${tr('local.status.startFailed')}` }));
   }, [tabs, current, provider, patchTab, dropSmooth, fetchCursorKey, tr]);
 
@@ -872,7 +885,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     const lane = nextLaneId();
     specLaneRef.current.set(dir, lane);
     const src = tabs.find((t) => t.cwd === cwd);
-    void localAgent.warm({ provider, cwd: dir, lane, sessionId: null, permMode: src?.permMode ?? defaultPermMode(provider), model: src?.model, mcp: src?.mcp });
+    void localAgent.warm({ provider, cwd: dir, lane, sessionId: null, permMode: src?.permMode ?? defaultPermMode(provider), model: src?.model, reasoning: src?.reasoning, mcp: src?.mcp });
   }, [provider, current, tabs]);
 
   /** 衍生：在当前 cwd 下新开一个**独立会话窗格**（新 lane = 同目录并行常驻会话），
@@ -891,13 +904,13 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     const permMode = src?.permMode ?? defaultPermMode(provider);
     const apiKey = provider === 'cursor' ? (cursorKeyRef.current || await fetchCursorKey()) : undefined;
     // 先 kick off send（预热则瞬时；冷启也尽早开始），与下面建窗格/渲染并行。
-    const sendP = localAgent.send({ provider, cwd: dir, lane, sessionId: null, prompt: text, permMode, model: src?.model, mcp: src?.mcp, apiKey });
+    const sendP = localAgent.send({ provider, cwd: dir, lane, sessionId: null, prompt: text, permMode, model: src?.model, reasoning: src?.reasoning, mcp: src?.mcp, apiKey });
     // 直接建窗格紧挨源标签插入（不走 addPaneTab —— 这里要预填用户消息 + running 态）。
     setTabs((ts) => {
       if (ts.some((t) => t.cwd === paneKey)) return ts;
       const newTab: Tab = {
         ...emptyTab(paneKey, null, tr('local.newSession'), undefined, permMode),
-        model: src?.model, mcp: src?.mcp, groupId: src?.groupId ?? null,
+        model: src?.model, reasoning: src?.reasoning, mcp: src?.mcp, groupId: src?.groupId ?? null,
         messages: [{ role: 'user', parts: [{ kind: 'text', text }], ts: null, uuid: null }],
         running: true, status: tr('local.status.processingShort'),
       };
@@ -1045,7 +1058,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   // 因为 activeTab 引用变化当且仅当 tabs/activeCwd 变化。
   const la = useMemo(() => ({
     providers, provider, current, detecting,
-    cyclePermMode, commands, modelOptions, setModel, setMcp, listMcp, refreshMcp, reconnectMcp,
+    cyclePermMode, commands, modelOptions, setModel, setReasoning, setMcp, listMcp, refreshMcp, reconnectMcp,
     projects, expanded, toggleProject, sessionsByPath,
     addProject, removeProject,
     tabs, activeCwd, setActiveTab, closeTab, activeProject,
@@ -1067,7 +1080,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     openSession, newSession, deleteSession, send, forkSendText, prewarmDerive, dequeue, interrupt, respondPermission, answerQuestion,
   }), [
     providers, provider, current, detecting,
-    cyclePermMode, commands, modelOptions, setModel, setMcp, listMcp, refreshMcp, reconnectMcp,
+    cyclePermMode, commands, modelOptions, setModel, setReasoning, setMcp, listMcp, refreshMcp, reconnectMcp,
     projects, expanded, toggleProject, sessionsByPath,
     addProject, removeProject,
     tabs, activeCwd, setActiveTab, closeTab, activeProject,

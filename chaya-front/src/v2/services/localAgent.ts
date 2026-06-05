@@ -106,8 +106,14 @@ export interface LocalAgentEvent {
   ev: any;
 }
 
-/** 可选模型（来自 SDK supportedModels()）：value 用于 API 调用，displayName 给 UI。 */
-export interface ModelInfo { value: string; displayName: string; description?: string }
+/** 可选模型（来自 SDK supportedModels() / CLI catalog）：value 用于 API 调用，displayName 给 UI。 */
+export interface ModelInfo {
+  value: string;
+  displayName: string;
+  description?: string;
+  defaultReasoningLevel?: string;
+  supportedReasoningLevels?: Array<{ effort: string; description?: string }>;
+}
 
 /** 可用的 MCP server（来自 ~/.claude.json，不含密钥）。 */
 export interface McpAvailable { name: string; scope: 'global' | 'project'; type: string }
@@ -133,6 +139,7 @@ interface SendPayload {
   prompt: string;
   permMode?: PermMode;
   model?: string;
+  reasoning?: string;
   mcp?: string[];
   apiKey?: string | null;   // cursor headless 必需（从后端凭据拉到、由 useLocalAgent 注入）
   attachments?: Attachment[];
@@ -156,6 +163,7 @@ interface LocalAgentBridge {
   sessionClose(cwd: string, lane?: string): Promise<{ ok: boolean }>;
   setPermMode(cwd: string, permMode: PermMode, lane?: string): Promise<{ ok: boolean }>;
   setModel(cwd: string, model: string, lane?: string): Promise<{ ok: boolean }>;
+  setReasoning(cwd: string, reasoning: string, lane?: string): Promise<{ ok: boolean }>;
   listMcp(cwd: string): Promise<McpAvailable[]>;
   setMcp(cwd: string, mcp: string[], lane?: string): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
   mcpStatus(cwd: string, lane?: string): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
@@ -195,6 +203,7 @@ export const localAgent = {
   sessionClose: (cwd: string, lane?: string) => bridge()?.sessionClose(cwd, lane) ?? Promise.resolve({ ok: false }),
   setPermMode: (cwd: string, permMode: PermMode, lane?: string) => bridge()?.setPermMode(cwd, permMode, lane) ?? Promise.resolve({ ok: false }),
   setModel: (cwd: string, model: string, lane?: string) => bridge()?.setModel(cwd, model, lane) ?? Promise.resolve({ ok: false }),
+  setReasoning: (cwd: string, reasoning: string, lane?: string) => bridge()?.setReasoning(cwd, reasoning, lane) ?? Promise.resolve({ ok: false }),
   listMcp: (cwd: string) => bridge()?.listMcp(cwd) ?? Promise.resolve([] as McpAvailable[]),
   setMcp: (cwd: string, mcp: string[], lane?: string) => bridge()?.setMcp(cwd, mcp, lane) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),
   mcpStatus: (cwd: string, lane?: string) => bridge()?.mcpStatus(cwd, lane) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),
@@ -349,6 +358,16 @@ export function loadModelBySession(): Record<string, string> {
 }
 export function saveModelBySession(map: Record<string, string>): void {
   try { localStorage.setItem(MODEL_BY_SESSION_KEY, JSON.stringify(map)); } catch { /* quota */ }
+}
+
+/* 每个会话「Codex 思考强度」记忆（按 sessionId）。空 = 跟随 Codex 默认。 */
+const REASONING_BY_SESSION_KEY = 'chaya.localAgent.reasoningBySession';
+export function loadReasoningBySession(): Record<string, string> {
+  try { const raw = localStorage.getItem(REASONING_BY_SESSION_KEY); const o = raw ? JSON.parse(raw) : null; return (o && typeof o === 'object') ? o : {}; }
+  catch { return {}; }
+}
+export function saveReasoningBySession(map: Record<string, string>): void {
+  try { localStorage.setItem(REASONING_BY_SESSION_KEY, JSON.stringify(map)); } catch { /* quota */ }
 }
 
 /* 每个会话「启用的 MCP server 名字」记忆（按 sessionId）。 */

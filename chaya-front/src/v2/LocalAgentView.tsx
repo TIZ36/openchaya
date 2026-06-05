@@ -1010,6 +1010,23 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
     [tab?.permMode, la.provider],
   );
   const pm = PERM_META[effPerm];
+  const selectedModel = useMemo(
+    () => la.modelOptions.find((m) => m.value === tab?.model) || null,
+    [la.modelOptions, tab?.model],
+  );
+  const reasoningOptions = useMemo(() => {
+    if (la.provider !== 'codex') return [];
+    const seen = new Set<string>();
+    const source = selectedModel?.supportedReasoningLevels?.length
+      ? selectedModel.supportedReasoningLevels
+      : la.modelOptions.flatMap((m) => m.supportedReasoningLevels || []);
+    return source.filter((x) => {
+      const effort = String(x?.effort || '').trim();
+      if (!effort || seen.has(effort)) return false;
+      seen.add(effort);
+      return true;
+    });
+  }, [la.provider, la.modelOptions, selectedModel]);
 
   // 打开「模型 / MCP」对话框：拉一次 MCP 列表 + 探测状态（MCP 仅 claude——读 ~/.claude.json）。
   const hasMcp = la.provider === 'claude';
@@ -1232,7 +1249,8 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
               {current?.live && (
                 <button className="v2-la-cfg" onClick={openCfg} title={tr('local.cfg.modelMcp')}>
                   <span className="tri" aria-hidden><IconModel /></span>
-                  <span className="m">{(la.modelOptions.find((m) => m.value === tab.model)?.displayName) || (tab.model || tr('local.cfg.defaultModel'))}</span>
+                  <span className="m">{selectedModel?.displayName || (tab.model || tr('local.cfg.defaultModel'))}</span>
+                  {tab.reasoning && <span className="mcpn">{tab.reasoning}</span>}
                   {(tab.mcp?.length ?? 0) > 0 && <span className="mcpn">MCP {tab.mcp!.length}</span>}
                 </button>
               )}
@@ -1287,6 +1305,21 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                         ))}
                       </div>
                     ))}
+                    {la.provider === 'codex' && reasoningOptions.length > 0 && (
+                      <div className="v2-la-model-group">
+                        <div className="v2-la-model-vendor">{tr('local.cfg.reasoning')}</div>
+                        <button className={`v2-la-model-item${!tab.reasoning ? ' on' : ''}`} onClick={() => la.setReasoning(cwd, '')}>
+                          <span className="nm">{tr('local.cfg.defaultReasoning')}</span>
+                          <span className="ds">{tr('local.cfg.defaultReasoningDesc')}</span>
+                        </button>
+                        {reasoningOptions.map((r) => (
+                          <button key={r.effort} className={`v2-la-model-item${tab.reasoning === r.effort ? ' on' : ''}`} onClick={() => la.setReasoning(cwd, r.effort)}>
+                            <span className="nm">{tr(`local.cfg.reasoning.${r.effort}`) === `local.cfg.reasoning.${r.effort}` ? r.effort : tr(`local.cfg.reasoning.${r.effort}`)}</span>
+                            {r.description && <span className="ds">{r.description}</span>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     <div className="v2-la-cfg-foot">{tr('local.cfg.modelFoot')}</div>
                   </>
                 )
