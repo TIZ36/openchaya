@@ -174,6 +174,14 @@ export const makePaneKey = (dir: string, lane: string): string => `${dir}${PANE_
 let _paneSeq = 0;
 const nextLaneId = (): string => `p${Date.now().toString(36)}${(_paneSeq++).toString(36)}`;
 
+// 合并探测结果（按 id 覆盖），保持稳定顺序 —— 当前 provider 先到、其余空闲补齐时不闪。
+const PROVIDER_ORDER: ProviderId[] = ['claude', 'cursor', 'codex', 'gemini', 'copilot'];
+function mergeProviders(prev: DetectedProvider[], next: DetectedProvider[]): DetectedProvider[] {
+  const map = new Map<string, DetectedProvider>(prev.map((p) => [p.id, p]));
+  for (const p of next) map.set(p.id, p);
+  return PROVIDER_ORDER.map((id) => map.get(id)).filter(Boolean) as DetectedProvider[];
+}
+
 export function useLocalAgent(active: boolean, provider: ProviderId, typewriter: TypewriterConfig = DEFAULT_TYPEWRITER) {
   const { t: tr } = useI18n();
   // Live typewriter config (toggle + speed) read by the rAF pump without re-binding it.
@@ -201,6 +209,9 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(loadExpandedProjects()));
   useEffect(() => { saveExpandedProjects([...expanded]); }, [expanded]);
   const [sessionsByPath, setSessionsByPath] = useState<SessionsState>({});
+  // 同步 ref：回调里读「某目录是否已加载」而不进 deps（避免回环）。
+  const sessionsByPathRef = useRef(sessionsByPath);
+  sessionsByPathRef.current = sessionsByPath;
 
   // 启动即从持久化恢复 —— 放进 useState 初始值，首帧就正确。
   // 不再用 effect 恢复：那会与 reconciliation 副作用（prune/auto-group/layout-cleanup）
@@ -331,12 +342,19 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   // 卸载时停掉 rAF。
   useEffect(() => () => { if (rafRef.current != null) cancelAnimationFrame(rafRef.current); }, []);
 
-  /* ---- 惰性探测 ---- */
+  /* ---- 惰性探测：先只探当前 provider（冷启快），其余空闲时补齐 ---- */
   useEffect(() => {
     if (!active || detectedRef.current) return;
     detectedRef.current = true;
     setDetecting(true);
-    localAgent.detect().then(setProviders).finally(() => setDetecting(false));
+    localAgent.detect(provider).then((cur) => {
+      setProviders((prev) => mergeProviders(prev, cur));
+      setDetecting(false);
+      const w = window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void };
+      const idle = w.requestIdleCallback ? (cb: () => void) => w.requestIdleCallback!(cb, { timeout: 1500 }) : (cb: () => void) => setTimeout(cb, 400);
+      idle(() => { localAgent.detect().then((all) => setProviders((prev) => mergeProviders(prev, all))); });
+    }).catch(() => setDetecting(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
   /* ---- 斜杠命令：进入即加载（无项目用 home），随激活项目/ provider 重取 ---- */
@@ -364,9 +382,9 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     for (const [d, l] of specLaneRef.current) void localAgent.sessionClose(d, l);          // 关掉预热的待衍生会话
     specLaneRef.current.clear();
     setSessionsByPath({});
-    // 注意：不清 expanded —— 项目目录跨 provider 保留，展开记忆也应保留（否则换 provider
-    // 或带 provider 切换的启动时序会把持久化的展开态冲成空）。会话列表由下方 restore 副作用
-    // 按新 provider 重新拉。
+    // 注意：不清 expanded —— 项目目录跨 provider 保留，展开记忆也应保留。会话列表清空后
+    // 走「懒加载」：下方 active-load 副作用只按新 provider 拉「当前激活项目」一个目录，
+    // 其它展开项目点到了再拉（不再一把把所有展开目录都重拉）。
     setTabs([]);
     setActiveCwd(null);
     setLayout(null);
@@ -440,24 +458,29 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   }, [provider, codexImportsTick]);
 
   const toggleProject = useCallback((p: LocalProject) => {
+    const dir = realDir(p.path);
     setExpanded((cur) => {
       const next = new Set(cur);
-      if (next.has(p.id)) next.delete(p.id);
-      else { next.add(p.id); void loadSessionsFor(p.path); }
+      if (next.has(p.id)) {
+        // 已展开但还没加载（恢复的展开态）→ 加载并保持展开；已加载 → 收起。
+        if (sessionsByPathRef.current[dir] === undefined) { void loadSessionsFor(p.path); return next; }
+        next.delete(p.id);
+      } else { next.add(p.id); void loadSessionsFor(p.path); }
       return next;
     });
   }, [loadSessionsFor]);
 
-  // 恢复展开记忆后拉取会话列表。sessionsByPath 只按路径缓存，不按 provider 缓存；
-  // 因此切换 Claude/Cursor/Codex 时必须重新拉，否则会沿用上一个 provider 的空列表。
-  // 不依赖 sessionsByPath，以免 loadSessionsFor 自激发回环。
+  // 冷启 / 切 provider：一次性把「所有项目目录」的会话列表全拉出来并显示（去掉「点开才加载」
+  // 的懒加载占位）。历史都是本地读盘、数据量小，并行拉即可；已在加载/已加载的目录自动跳过。
+  // 依赖 sessionsByPath：provider 切换会先把它清空，本副作用随即重跑、按新 provider 重拉全部。
   useEffect(() => {
-    if (!active || !projects.length || !expanded.size) return;
+    if (!active) return;
     for (const p of projects) {
-      if (expanded.has(p.id)) void loadSessionsFor(p.path);
+      const dir = realDir(p.path);
+      if (sessionsByPath[dir] === undefined) void loadSessionsFor(p.path);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, projects, provider, codexImportsTick]);
+  }, [active, provider, projects, sessionsByPath, codexImportsTick, loadSessionsFor]);
 
   const expandProject = useCallback((cwd: string) => {
     const p = projects.find((x) => x.path === realDir(cwd));
@@ -607,6 +630,10 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
 
   // 草稿/发送/中断都按 cwd 寻址（多窗格下每个窗独立）。
   const setDraft = useCallback((cwd: string, v: string) => { patchTab(cwd, { draft: v }); }, [patchTab]);
+  /** 往某标签的输入框追加文本（评审「发送到对话」用）：稳定引用，不随 draft 变化。 */
+  const appendDraft = useCallback((cwd: string, text: string) => {
+    patchTab(cwd, (t) => ({ draft: (t.draft ? `${t.draft}\n\n` : '') + text }));
+  }, [patchTab]);
 
   /* ---- 参考附件（按 cwd / 窗格独立）：拖入文件、附件按钮选取、粘贴板图片。
          图片走视觉（image block），其它文件按 @路径 让 agent 读取分析。 ---- */
@@ -1059,7 +1086,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   const la = useMemo(() => ({
     providers, provider, current, detecting,
     cyclePermMode, commands, modelOptions, setModel, setReasoning, setMcp, listMcp, refreshMcp, reconnectMcp,
-    projects, expanded, toggleProject, sessionsByPath,
+    projects, expanded, toggleProject, sessionsByPath, loadSessionsFor,
     addProject, removeProject,
     tabs, activeCwd, setActiveTab, closeTab, activeProject,
     layout, gridCwds, placePane, removePane, setSplitRatio,
@@ -1075,19 +1102,19 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     draft: activeTab?.draft ?? '',
     perm: activeTab?.perm ?? null,
     question: activeTab?.question ?? null,
-    setDraft,
+    setDraft, appendDraft,
     addAttachments, removeAttachment, pickAttachments,
     openSession, newSession, deleteSession, send, forkSendText, prewarmDerive, dequeue, interrupt, respondPermission, answerQuestion,
   }), [
     providers, provider, current, detecting,
     cyclePermMode, commands, modelOptions, setModel, setReasoning, setMcp, listMcp, refreshMcp, reconnectMcp,
-    projects, expanded, toggleProject, sessionsByPath,
+    projects, expanded, toggleProject, sessionsByPath, loadSessionsFor,
     addProject, removeProject,
     tabs, activeCwd, setActiveTab, closeTab, activeProject,
     layout, gridCwds, placePane, removePane, setSplitRatio,
     groups, createGroupFromTab, addTabToGroup, removeTabFromGroup, toggleGroup, setGroupColor, renameGroup, ungroupGroup, moveGroupBefore, moveTabBefore,
     activeTab,
-    setDraft,
+    setDraft, appendDraft,
     addAttachments, removeAttachment, pickAttachments,
     openSession, newSession, deleteSession, send, forkSendText, prewarmDerive, dequeue, interrupt, respondPermission, answerQuestion,
   ]);

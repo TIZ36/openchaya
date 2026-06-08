@@ -11,7 +11,7 @@ import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } 
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { basename, PERM_META, permModesFor, defaultPermMode, type TranscriptMessage, type SlashCommand, type SessionSummary, type PermissionRequest, type QuestionRequest, type TabGroup as TabGroupT, type McpAvailable, type ModelInfo, type Attachment, type ProviderId } from './services/localAgent';
+import { basename, PERM_META, permModesFor, defaultPermMode, permLabel, permHint, type TranscriptMessage, type SlashCommand, type SessionSummary, type PermissionRequest, type QuestionRequest, type TabGroup as TabGroupT, type McpAvailable, type ModelInfo, type Attachment, type ProviderId } from './services/localAgent';
 import type { LocalAgentState, LayoutNode, DropSide, Tab, QueuedMsg } from './useLocalAgent';
 import { TAB_COLORS, isForeignLeaf, realDir } from './useLocalAgent';
 
@@ -92,7 +92,7 @@ function groupModelsByVendor(models: ModelInfo[]): [string, ModelInfo[]][] {
 // taking the renderer down — so a huge live buffer renders as plain text (cheap),
 // and the finalized message reparses to full markdown exactly once.
 const LIVE_MD_MAX = 18_000;
-const MD: React.FC<{ text: string; live?: boolean }> = React.memo(({ text, live }) => {
+export const MD: React.FC<{ text: string; live?: boolean }> = React.memo(({ text, live }) => {
   if (live && text.length > LIVE_MD_MAX) {
     return <div className="v2-md v2-md-livelong"><pre>{text}</pre></div>;
   }
@@ -112,6 +112,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
   cursor: 'Cursor',
   codex: 'Codex',
   gemini: 'Gemini',
+  copilot: 'Copilot',
 };
 
 // 终端风 icon，匹配 app 的 24×24 线性图标风格（同 IconChat/IconKB）。
@@ -195,24 +196,6 @@ const DotsLoading: React.FC = () => (
   </div>
 );
 
-/* 会话加载骨架（无文字，shimmer 流光）—— 模拟即将出现的对话流（agent 头像+行 / 用户短行），
-   让「载入会话」读作内容正在显形，而不是一句「载入中…」。对齐 calm-letterpress 调性。 */
-const SessionLoading: React.FC = () => (
-  <div className="v2-la-skel" role="status" aria-label="loading" aria-live="polite">
-    <div className="row">
-      <span className="av" />
-      <span className="lines"><i style={{ width: '64%' }} /><i style={{ width: '90%' }} /><i style={{ width: '46%' }} /></span>
-    </div>
-    <div className="row user">
-      <span className="lines"><i style={{ width: '52%' }} /></span>
-    </div>
-    <div className="row">
-      <span className="av" />
-      <span className="lines"><i style={{ width: '78%' }} /><i style={{ width: '58%' }} /><i style={{ width: '30%' }} /></span>
-    </div>
-  </div>
-);
-
 /* ================================================================== *
  * 侧栏：provider 切换 + 项目树
  * ================================================================== */
@@ -250,7 +233,9 @@ export const LocalAgentTree: React.FC<{
               </div>
               {open && (
                 <div className="v2-la-sessions">
-                  {ss === 'loading' && <DotsLoading />}
+                  {/* 会话列表已在切 provider/冷启时一次性全量预拉（见 useLocalAgent 的 eager-load）；
+                      undefined 只是「正在拉」的瞬态 → 同 loading 显示转圈，不再有「点击加载」占位。 */}
+                  {(ss === 'loading' || ss === undefined) && <DotsLoading />}
                   {Array.isArray(ss) && ss.length === 0 && <div className="v2-la-hint sub">{tr('local.tree.noSessions')}</div>}
                   {Array.isArray(ss) && ss.map((s) => (
                     <SessionRow
@@ -654,8 +639,8 @@ type PaneTimelineProps = {
 const PaneTimeline: React.FC<PaneTimelineProps> = React.memo(({ turns, loadingSession, hasConversation, livePreview, running, busy, status, provider, sessionId }) => {
   const { t: tr } = useI18n();
   return (
-    <div className="v2-la-tl">
-      {loadingSession && <SessionLoading />}
+    <div className={`v2-la-tl${loadingSession ? ' v2-la-tl--loading' : ''}`}>
+      {loadingSession && <ProviderWaterfill id={provider} />}
       {!loadingSession && !hasConversation && (
         <div className="v2-la-hint center">{sessionId ? tr('local.pane.emptySession') : tr('local.pane.newSessionHint')}</div>
       )}
@@ -686,7 +671,7 @@ PaneTimeline.displayName = 'PaneTimeline';
 
 /** 一个独立会话窗格：自带时间线 + 输入框 + 斜杠/权限/选择，全部按 cwd 寻址。 */
 type PaneProps = { la: LocalAgentState; cwd: string; inGrid?: boolean };
-const PROV_SELECT_ORDER: ProviderId[] = ['claude', 'codex', 'gemini', 'cursor'];
+const PROV_SELECT_ORDER: ProviderId[] = ['claude', 'codex', 'gemini', 'cursor', 'copilot'];
 
 /* provider 真实品牌标记 —— SVG path 取自 simple-icons（官方单色 logo）。
    Claude=clay / Gemini=Google blue（标志性彩色）；OpenAI(Codex)·Cursor 本就是单色品牌，
@@ -708,6 +693,10 @@ const PROVIDER_ICON: Record<string, { color: string; path: string }> = {
     color: 'currentColor',
     path: 'M11.503.131 1.891 5.678a.84.84 0 0 0-.42.726v11.188c0 .3.162.575.42.724l9.609 5.55a1 1 0 0 0 .998 0l9.61-5.55a.84.84 0 0 0 .42-.724V6.404a.84.84 0 0 0-.42-.726L12.497.131a1.01 1.01 0 0 0-.996 0M2.657 6.338h18.55c.263 0 .43.287.297.515L12.23 22.918c-.062.107-.229.064-.229-.06V12.335a.59.59 0 0 0-.295-.51l-9.11-5.257c-.109-.063-.064-.23.061-.23',
   },
+  copilot: {
+    color: 'currentColor',
+    path: 'M23.922 16.997C23.061 18.492 18.063 22.02 12 22.02 5.937 22.02.939 18.492.078 16.997A.641.641 0 0 1 0 16.741v-2.869a.883.883 0 0 1 .053-.22c.372-.935 1.347-2.292 2.605-2.656.167-.429.414-1.055.644-1.517a10.098 10.098 0 0 1-.052-1.086c0-1.331.282-2.499 1.132-3.368.397-.406.89-.717 1.474-.952C7.255 2.937 9.248 1.98 11.978 1.98c2.731 0 4.767.957 6.166 2.093.584.235 1.077.546 1.474.952.85.869 1.132 2.037 1.132 3.368 0 .368-.014.733-.052 1.086.23.462.477 1.088.644 1.517 1.258.364 2.233 1.721 2.605 2.656a.841.841 0 0 1 .053.22v2.869a.641.641 0 0 1-.078.256Zm-11.75-5.992h-.344a4.359 4.359 0 0 1-.355.508c-.77.947-1.918 1.492-3.508 1.492-1.725 0-2.989-.359-3.782-1.259a2.137 2.137 0 0 1-.085-.104L4 11.746v6.585c1.435.779 4.514 2.179 8 2.179 3.486 0 6.565-1.4 8-2.179v-6.585l-.098-.104s-.033.045-.085.104c-.793.9-2.057 1.259-3.782 1.259-1.59 0-2.738-.545-3.508-1.492a4.359 4.359 0 0 1-.355-.508Zm2.328 3.25c.549 0 1 .451 1 1v2c0 .549-.451 1-1 1-.549 0-1-.451-1-1v-2c0-.549.451-1 1-1Zm-5 0c.549 0 1 .451 1 1v2c0 .549-.451 1-1 1-.549 0-1-.451-1-1v-2c0-.549.451-1 1-1Zm3.313-6.185c.136 1.057.403 1.913.878 2.497.442.544 1.134.938 2.344.938 1.573 0 2.292-.337 2.657-.751.384-.435.558-1.15.558-2.361 0-1.14-.243-1.847-.705-2.319-.477-.488-1.319-.862-2.824-1.025-1.487-.161-2.192.138-2.533.529-.269.307-.437.808-.438 1.578v.021c0 .265.021.562.063.893Zm-1.626 0c.042-.331.063-.628.063-.894v-.02c-.001-.77-.169-1.271-.438-1.578-.341-.391-1.046-.69-2.533-.529-1.505.163-2.347.537-2.824 1.025-.462.472-.705 1.179-.705 2.319 0 1.211.175 1.926.558 2.361.365.414 1.084.751 2.657.751 1.21 0 1.902-.394 2.344-.938.475-.584.742-1.44.878-2.497Z',
+  },
 };
 export const ProviderLogo: React.FC<{ id: string; className?: string }> = ({ id, className }) => {
   const ic = PROVIDER_ICON[id];
@@ -716,11 +705,42 @@ export const ProviderLogo: React.FC<{ id: string; className?: string }> = ({ id,
   return <svg className={cls} viewBox="0 0 24 24" width={16} height={16} fill={ic.color} aria-hidden><path d={ic.path} /></svg>;
 };
 
+/* CLI 加载态：provider 品牌 logo 当作容器，品牌色「水位」从底部缓缓升起 + 表面波纹轻晃，
+   读作「正在注满 / 正在唤起这个 agent」。比 spinner 安静、有 provider 身份感，呼应 calm 调性。
+   logo 轮廓走 clipPath：内部一块水体上下起伏（液位），水面是两道相位错开的正弦波横移。 */
+let __wfSeq = 0;
+const ProviderWaterfill: React.FC<{ id: string; label?: boolean }> = ({ id, label = true }) => {
+  const ic = PROVIDER_ICON[id];
+  // 注水色统一走主题 accent —— 跟随每个主题 + 亮/暗自适应，符合 Pure 去饱和的 calm 调性；
+  // provider 身份由 logo「形状」承载，不靠刺眼的品牌彩色。
+  const color = 'var(--c-accent)';
+  const path = ic?.path ?? 'M12 2.2a9.8 9.8 0 1 0 0 19.6 9.8 9.8 0 0 0 0-19.6Z';
+  const clipId = useMemo(() => `wf-clip-${++__wfSeq}`, []);
+  // 一道盖到底的波形：在本地 y≈3 处起伏，向下填满到 y=30；整组上下平移即「液位」。
+  const wave = 'M-8 3 q 4 -2.4 8 0 t 8 0 t 8 0 t 8 0 t 8 0 V 30 H -8 Z';
+  return (
+    <div className="v2-la-waterfill" role="status" aria-label="loading" aria-live="polite">
+      <svg viewBox="0 0 24 24" className="wf-svg" aria-hidden>
+        <defs><clipPath id={clipId}><path d={path} /></clipPath></defs>
+        <path d={path} className="wf-ghost" style={{ fill: color }} />
+        <g clipPath={`url(#${clipId})`}>
+          <g className="wf-level">
+            <path d={wave} className="wf-wave wf-wave-back" style={{ fill: color }} />
+            <path d={wave} className="wf-wave wf-wave-front" style={{ fill: color }} />
+          </g>
+        </g>
+        <path d={path} className="wf-rim" style={{ stroke: color }} />
+      </svg>
+      {label && <span className="wf-label">{PROVIDER_LABELS[id] || PROVIDER_LABELS_SHORT[id] || id}</span>}
+    </div>
+  );
+};
+
 /* provider 切换器：放在主侧栏「本地 CLI」栏目标题旁。trigger 显当前 provider + 下拉，
    选一个 → onPick(id)（在当前活动目录用新 provider 开新 session）。菜单 portal 到根 +
    position:fixed，向下弹，避免被侧栏 overflow 裁掉。 */
 /** 紧凑态短名（去掉 Claude Code 的 "Code" 后缀等）。 */
-const PROVIDER_LABELS_SHORT: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor' };
+const PROVIDER_LABELS_SHORT: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor', copilot: 'Copilot' };
 
 export const ProviderSwitcher: React.FC<{
   provider: ProviderId;
@@ -1028,9 +1048,12 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
     });
   }, [la.provider, la.modelOptions, selectedModel]);
 
-  // 打开「模型 / MCP」对话框：拉一次 MCP 列表 + 探测状态（MCP 仅 claude——读 ~/.claude.json）。
-  const hasMcp = la.provider === 'claude';
-  const openCfg = () => { setCfgOpen(true); if (hasMcp) { if (!mcpList) void la.listMcp(cwd).then(setMcpList); la.refreshMcp(cwd); } else setCfgTab('model'); };
+  // 打开「模型 / MCP」对话框：拉一次 MCP 列表 + 探测状态。MCP 源统一读 ~/.claude.json：
+  // claude 用 SDK 热挂载并回报逐 server 状态；gemini/copilot 走 ACP 在 session/new 注入
+  // （无逐 server 状态，仅切换启用，下次发送时随会话重建生效）。cursor/codex 不支持。
+  const hasMcp = la.provider === 'claude' || la.provider === 'gemini' || la.provider === 'copilot';
+  const mcpLiveStatus = la.provider === 'claude';   // 仅 claude 有实时探测/重连
+  const openCfg = () => { setCfgOpen(true); if (hasMcp) { if (!mcpList) void la.listMcp(cwd).then(setMcpList); if (mcpLiveStatus) la.refreshMcp(cwd); } else setCfgTab('model'); };
   // 对话框开启时：Esc 关闭（不冒泡去触发 Tab 切权限等全局键）。
   // 必须在 `if (!tab) return null` 之前调用 —— 之前放在 return 之后会让关闭最后
   // 一个 tab 时 hook 数量减少，触发 "Rendered fewer hooks than expected"。
@@ -1149,7 +1172,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
         {/* Split-screen reuses the SAME composer as full mode (notes pill, model
             picker, the works) — just scaled down via .v2-la-mini (zoom), instead
             of a bespoke slim layout. One component, one set of behaviours. */}
-        <div className={`v2-composer${inGrid ? ' v2-la-mini' : ''}`} data-mode="chat">
+        <div className={`v2-composer${inGrid ? ' v2-la-mini' : ''}${running ? ' v2-comp-working' : ''}`} data-mode="chat" data-prov={la.provider}>
           {capToast && <div className="v2-la-captoast">{capToast}</div>}
           <div className="v2-box">
             {/* @ 联动：选 wiki 笔记/文档 → 插入路径引用(本地) 或 内容(云端)。浮在框上方。 */}
@@ -1227,7 +1250,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
             <div className="v2-row">
               <div className="v2-l">
                 <ProviderBanner la={la} />
-                <WikiNotes wiki={wiki} onInsert={insertWikiRef} />
+                <WikiNotes wiki={wiki} onInsert={insertWikiRef} isActive={cwd === la.activeCwd} />
                 {current?.live && (
                   <button
                     className={`v2-la-attach${attachments.length ? ' on' : ''}`}
@@ -1241,10 +1264,10 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
               <button
                 className={`v2-la-mode tone-${pm.tone}`}
                 onClick={() => la.cyclePermMode(cwd)}
-                title={tr('local.permMode.title', { hint: tr(`local.permMode.${effPerm}.hint`) })}
+                title={tr('local.permMode.title', { hint: permHint(la.provider, effPerm) })}
               >
                 <span className="v2-la-mode-ic" aria-hidden>{PERM_ICONS[pm.tone] || PERM_ICONS.default}</span>
-                <span className="v2-la-mode-lb">{tr(`local.permMode.${effPerm}.label`)}</span>
+                <span className="v2-la-mode-lb">{permLabel(la.provider, effPerm)}</span>
               </button>
               {current?.live && (
                 <button className="v2-la-cfg" onClick={openCfg} title={tr('local.cfg.modelMcp')}>
@@ -1327,8 +1350,9 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                 <>
                   <div className="v2-la-cfg-hd">
                     <span>{tr('local.cfg.mcpSource')}</span>
-                    <button className="v2-la-probe" onClick={() => la.refreshMcp(cwd)} title={tr('local.cfg.probeStatus')}>{tr('local.cfg.probe')}</button>
+                    {mcpLiveStatus && <button className="v2-la-probe" onClick={() => la.refreshMcp(cwd)} title={tr('local.cfg.probeStatus')}>{tr('local.cfg.probe')}</button>}
                   </div>
+                  {!mcpLiveStatus && <div className="v2-la-cfg-foot">{tr('local.cfg.mcpAcpNote')}</div>}
                   {!mcpList && <div className="v2-la-slash-empty">{tr('local.cfg.mcpLoading')}</div>}
                   {mcpList && mcpList.length === 0 && <div className="v2-la-slash-empty">{tr('local.cfg.mcpEmpty')}</div>}
                   {mcpList && mcpList.map((m) => {
@@ -1340,7 +1364,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                           <span className="nm">{m.name}{st && <span className={`v2-la-mcp-dot ${st}`} title={st} />}</span>
                           <span className="ds">{m.scope === 'project' ? tr('local.scope.project') : tr('local.scope.global')} · {m.type}{st ? ` · ${st}` : ''}</span>
                         </button>
-                        {on && st && st !== 'connected' && st !== 'pending' && (
+                        {mcpLiveStatus && on && st && st !== 'connected' && st !== 'pending' && (
                           <button className="rc" title={tr('local.cfg.reconnect')} onClick={() => la.reconnectMcp(cwd, m.name)}>{tr('local.cfg.reconnect')}</button>
                         )}
                       </div>
@@ -1475,7 +1499,7 @@ export const LocalAgentConversation: React.FC<{ la: LocalAgentState }> = React.m
   // 让动画完整走一轮、肉眼看得到，而不是一闪而过。
   const coldLoading = useMinVisible(la.detecting && la.providers.length === 0, 800);
   if (coldLoading) {
-    return <div className="v2-la-single"><div className="v2-la-tl"><SessionLoading /></div></div>;
+    return <div className="v2-la-single"><div className="v2-la-tl v2-la-tl--loading"><ProviderWaterfill id={la.provider} /></div></div>;
   }
 
   // 主区跟随当前激活标签：激活的是分屏里的窗格 → 显示分屏；否则（未分组/未平铺标签）→ 单屏显示该会话。
@@ -1729,7 +1753,7 @@ function diffLines(oldS: string, newS: string, startLn: number, startRn: number)
 }
 
 /** Side-by-side git diff. `hunks` = one entry for Edit, many for MultiEdit. */
-const DiffView: React.FC<{ hunks: { old: string; neu: string }[]; fileName: string }> = ({ hunks, fileName }) => {
+export const DiffView: React.FC<{ hunks: { old: string; neu: string }[]; fileName: string }> = ({ hunks, fileName }) => {
   const { t: tr } = useI18n();
   const total = hunks.reduce((s, h) => s + h.old.length + h.neu.length, 0);
   // Giant edit → don't build a diff table; show the new content plainly.
@@ -1933,7 +1957,7 @@ const OutRow: React.FC<{ text: string; isError?: boolean }> = ({ text, isError }
   );
 };
 
-const CodePreview: React.FC<{ code: string; lang: string }> = ({ code, lang }) => {
+export const CodePreview: React.FC<{ code: string; lang: string }> = ({ code, lang }) => {
   const { t: tr } = useI18n();
   const [open, setOpen] = useState(false);
   const lines = code.split('\n');
@@ -1947,7 +1971,7 @@ const CodePreview: React.FC<{ code: string; lang: string }> = ({ code, lang }) =
   );
 };
 
-function langOf(file: string): string {
+export function langOf(file: string): string {
   const ext = (file.split('.').pop() || '').toLowerCase();
   const map: Record<string, string> = {
     ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'jsx', py: 'python', go: 'go', rs: 'rust',

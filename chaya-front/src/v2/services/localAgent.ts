@@ -6,7 +6,7 @@
  * UI 据 `isLocalAgentAvailable()` 隐藏入口。
  */
 
-export type ProviderId = 'claude' | 'cursor' | 'codex' | 'gemini';
+export type ProviderId = 'claude' | 'cursor' | 'codex' | 'gemini' | 'copilot';
 
 /** 权限模式：claude/codex/gemini 用 default/plan/acceptEdits/bypassPermissions；
  *  cursor 用 plan/ask/force（cursor-agent 没有逐工具暂停，只有档位）。 */
@@ -28,6 +28,8 @@ const PERM_MODES_BY_PROVIDER: Partial<Record<ProviderId, PermMode[]>> = {
   cursor: ['plan', 'ask', 'force'],
   // gemini approval-mode: default / auto_edit(→acceptEdits) / yolo(→bypassPermissions)
   gemini: ['default', 'acceptEdits', 'bypassPermissions'],
+  // copilot 走 ACP 逐工具权限请求（同 gemini）：default 弹问 / acceptEdits / bypass 全自动
+  copilot: ['default', 'acceptEdits', 'bypassPermissions'],
 };
 export function permModesFor(provider: ProviderId): PermMode[] {
   return PERM_MODES_BY_PROVIDER[provider] || PERM_MODES_BY_PROVIDER.claude!;
@@ -35,6 +37,31 @@ export function permModesFor(provider: ProviderId): PermMode[] {
 /** provider 的默认权限档（新会话用）。cursor 默认 force（无逐工具暂停，与 claude bypass 体感一致）。 */
 export function defaultPermMode(provider: ProviderId): PermMode {
   return provider === 'cursor' ? 'force' : 'default';
+}
+/** 各 provider 用自己的权限档叫法（贴近官方术语），而不是一套通用说词。
+ *  claude/cursor 的 PERM_META 默认 label 已是它们自己的术语，无需覆盖。 */
+const PERM_LABEL_BY_PROVIDER: Partial<Record<ProviderId, Partial<Record<PermMode, { label: string; hint: string }>>>> = {
+  gemini: {
+    default: { label: 'default', hint: 'default：需要时询问权限' },
+    acceptEdits: { label: 'auto-edit', hint: 'auto-edit：自动接受文件改动' },
+    bypassPermissions: { label: 'YOLO', hint: 'YOLO：全自动执行（含写/命令）' },
+  },
+  copilot: {
+    default: { label: 'ask', hint: 'ask：每个工具都询问' },
+    acceptEdits: { label: 'allow edits', hint: 'allow edits：自动放行文件改动' },
+    bypassPermissions: { label: 'allow all', hint: 'allow all：放行全部工具（含执行）' },
+  },
+  codex: {
+    default: { label: 'suggest', hint: 'suggest：改动前需确认' },
+    acceptEdits: { label: 'auto-edit', hint: 'auto-edit：自动改文件' },
+    bypassPermissions: { label: 'full-auto', hint: 'full-auto：全自动（含执行）' },
+  },
+};
+export function permLabel(provider: ProviderId, mode: PermMode): string {
+  return PERM_LABEL_BY_PROVIDER[provider]?.[mode]?.label ?? PERM_META[mode].label;
+}
+export function permHint(provider: ProviderId, mode: PermMode): string {
+  return PERM_LABEL_BY_PROVIDER[provider]?.[mode]?.hint ?? PERM_META[mode].hint;
 }
 
 /** CC 斜杠命令（权威名单来自 system/init.slash_commands，描述从 .claude/commands 补）。 */
@@ -147,8 +174,23 @@ interface SendPayload {
 }
 type WarmPayload = Omit<SendPayload, 'prompt'>;
 
+/** git status 单个改动文件（路径相对 repo root；abs = 绝对路径）。 */
+export interface GitFile {
+  path: string;        // 相对 repo root
+  abs: string;         // 绝对路径
+  x: string;           // index 状态位
+  y: string;           // worktree 状态位
+  untracked: boolean;  // ?? 未跟踪
+  adds: number;
+  dels: number;
+  binary: boolean;
+  renamedFrom?: string;
+}
+export interface GitStatusResult { ok: boolean; repo?: boolean; gitMissing?: boolean; root?: string; files?: GitFile[]; error?: string }
+export interface GitDiffResult { ok: boolean; diff?: string; untracked?: boolean; content?: string; error?: string }
+
 interface LocalAgentBridge {
-  detect(): Promise<DetectedProvider[]>;
+  detect(only?: ProviderId): Promise<DetectedProvider[]>;
   pickFolder(): Promise<string | null>;
   pickFiles(): Promise<Array<{ kind: 'image' | 'file'; name: string; path: string; mime: string | null; size: number; dataUrl?: string }>>;
   listSessions(provider: ProviderId, cwd: string): Promise<SessionSummary[]>;
@@ -168,6 +210,10 @@ interface LocalAgentBridge {
   setMcp(cwd: string, mcp: string[], lane?: string): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
   mcpStatus(cwd: string, lane?: string): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
   reconnectMcp(cwd: string, name: string, lane?: string): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
+  detectEditors(): Promise<{ vscode: boolean; cursor: boolean }>;
+  openInEditor(editor: 'vscode' | 'cursor', dir: string): Promise<{ ok: boolean; error?: string }>;
+  gitStatus(dir: string): Promise<GitStatusResult>;
+  gitDiffFile(dir: string, file: string, untracked: boolean): Promise<GitDiffResult>;
   onEvent(cb: (data: LocalAgentEvent) => void): () => void;
 }
 
@@ -182,7 +228,7 @@ export function isLocalAgentAvailable(): boolean {
 
 export const localAgent = {
   available: isLocalAgentAvailable,
-  detect: () => bridge()?.detect() ?? Promise.resolve([] as DetectedProvider[]),
+  detect: (only?: ProviderId) => bridge()?.detect(only) ?? Promise.resolve([] as DetectedProvider[]),
   pickFolder: () => bridge()?.pickFolder() ?? Promise.resolve(null),
   pickFiles: () => bridge()?.pickFiles() ?? Promise.resolve([]),
   listSessions: (provider: ProviderId, cwd: string) =>
@@ -208,6 +254,10 @@ export const localAgent = {
   setMcp: (cwd: string, mcp: string[], lane?: string) => bridge()?.setMcp(cwd, mcp, lane) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),
   mcpStatus: (cwd: string, lane?: string) => bridge()?.mcpStatus(cwd, lane) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),
   reconnectMcp: (cwd: string, name: string, lane?: string) => bridge()?.reconnectMcp(cwd, name, lane) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),
+  detectEditors: () => bridge()?.detectEditors() ?? Promise.resolve({ vscode: false, cursor: false }),
+  openInEditor: (editor: 'vscode' | 'cursor', dir: string) => bridge()?.openInEditor(editor, dir) ?? Promise.resolve({ ok: false, error: 'no bridge' }),
+  gitStatus: (dir: string) => bridge()?.gitStatus(dir) ?? Promise.resolve({ ok: false, repo: false, files: [] } as GitStatusResult),
+  gitDiffFile: (dir: string, file: string, untracked: boolean) => bridge()?.gitDiffFile(dir, file, untracked) ?? Promise.resolve({ ok: false } as GitDiffResult),
   onEvent: (cb: (data: LocalAgentEvent) => void) => bridge()?.onEvent(cb) ?? (() => {}),
 };
 

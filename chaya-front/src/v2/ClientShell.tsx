@@ -56,10 +56,12 @@ import { updateSessionLLMConfig, getSessionMessages } from '../services/chat';
 import { updateRoleProfile } from '../services/roleApi';
 import { mcpApi, type MCPServer } from '../services/integrationsApi';
 import { LocalAgentTree, LocalAgentConversation, ForeignPaneContext, ProviderSwitcher } from './LocalAgentView';
-import { useLocalAgent } from './useLocalAgent';
+import { useLocalAgent, realDir } from './useLocalAgent';
+import { CodeEditorLayer } from './CodeEditorLayer';
 import { isLocalAgentAvailable, type ProviderId } from './services/localAgent';
-import { isFbotAvailable } from './services/fbot';
-import FbotView from './FbotView';
+import { isFbotAvailable, fbot, type SpecData } from './services/fbot';
+import { shouldAutoDispatch, dispatchSubmission } from './services/fbotDispatch';
+import FbotView, { FbotProvider, FbotSidebar } from './FbotView';
 import { TopTabs } from './TopTabs';
 import {
   useTopTabs, localTabId, chatTabId, GALLERY_TAB_ID, KB_TAB_ID,
@@ -147,6 +149,23 @@ const ShellInner: React.FC = () => {
   useEffect(() => {
     setVisitedNav((prev) => (prev.has(activeNav) ? prev : new Set(prev).add(activeNav)));
   }, [activeNav]);
+  // 「代码改动」右侧检视列（仅 code 视图）：与 wiki 抽屉互斥，共用 inspector-slot。
+  const [editorOpen, setEditorOpen] = useState(false);
+  // 固定引用：CodeEditorLayer 是 memo 组件，inline 箭头会让 memo 失效（每次渲染换新引用）。
+  const closeEditor = useCallback(() => setEditorOpen(false), []);
+  // wiki 抽屉开关也移到右上角（与代码列同区）：状态由激活窗格的 WikiNotes 回报，这里只做镜像 + 触发。
+  const [wikiOpen, setWikiOpen] = useState(false);
+  useEffect(() => {
+    const onWikiState = (e: Event) => { const d = (e as CustomEvent).detail; if (d?.active) setWikiOpen(!!d.open); };
+    window.addEventListener('chaya:wiki-open', onWikiState as EventListener);
+    return () => window.removeEventListener('chaya:wiki-open', onWikiState as EventListener);
+  }, []);
+  useEffect(() => {
+    if (activeNav !== 'local') {
+      setEditorOpen(false);
+      if (wikiOpen) { window.dispatchEvent(new CustomEvent('chaya:wiki-toggle', { detail: { open: false } })); setWikiOpen(false); }
+    }
+  }, [activeNav]);   // eslint-disable-line react-hooks/exhaustive-deps
   // 进入主界面后若未登录，温和提示一次登录（可关闭，不挡本地功能）。
   useEffect(() => { if (!api.isLoggedIn()) setLoginOpen(true); }, []);
   const [mode, setMode] = useState<Mode>('chat');
@@ -929,6 +948,20 @@ const ShellInner: React.FC = () => {
   const enterLocal = useCallback(() => setActiveNav('local'), []);
   // 飞书录入助手：纯本地桌面功能，免登录（同 local）。
   const enterFbot = useCallback(() => setActiveNav('fbot'), []);
+  // 飞书提单 → 本地 CLI 自动派发：应用层监听，与当前是否停在飞书页无关；
+  // 只对配了 agent 路由且 trigger=auto 的表单生效（手动派发在 FbotView 提交记录里点）。
+  useEffect(() => {
+    if (!isFbotAvailable()) return;
+    let spec: SpecData | null = null;
+    void fbot.getSpec().then((s) => { if (s) spec = s; });
+    return fbot.onEvent((e) => {
+      if (e.type === 'spec') spec = { menu: e.menu, forms: e.forms };
+      else if (e.type === 'submission') {
+        const form = spec?.forms[e.item.formKey];
+        if (shouldAutoDispatch(e.item, form)) void dispatchSubmission(e.item, form);
+      }
+    });
+  }, []);
   // 侧栏 ⋯ 菜单：稳定 handler，让 AgentRow/ChatRow 的 React.memo 真正生效。
   const onSidebarMore = useCallback((s: Session, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1136,6 +1169,7 @@ const ShellInner: React.FC = () => {
   }, [create.cfg.negative, tr]);
 
   return (
+    <FbotProvider>
     <div className="chaya-v2" data-mode={resolvedMode} data-theme={theme} data-glass={glassAttr} data-glass-i={glassIntensity} onDragOver={swallowDragOver} onDrop={onDrop}>
       {/* ===== 全宽统一顶栏：红绿灯 + 图标导航 + 置顶 + tab + 折叠，全在这一行（跨整窗宽） ===== */}
       <div className="v2-titlebar">
@@ -1205,6 +1239,27 @@ const ShellInner: React.FC = () => {
           pinnedLocalCwds={pinnedLocalCwds}
           onLocalTogglePin={(cwd) => topTabs.togglePin(localTabId(cwd))}
         />
+        {/* code 视图右上角：wiki 笔记 + 「代码改动」两个右侧检视列开关（同区、互斥）。 */}
+        {activeNav === 'local' && (
+          <button
+            className={`v2-pin v2-titlebar-collapse${wikiOpen ? ' active' : ''}`}
+            title={tr('local.wiki.openTitle')}
+            aria-label={tr('local.wiki.pill')}
+            onClick={() => window.dispatchEvent(new CustomEvent('chaya:wiki-toggle'))}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="17" height="17" aria-hidden><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>
+          </button>
+        )}
+        {activeNav === 'local' && (
+          <button
+            className={`v2-pin v2-titlebar-collapse${editorOpen ? ' active' : ''}`}
+            title={tr('local.editor.openTitle')}
+            aria-label={tr('local.editor.title')}
+            onClick={() => setEditorOpen((o) => !o)}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="17" height="17" aria-hidden><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>
+          </button>
+        )}
         {/* 知识库下侧栏本就收起，此按钮改为「展开/收起 KB 停靠列表栏」（复用同一个右上角按钮）。 */}
         {activeNav === 'kb' ? (
           <button
@@ -1313,6 +1368,9 @@ const ShellInner: React.FC = () => {
                 </div>
               </>
             )}
+
+            {/* 飞书助手：分区导航 + 提交列表（与 chat/CLI 同骨架） */}
+            {activeNav === 'fbot' && isFbotAvailable() && <FbotSidebar />}
           </div>
 
           {authed ? (
@@ -1588,6 +1646,18 @@ const ShellInner: React.FC = () => {
         {/* ===== inspector ===== wiki 伴随面板的 grid 第三列槽位（--insp-w 控宽）。
              WikiNotes 通过 portal 把抽屉挂进这里 —— 真正的弹性第三区，main 自动让位。 */}
         <div className="v2-inspector-slot" id="v2-inspector-slot" />
+        {/* 「代码改动」检视列：portal 进 inspector-slot，与 wiki 抽屉互斥（共用第二列）。 */}
+        <CodeEditorLayer
+          open={editorOpen && activeNav === 'local'}
+          onClose={closeEditor}
+          messages={la.messages}
+          cwd={la.activeCwd ? realDir(la.activeCwd) : null}
+          activeSessionId={la.activeSessionId}
+          provider={settings.localAgentProvider ?? 'claude'}
+          modelOptions={la.modelOptions}
+          activeProvider={la.provider}
+          onSendToChat={(text) => { if (la.activeCwd) la.appendDraft(la.activeCwd, text); }}
+        />
       </div>
 
       {previewSrc && (
@@ -1742,6 +1812,7 @@ const ShellInner: React.FC = () => {
         />
       )}
     </div>
+    </FbotProvider>
   );
 };
 

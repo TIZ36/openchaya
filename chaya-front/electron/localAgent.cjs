@@ -82,6 +82,33 @@ function resolveMcp(cwd, names) {
   for (const name of names) { const c = proj[name] || glob[name]; if (c) out[name] = c; }
   return Object.keys(out).length ? out : undefined;
 }
+/** 把启用的 MCP 名字解析成 ACP `session/new` 的 mcpServers 数组（Zed Agent-Client-Protocol 格式）。
+ *  ~/.claude.json 用「对象」存 env/headers，ACP 用「数组」（[{name,value}]），这里转一道；
+ *  stdio →{name,command,args,env[]}；http/sse →{type,name,url,headers[]}。gemini/copilot 同吃这套。 */
+function resolveMcpAcp(cwd, names) {
+  const obj = resolveMcp(cwd, names);
+  if (!obj) return [];
+  const kv = (o) => Object.entries(o || {}).map(([name, value]) => ({ name, value: String(value) }));
+  const out = [];
+  for (const name in obj) {
+    const c = obj[name] || {};
+    const type = c.type || (c.command ? 'stdio' : (c.url ? 'http' : 'stdio'));
+    if (type === 'http' || type === 'sse') {
+      if (!c.url) continue;
+      out.push({ type, name, url: c.url, headers: kv(c.headers) });
+    } else {
+      if (!c.command) continue;
+      out.push({ name, command: c.command, args: Array.isArray(c.args) ? c.args : [], env: kv(c.env) });
+    }
+  }
+  return out;
+}
+/** 两个 MCP 名字列表是否等价（顺序无关）—— 用于判断 ACP 会话是否需要按新 mcp 重建。 */
+function sameMcpNames(a, b) {
+  const x = Array.isArray(a) ? [...a].sort() : [];
+  const y = Array.isArray(b) ? [...b].sort() : [];
+  return x.length === y.length && x.every((v, i) => v === y[i]);
+}
 
 /** 在 PATH（含补充目录）里找可执行文件全路径，找不到返回 null。 */
 function resolveBin(name) {
@@ -113,23 +140,16 @@ const PROVIDERS = {
   cursor: { id: 'cursor', label: 'Cursor', bin: 'cursor-agent', live: true, needsApiKey: true },
   codex: { id: 'codex', label: 'Codex', bin: 'codex', live: true },
   gemini: { id: 'gemini', label: 'Gemini', bin: 'gemini', live: true },
+  copilot: { id: 'copilot', label: 'Copilot', bin: 'copilot', live: true },
 };
 
-/** 探测已安装的本地 agent 及版本。 */
-async function detect() {
-  const out = [];
-  for (const p of Object.values(PROVIDERS)) {
+/** 探测已安装的本地 agent 及版本。only=单个 provider 时只探它（冷启提速）；版本探测并行。 */
+async function detect(only) {
+  const list = only && PROVIDERS[only] ? [PROVIDERS[only]] : Object.values(PROVIDERS);
+  return Promise.all(list.map(async (p) => {
     const bin = resolveBin(p.bin);
-    out.push({
-      id: p.id,
-      label: p.label,
-      installed: !!bin,
-      bin,
-      live: p.live,
-      version: bin ? await getVersion(bin) : null,
-    });
-  }
-  return out;
+    return { id: p.id, label: p.label, installed: !!bin, bin, live: p.live, version: bin ? await getVersion(bin) : null };
+  }));
 }
 
 /* ------------------------------------------------------------------ *
@@ -210,6 +230,7 @@ async function listSessions(provider, cwd) {
   if (provider === 'cursor') return cursorListSessions(cwd);
   if (provider === 'gemini') return geminiListSessions(cwd);
   if (provider === 'codex') return codexListSessions(cwd);
+  if (provider === 'copilot') return copilotListSessions(cwd);
   if ((provider || 'claude') !== 'claude') return [];
   const dir = await findProjectDir(cwd);
   if (!dir) return [];
@@ -264,6 +285,7 @@ async function readSession(provider, cwd, sessionId) {
   if (provider === 'cursor') return cursorReadSession(cwd, sessionId);
   if (provider === 'gemini') return geminiReadSession(cwd, sessionId);
   if (provider === 'codex') return codexReadSession(cwd, sessionId);
+  if (provider === 'copilot') return copilotReadSession(cwd, sessionId);
   if ((provider || 'claude') !== 'claude') return { messages: [] };
   const dir = await findProjectDir(cwd);
   if (!dir) return { messages: [] };
@@ -910,7 +932,8 @@ async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode,
   if (provider === 'cursor' && !lane) return cursorSend(sender, { cwd, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, apiKey });
   if (provider === 'codex') return codexSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, reasoning });
   // gemini 无 streaming-input/视觉 → 附件按 @路径 文本引用（与 cursor 同）；支持 lane。
-  if (provider === 'gemini') return geminiSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model });
+  if (provider === 'gemini') return geminiSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, mcp });
+  if (provider === 'copilot') return copilotSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, mcp });
   const key = runKey(cwd, lane);
   let s = sessions.get(key);
   if (!s) s = startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, lane });
@@ -929,7 +952,8 @@ async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode,
 function sessionWarm(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, apiKey, lane }) {
   if (provider === 'cursor' && !lane) return cursorWarm(sender, { cwd, sessionId, permMode, model, apiKey });
   if (provider === 'codex') return codexWarm(sender, { cwd, lane, sessionId, permMode, model, reasoning });
-  if (provider === 'gemini') return geminiWarm(sender, { cwd, lane, sessionId, permMode, model });
+  if (provider === 'gemini') return geminiWarm(sender, { cwd, lane, sessionId, permMode, model, mcp });
+  if (provider === 'copilot') return copilotWarm(sender, { cwd, lane, sessionId, permMode, model, mcp });
   if (sessions.has(runKey(cwd, lane))) return { ok: true };
   const s = startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, lane });
   return { ok: !!s };
@@ -937,6 +961,12 @@ function sessionWarm(sender, { cwd, provider, sessionId, permMode, model, reason
 
 /** 运行中改 MCP（/mcp 等价）：重设该会话启用的 MCP server，并回推连接状态。 */
 async function sessionSetMcp({ cwd, mcp, lane }) {
+  // ACP providers(gemini/copilot)：mcpServers 只能在 session/new 注入，无法像 claude 那样热更。
+  // 不在这里硬杀连接（会留 session_closed 闪烁、且这里拿不到 sender 重建）——保持当前 mcpNames
+  // 不变，下次 warm/send 会带上新的 mcp，ensure 里 sameMcpNames 比对发现变化即自动重建会话。
+  { const k = runKey(cwd, lane);
+    if (geminiSessions.has(k) || copilotSessions.has(k)) return { ok: true, deferred: true };
+  }
   const s = sessions.get(runKey(cwd, lane));
   if (!s) return { ok: false };
   s.mcp = Array.isArray(mcp) ? mcp.slice() : [];
@@ -985,6 +1015,7 @@ async function sessionSetModel({ cwd, model, lane }) {
   if (!lane) { const cu = cursorSessions.get(cwd); if (cu) { cu.model = model || null; return { ok: true }; } }
   { const cx = codexSessions.get(runKey(cwd, lane)); if (cx) { cx.model = model || null; return { ok: true }; } }
   { const g = geminiSessions.get(runKey(cwd, lane)); if (g) { g.model = model || null; return { ok: true }; } }
+  { const cp = copilotSessions.get(runKey(cwd, lane)); if (cp) { cp.model = model || null; if (cp.conn && model && model !== 'auto') { try { await cp.conn.request('session/set_model', { sessionId: cp.sessionId, modelId: model }); } catch { /* */ } } return { ok: true }; } }
   const s = sessions.get(runKey(cwd, lane));
   if (s?.query && typeof s.query.setModel === 'function') {
     try { await s.query.setModel(model || undefined); } catch { /* */ }
@@ -1009,6 +1040,7 @@ async function sessionInterrupt({ cwd, lane }) {
   }
   { const cx = codexSessions.get(runKey(cwd, lane)); if (cx) { try { if (cx.child) cx.child.kill('SIGTERM'); } catch { /* */ } return { ok: true }; } }
   { const g = geminiSessions.get(runKey(cwd, lane)); if (g && g.conn) { try { g.conn.notify('session/cancel', { sessionId: g.sessionId }); } catch { /* */ } return { ok: true }; } }
+  { const cp = copilotSessions.get(runKey(cwd, lane)); if (cp && cp.conn) { try { cp.conn.notify('session/cancel', { sessionId: cp.sessionId }); } catch { /* */ } return { ok: true }; } }
   const s = sessions.get(runKey(cwd, lane));
   if (s?.query) { try { await s.query.interrupt(); } catch { /* ignore */ } return { ok: true }; }
   return { ok: false };
@@ -1048,13 +1080,15 @@ function sessionClose({ cwd, lane }) {
   }
   { const gk = runKey(cwd, lane); const g = geminiSessions.get(gk);
     if (g) { geminiSessions.delete(gk); try { g.conn && g.conn.kill(); } catch { /* */ } return { ok: true }; } }
+  { const ck = runKey(cwd, lane); const cp = copilotSessions.get(ck);
+    if (cp) { copilotSessions.delete(ck); try { cp.conn && cp.conn.kill(); } catch { /* */ } return { ok: true }; } }
   return { ok: killSessionByKey(runKey(cwd, lane)) };
 }
 
 /** 全部回收：渲染进程重载/崩溃/退出时调——否则旧会话的 claude 子进程会变孤儿常驻
  *  （实测一天下来累积了 9 条、共 ~500MB、最久 20h+）。幂等。 */
 function killAllSessions() {
-  const n = sessions.size + cursorSessions.size + codexSessions.size + geminiSessions.size;
+  const n = sessions.size + cursorSessions.size + codexSessions.size + geminiSessions.size + copilotSessions.size;
   for (const key of [...sessions.keys()]) killSessionByKey(key, '已重置');
   for (const [cwd, cu] of [...cursorSessions]) {
     cursorSessions.delete(cwd);
@@ -1069,6 +1103,10 @@ function killAllSessions() {
   for (const [key, g] of [...geminiSessions]) {
     geminiSessions.delete(key);
     try { if (g.conn) g.conn.kill(); } catch { /* */ }
+  }
+  for (const [key, cp] of [...copilotSessions]) {
+    copilotSessions.delete(key);
+    try { if (cp.conn) cp.conn.kill(); } catch { /* */ }
   }
   // Backstop: CLI children (direct children of this main process) — claude ignores
   // SIGTERM and can orphan (observed 20h+). On full teardown SIGKILL every one of
@@ -1108,6 +1146,13 @@ function reapIdleSessions() {
       geminiSessions.delete(key);
     }
   }
+  for (const [key, cp] of copilotSessions) {
+    if (cp.conn && now - (cp.touched || 0) > SESSION_IDLE_MS) {
+      console.log('[localAgent] reap idle copilot · %s', key);
+      try { cp.conn.kill(); } catch { /* */ }
+      copilotSessions.delete(key);
+    }
+  }
 }
 
 /** 会话进行中切换权限模式（Tab 切档即时生效）。 */
@@ -1115,6 +1160,7 @@ async function sessionSetPermMode({ cwd, permMode, lane }) {
   if (!lane) { const cu = cursorSessions.get(cwd); if (cu) { cu.permMode = permMode || 'force'; return { ok: true }; } }
   { const cx = codexSessions.get(runKey(cwd, lane)); if (cx) { cx.permMode = permMode || 'default'; return { ok: true }; } }
   { const g = geminiSessions.get(runKey(cwd, lane)); if (g) { g.permMode = permMode || 'default'; return { ok: true }; } }
+  { const cp = copilotSessions.get(runKey(cwd, lane)); if (cp) { cp.permMode = permMode || 'default'; return { ok: true }; } }
   const mode = PERM_MODES.includes(permMode) ? permMode : 'default';
   const s = sessions.get(runKey(cwd, lane));
   if (s?.query) { try { await s.query.setPermissionMode(mode); } catch { /* */ } return { ok: true }; }
@@ -1666,25 +1712,32 @@ function geminiPermission(sess, params) {
 }
 
 /** 确保某 key 有一条常驻 ACP 会话(initialize + session/new|load)。并发安全(_init)。 */
-async function geminiEnsure(sender, { cwd, lane, sessionId, permMode, model }) {
+async function geminiEnsure(sender, { cwd, lane, sessionId, permMode, model, mcp }) {
   const key = runKey(cwd, lane);
   let s = geminiSessions.get(key);
   if (s) {
     if (model !== undefined) s.model = model || s.model;
     if (permMode) s.permMode = permMode;
     if (s._init) { try { await s._init; } catch { /* */ } }
-    if (s.conn) return geminiSessions.get(key);
+    if (s.conn) {
+      // ACP 只在 session/new 时吃 mcpServers，无法热更：mcp 选择变了就杀掉重建，否则复用。
+      if (mcp === undefined || sameMcpNames(s.mcpNames, mcp)) return geminiSessions.get(key);
+      try { s.conn.kill(); } catch { /* */ }
+      geminiSessions.delete(key);
+    }
   }
   const bin = resolveBin('gemini');
   if (!bin) { sender.send('localAgent:event', { cwd: key, ev: { type: 'error', error: '未找到 gemini，请确认已安装 gemini CLI' } }); return null; }
   let realCwd = cwd; try { realCwd = fs.realpathSync(cwd); } catch { /* */ }
   const emit = (ev) => { if (sender.isDestroyed()) return false; try { sender.send('localAgent:event', { cwd: key, ev }); return true; } catch { return false; } };
-  s = { conn: null, sessionId: sessionId || null, model: (model !== undefined ? model : null), permMode: permMode || 'default', turnCtx: geminiAcp.makeTurnState(), key, emit, _init: null, touched: Date.now() };
+  const mcpNames = Array.isArray(mcp) ? mcp.slice() : (s && s.mcpNames) || [];
+  const mcpServers = resolveMcpAcp(cwd, mcpNames);
+  s = { conn: null, sessionId: sessionId || null, model: (model !== undefined ? model : null), permMode: permMode || 'default', turnCtx: geminiAcp.makeTurnState(), key, emit, _init: null, mcpNames, touched: Date.now() };
   geminiSessions.set(key, s);
   s._init = (async () => {
     const conn = new geminiAcp.AcpConn({
       bin, cwd: realCwd, env: childEnv(),
-      onNotify: (m, p) => { if (m !== 'session/update') return; const cur = geminiSessions.get(key); if (!cur) return; cur.touched = Date.now(); for (const ev of geminiAcp.normalizeUpdate(p, cur.turnCtx)) emit(ev); },
+      onNotify: (m, p) => { if (m !== 'session/update') return; const cur = geminiSessions.get(key); if (!cur) return; cur.touched = Date.now(); if (cur.replaying) return; for (const ev of geminiAcp.normalizeUpdate(p, cur.turnCtx)) emit(ev); },
       onRequest: async (m, p) => {
         if (m === 'fs/read_text_file') { try { return { content: await fsp.readFile(p.path, 'utf8') }; } catch { return { content: '' }; } }
         if (m === 'fs/write_text_file') { try { await fsp.mkdir(path.dirname(p.path), { recursive: true }); await fsp.writeFile(p.path, p.content ?? ''); } catch { /* */ } return null; }
@@ -1697,10 +1750,13 @@ async function geminiEnsure(sender, { cwd, lane, sessionId, permMode, model }) {
     s.conn = conn;
     await conn.request('initialize', { protocolVersion: geminiAcp.ACP_PROTOCOL_VERSION, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } } });
     if (s.sessionId) {
-      try { await conn.request('session/load', { cwd: realCwd, mcpServers: [], sessionId: s.sessionId }); }
-      catch { const ns = await conn.request('session/new', { cwd: realCwd, mcpServers: [] }); s.sessionId = ns.sessionId; }
+      // session/load 的历史回放(session/update)丢弃——历史已由 readSession 渲染，避免重复两遍。
+      s.replaying = true;
+      try { await conn.request('session/load', { cwd: realCwd, mcpServers, sessionId: s.sessionId }); }
+      catch { const ns = await conn.request('session/new', { cwd: realCwd, mcpServers }); s.sessionId = ns.sessionId; }
+      finally { s.replaying = false; }
     } else {
-      const ns = await conn.request('session/new', { cwd: realCwd, mcpServers: [] });
+      const ns = await conn.request('session/new', { cwd: realCwd, mcpServers });
       s.sessionId = ns.sessionId;
     }
     emit({ type: 'models', models: GEMINI_MODELS });
@@ -1711,8 +1767,8 @@ async function geminiEnsure(sender, { cwd, lane, sessionId, permMode, model }) {
 }
 
 /** 发一个 gemini 回合：常驻 ACP session/prompt，流式 update 归一回渲染层。 */
-async function geminiSend(sender, { cwd, lane, sessionId, prompt, permMode, model }) {
-  const s = await geminiEnsure(sender, { cwd, lane, sessionId, permMode, model });
+async function geminiSend(sender, { cwd, lane, sessionId, prompt, permMode, model, mcp }) {
+  const s = await geminiEnsure(sender, { cwd, lane, sessionId, permMode, model, mcp });
   if (!s) return { ok: false };
   s.turnCtx = geminiAcp.makeTurnState();   // 新回合的累计/工具状态
   s.touched = Date.now();
@@ -1733,9 +1789,186 @@ async function geminiSend(sender, { cwd, lane, sessionId, prompt, permMode, mode
 }
 
 /** gemini 预热：建立常驻 ACP 连接(initialize + session)，首发即暖。失败静默。 */
-function geminiWarm(sender, { cwd, lane, sessionId, permMode, model }) {
-  void geminiEnsure(sender, { cwd, lane, sessionId, permMode, model });
+function geminiWarm(sender, { cwd, lane, sessionId, permMode, model, mcp }) {
+  void geminiEnsure(sender, { cwd, lane, sessionId, permMode, model, mcp });
   return { ok: true };
+}
+
+/* ============================================================
+ * Copilot ACP —— GitHub Copilot CLI 的 Agent Client Protocol（`copilot --acp`）。
+ *   复用 gemini 的 ACP 驱动(geminiAcp)，仅 bin/args 不同；用 copilot 自身登录态(copilot login)。
+ *   优势：loadSession 支持续接；session/new 直接返回可用模型列表(多模型)。
+ * ============================================================ */
+const copilotSessions = new Map();   // runKey -> { conn, sessionId, model, permMode, turnCtx, key, emit, _init, models }
+function mapCopilotModels(ns) {
+  const list = (ns && ns.models && ns.models.availableModels) || [];
+  return list.map((m) => ({ value: m.modelId, displayName: m.name || m.modelId, description: m.description || '' }));
+}
+async function copilotEnsure(sender, { cwd, lane, sessionId, permMode, model, mcp }) {
+  const key = runKey(cwd, lane);
+  let s = copilotSessions.get(key);
+  if (s) {
+    if (model !== undefined) s.model = model || s.model;
+    if (permMode) s.permMode = permMode;
+    if (s._init) { try { await s._init; } catch { /* */ } }
+    if (s.conn) {
+      // ACP 只在 session/new 时吃 mcpServers，无法热更：mcp 选择变了就杀掉重建，否则复用。
+      if (mcp === undefined || sameMcpNames(s.mcpNames, mcp)) return copilotSessions.get(key);
+      try { s.conn.kill(); } catch { /* */ }
+      copilotSessions.delete(key);
+    }
+  }
+  const bin = resolveBin('copilot');
+  if (!bin) { sender.send('localAgent:event', { cwd: key, ev: { type: 'error', error: '未找到 copilot —— 请 `npm i -g @github/copilot` 安装并 `copilot login`' } }); return null; }
+  let realCwd = cwd; try { realCwd = fs.realpathSync(cwd); } catch { /* */ }
+  const emit = (ev) => { if (sender.isDestroyed()) return false; try { sender.send('localAgent:event', { cwd: key, ev }); return true; } catch { return false; } };
+  const mcpNames = Array.isArray(mcp) ? mcp.slice() : (s && s.mcpNames) || [];
+  const mcpServers = resolveMcpAcp(cwd, mcpNames);
+  s = { conn: null, sessionId: sessionId || null, model: (model !== undefined ? model : null), permMode: permMode || 'default', turnCtx: geminiAcp.makeTurnState(), key, emit, _init: null, models: [], mcpNames, touched: Date.now() };
+  copilotSessions.set(key, s);
+  s._init = (async () => {
+    const conn = new geminiAcp.AcpConn({
+      bin, args: ['--acp'], cwd: realCwd, env: childEnv(),
+      // 回放期(session/load)的 session/update 全部丢弃：历史已由 copilotReadSession 渲染过，
+      // 否则会和已显示的历史重复成两遍。只渲染 load 完成后的「新」活动。
+      onNotify: (m, p) => { if (m !== 'session/update') return; const cur = copilotSessions.get(key); if (!cur) return; cur.touched = Date.now(); if (cur.replaying) return; for (const ev of geminiAcp.normalizeUpdate(p, cur.turnCtx)) emit(ev); },
+      onRequest: async (m, p) => {
+        if (m === 'fs/read_text_file') { try { return { content: await fsp.readFile(p.path, 'utf8') }; } catch { return { content: '' }; } }
+        if (m === 'fs/write_text_file') { try { await fsp.mkdir(path.dirname(p.path), { recursive: true }); await fsp.writeFile(p.path, p.content ?? ''); } catch { /* */ } return null; }
+        if (m === 'session/request_permission') return geminiPermission(copilotSessions.get(key), p);
+        return {};
+      },
+      onClose: () => { emit({ type: 'session_closed' }); clearPerms(key, '会话结束'); copilotSessions.delete(key); },
+      onError: (e) => emit({ type: 'error', error: String(e && e.message || e) }),
+    });
+    s.conn = conn;
+    await conn.request('initialize', { protocolVersion: geminiAcp.ACP_PROTOCOL_VERSION, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } } });
+    let ns;
+    if (s.sessionId) {
+      // session/load 会把整段历史当 session/update 回放 → 置 replaying 标志丢弃这些回放事件。
+      s.replaying = true;
+      try { ns = await conn.request('session/load', { cwd: realCwd, mcpServers, sessionId: s.sessionId }); }
+      catch { ns = await conn.request('session/new', { cwd: realCwd, mcpServers }); s.sessionId = ns.sessionId; }
+      finally { s.replaying = false; }
+    } else {
+      ns = await conn.request('session/new', { cwd: realCwd, mcpServers });
+      s.sessionId = ns.sessionId;
+    }
+    s.models = mapCopilotModels(ns);
+    if (s.models.length) emit({ type: 'models', models: s.models });
+    if (s.model && s.model !== 'auto') { try { await conn.request('session/set_model', { sessionId: s.sessionId, modelId: s.model }); } catch { /* 不支持就算了 */ } }
+  })();
+  try { await s._init; } catch (e) { emit({ type: 'error', error: 'copilot ACP 初始化失败（可能需 `copilot login`）：' + (e && e.message || e) }); try { s.conn && s.conn.kill(); } catch { /* */ } copilotSessions.delete(key); return null; }
+  s._init = null;
+  return copilotSessions.get(key);
+}
+async function copilotSend(sender, { cwd, lane, sessionId, prompt, permMode, model, mcp }) {
+  const s = await copilotEnsure(sender, { cwd, lane, sessionId, permMode, model, mcp });
+  if (!s) return { ok: false };
+  s.turnCtx = geminiAcp.makeTurnState();
+  s.touched = Date.now();
+  const emit = s.emit;
+  emit({ type: 'system', subtype: 'init', session_id: s.sessionId });
+  try {
+    const res = await s.conn.request('session/prompt', { sessionId: s.sessionId, prompt: [{ type: 'text', text: prompt }] });
+    const ctx = s.turnCtx;
+    if (!ctx.emittedFinal && ctx.accum) emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: ctx.accum }] } });
+    const stop = (res && res.stopReason) || 'end_turn';
+    emit({ type: 'result', subtype: stop === 'end_turn' ? 'success' : stop, session_id: s.sessionId });
+  } catch (e) {
+    emit({ type: 'error', error: String(e && e.message || e) });
+    emit({ type: 'session_closed' });
+  }
+  return { ok: true };
+}
+function copilotWarm(sender, { cwd, lane, sessionId, permMode, model, mcp }) {
+  void copilotEnsure(sender, { cwd, lane, sessionId, permMode, model, mcp });
+  return { ok: true };
+}
+
+/* ---- Copilot 历史（copilot ≥1.0：~/.copilot/session-state/<id>/）：每个会话一个目录，
+ *      workspace.yaml(cwd/name/git/时间) + events.jsonl(对话事件流) + session.db(仅 todos)。
+ *      旧版单库 ~/.copilot/session-store.db 已废弃（新版不再生成）。按 cwd 精确匹配，
+ *      含 VS Code/JetBrains 起的会话（workspace.yaml.client_name 区分）。 ---- */
+const COPILOT_STATE_DIR = path.join(os.homedir(), '.copilot', 'session-state');
+/** 从 workspace.yaml 抽单行字段（cwd/updated_at/...）。name 可能是多行块标量(|-)，调用方自己判。 */
+function copilotYamlField(yaml, key) {
+  const m = yaml.match(new RegExp('^' + key + ':[ \\t]*(.*)$', 'm'));
+  return m ? m[1].trim() : null;
+}
+/** 流式扫 events.jsonl：数 user.message 条数(=turns) + 取首条用户消息作标题回退。 */
+function copilotScanEvents(raw) {
+  let turns = 0, firstUser = null;
+  for (const line of raw.split('\n')) {
+    if (!line || line[0] !== '{') continue;
+    let j; try { j = JSON.parse(line); } catch { continue; }
+    if (j.type === 'user.message') {
+      turns++;
+      if (!firstUser && j.data && j.data.content) firstUser = String(j.data.content).replace(/\s+/g, ' ').trim().slice(0, 80);
+    }
+  }
+  return { turns, firstUser };
+}
+/** 扫一遍整个 session-state/ 目录，按 cwd 分组缓存（短 TTL）。切 provider 时各项目并发拉列表
+ *  会对同一目录扫多次 → 用 3s 缓存把 N 次全量扫描收敛成 1 次。 */
+let _copilotScanCache = null;   // { at, byCwd: Map<cwd, session[]> }
+async function copilotScanAll() {
+  if (_copilotScanCache && (Date.now() - _copilotScanCache.at) < 3000) return _copilotScanCache.byCwd;
+  const byCwd = new Map();
+  let dirs; try { dirs = await fsp.readdir(COPILOT_STATE_DIR); } catch { dirs = []; }
+  await Promise.all(dirs.map(async (id) => {
+    const base = path.join(COPILOT_STATE_DIR, id);
+    let yaml; try { yaml = await fsp.readFile(path.join(base, 'workspace.yaml'), 'utf8'); } catch { return; }
+    const wd = copilotYamlField(yaml, 'cwd'); if (!wd) return;
+    let raw; try { raw = await fsp.readFile(path.join(base, 'events.jsonl'), 'utf8'); } catch { return; }
+    const { turns, firstUser } = copilotScanEvents(raw);
+    if (!turns) return;   // 没产生过对话 → 不进列表
+    const name = copilotYamlField(yaml, 'name');           // 块标量(|-/>)开头的多行名跳过，用 firstUser
+    const title = (name && !/^[|>]/.test(name) && name) || firstUser || null;
+    const updatedAt = Date.parse(copilotYamlField(yaml, 'updated_at') || '') || 0;
+    if (!byCwd.has(wd)) byCwd.set(wd, []);
+    byCwd.get(wd).push({ sessionId: id, title, preview: title, turns, updatedAt });
+  }));
+  for (const arr of byCwd.values()) arr.sort((a, b) => b.updatedAt - a.updatedAt);
+  _copilotScanCache = { at: Date.now(), byCwd };
+  return byCwd;
+}
+async function copilotListSessions(cwd) {
+  let real = cwd; try { real = fs.realpathSync(cwd); } catch { /* */ }
+  const byCwd = await copilotScanAll();
+  return (byCwd.get(real) || byCwd.get(cwd) || []).slice(0, 100);
+}
+async function copilotReadSession(cwd, sessionId) {
+  const file = path.join(COPILOT_STATE_DIR, sessionId, 'events.jsonl');
+  let raw; try { raw = await fsp.readFile(file, 'utf8'); } catch { return { messages: [] }; }
+  const events = [];
+  for (const line of raw.split('\n')) { if (!line || line[0] !== '{') continue; try { events.push(JSON.parse(line)); } catch { /* */ } }
+  // 先收集工具结果(toolCallId → 文本)，渲染 assistant 时回填成 tool_result 卡片。
+  const toolRes = new Map();
+  for (const e of events) {
+    if (e.type !== 'tool.execution_complete' || !e.data) continue;
+    const r = e.data.result || {};
+    const text = (typeof r === 'string') ? r : (r.detailedContent || r.content || r.output || r.error || '');
+    toolRes.set(e.data.toolCallId, { text: String(text || ''), isError: e.data.success === false });
+  }
+  const messages = [];
+  for (const e of events) {
+    const ts = e.timestamp ? Date.parse(e.timestamp) || null : null;
+    if (e.type === 'user.message') {
+      const text = e.data && e.data.content ? String(e.data.content).trim() : '';
+      if (text) messages.push({ role: 'user', parts: [{ kind: 'text', text }], ts, uuid: e.id || null });
+    } else if (e.type === 'assistant.message') {
+      const parts = [];
+      if (e.data && e.data.content && String(e.data.content).trim()) parts.push({ kind: 'text', text: String(e.data.content) });
+      for (const tr of (e.data && e.data.toolRequests) || []) {
+        parts.push({ kind: 'tool_use', name: tr.name || 'tool', input: tr.arguments, id: tr.toolCallId });
+        const res = toolRes.get(tr.toolCallId);
+        if (res && res.text) parts.push({ kind: 'tool_result', text: res.text.slice(0, 8000), isError: res.isError, toolUseId: tr.toolCallId });
+      }
+      if (parts.length) messages.push({ role: 'assistant', parts, ts, uuid: (e.data && e.data.messageId) || e.id || null });
+    }
+  }
+  return { messages };
 }
 
 /* ------------------------------------------------------------------ *
@@ -1939,6 +2172,198 @@ async function cursorDeleteSession(cwd, sessionId) {
 }
 
 /* ------------------------------------------------------------------ *
+ * 外部编辑器：把会话工作目录甩给本机 VSCode / Cursor 当工程打开。
+ * 检测：先看 macOS app bundle，再退化到 PATH 里的 CLI（code / cursor）。
+ * 打开：darwin 用 `open -a <App> <dir>`（不依赖 CLI 装没装），失败再退 CLI。
+ * ------------------------------------------------------------------ */
+function whichBin(bin) {
+  return new Promise((resolve) => {
+    const finder = process.platform === 'win32' ? 'where' : 'which';
+    try {
+      execFile(finder, [bin], { env: childEnv(), timeout: 4000 }, (err, stdout) => resolve(!err && !!String(stdout || '').trim()));
+    } catch { resolve(false); }
+  });
+}
+
+const EDITOR_META = {
+  vscode: { app: 'Visual Studio Code', bundle: 'Visual Studio Code.app', cli: 'code' },
+  cursor: { app: 'Cursor', bundle: 'Cursor.app', cli: 'cursor' },
+};
+
+async function detectEditors() {
+  const out = { vscode: false, cursor: false };
+  for (const key of ['vscode', 'cursor']) {
+    const meta = EDITOR_META[key];
+    if (process.platform === 'darwin') {
+      const candidates = [`/Applications/${meta.bundle}`, path.join(os.homedir(), 'Applications', meta.bundle)];
+      if (candidates.some((p) => { try { return fs.existsSync(p); } catch { return false; } })) { out[key] = true; continue; }
+    }
+    out[key] = await whichBin(meta.cli);
+  }
+  return out;
+}
+
+async function openInEditor(editor, dir) {
+  const meta = EDITOR_META[editor];
+  if (!meta) return { ok: false, error: 'unknown editor' };
+  if (!dir) return { ok: false, error: 'no dir' };
+  try { const st = await fsp.stat(dir); if (!st.isDirectory()) return { ok: false, error: 'not a directory' }; }
+  catch { return { ok: false, error: 'dir not found' }; }
+  return new Promise((resolve) => {
+    const tryCli = () => {
+      const bin = process.platform === 'win32' ? `${meta.cli}.cmd` : meta.cli;
+      try {
+        execFile(bin, [dir], { env: childEnv(), shell: process.platform === 'win32', timeout: 8000 }, (err) =>
+          resolve(err ? { ok: false, error: String(err && err.message || err) } : { ok: true }));
+      } catch (e) { resolve({ ok: false, error: String(e && e.message || e) }); }
+    };
+    if (process.platform === 'darwin') {
+      execFile('open', ['-a', meta.app, dir], { timeout: 8000 }, (err) => { if (!err) resolve({ ok: true }); else tryCli(); });
+    } else {
+      tryCli();
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Git 工作区改动：以「文件夹事实」为准，而非某个 session 的 transcript 自述。
+ * 同一目录可并行跑多个 session（也可能用户手改 / git 操作），都反映在工作区 diff 里。
+ * gitStatus = 列出相对 HEAD 的改动文件（含未跟踪）；gitDiffFile = 单文件 unified diff（懒取）。
+ * ------------------------------------------------------------------ */
+// GUI Electron 的 PATH 解析不可靠 → 解析 git 全路径再 exec（同 resolveBin 惯例）。
+let _gitBin;
+function gitBin() { if (_gitBin === undefined) _gitBin = resolveBin('git') || 'git'; return _gitBin; }
+function runGit(cwd, args) {
+  return new Promise((resolve) => {
+    try {
+      execFile(gitBin(), args, { cwd, env: childEnv(), maxBuffer: 64 * 1024 * 1024, timeout: 15000 },
+        (err, stdout, stderr) => resolve({ ok: !err, stdout: stdout || '', stderr: stderr || '', enoent: !!(err && err.code === 'ENOENT') }));
+    } catch (e) { resolve({ ok: false, stdout: '', stderr: String(e && e.message || e), enoent: true }); }
+  });
+}
+
+async function gitStatus(dir) {
+  if (!dir) return { ok: false, error: 'no dir' };
+  const top = await runGit(dir, ['rev-parse', '--show-toplevel']);
+  // git 没找到(ENOENT) ≠ 不是仓库：分开报，前端给不同提示。
+  if (!top.ok) return { ok: true, repo: false, gitMissing: !!top.enoent, files: [] };
+  const root = top.stdout.trim();
+  // 行数统计（相对 HEAD，含暂存+未暂存的已跟踪改动）。空仓库无 HEAD → 失败则留空。
+  const stat = new Map();
+  const num = await runGit(root, ['-c', 'core.quotepath=false', 'diff', '--numstat', 'HEAD']);
+  if (num.ok) {
+    for (const line of num.stdout.split('\n')) {
+      if (!line.trim()) continue;
+      const tab = line.split('\t');
+      if (tab.length < 3) continue;
+      const a = tab[0], d = tab[1], p = tab.slice(2).join('\t');
+      stat.set(p, { adds: a === '-' ? 0 : (parseInt(a, 10) || 0), dels: d === '-' ? 0 : (parseInt(d, 10) || 0), binary: a === '-' });
+    }
+  }
+  const st = await runGit(root, ['-c', 'core.quotepath=false', 'status', '--porcelain=v1', '--untracked-files=all']);
+  const files = [];
+  if (st.ok) {
+    for (const line of st.stdout.split('\n')) {
+      if (line.length < 4) continue;
+      const x = line[0], y = line[1];
+      let p = line.slice(3);
+      let renamedFrom;
+      const arrow = p.indexOf(' -> ');
+      if (arrow >= 0) { renamedFrom = p.slice(0, arrow); p = p.slice(arrow + 4); }
+      const untracked = x === '?' && y === '?';
+      const s = stat.get(p);
+      files.push({ path: p, abs: path.join(root, p), x, y, untracked, adds: s ? s.adds : 0, dels: s ? s.dels : 0, binary: s ? s.binary : false, renamedFrom });
+    }
+  }
+  return { ok: true, repo: true, root, files };
+}
+
+async function gitDiffFile(dir, file, untracked) {
+  if (!dir || !file) return { ok: false, error: 'bad args' };
+  const top = await runGit(dir, ['rev-parse', '--show-toplevel']);
+  if (!top.ok) return { ok: false, error: 'not a repo' };
+  const root = top.stdout.trim();
+  const readContent = async () => {
+    try { return { ok: true, untracked: true, content: await fsp.readFile(path.join(root, file), 'utf8') }; }
+    catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  };
+  if (untracked) return readContent();
+  // 相对 HEAD（暂存+未暂存合并）；退化到仅未暂存 / 仅暂存（空仓库或边界态）；再退化到读全文。
+  for (const args of [['diff', 'HEAD', '--', file], ['diff', '--', file], ['diff', '--cached', '--', file]]) {
+    const d = await runGit(root, ['-c', 'core.quotepath=false', ...args]);
+    if (d.ok && d.stdout.trim()) return { ok: true, diff: d.stdout };
+  }
+  return readContent();
+}
+
+/* ------------------------------------------------------------------ *
+ * Headless 执行器：无渲染窗格、无人值守地跑一条 prompt，监听到 result 即 resolve。
+ * 给「自动化任务」用（automation.cjs）。复用 sessionSend 全套（假 sender 截事件）。
+ *   target：sessionId=null → 新建会话；sessionId 给值 → resume 该会话（在独立 lane 起进程，
+ *           其轮次追加进该会话历史，不与用户已开的 pane 抢同一 runKey）。
+ *   permMode：自动化默认 bypassPermissions（无人点授权）；question_request 自动按默认继续。
+ * 返回 { ok, output, error?, sessionId, subtype? }。onText 可选：增量文本回调。
+ * ------------------------------------------------------------------ */
+function runHeadless({ provider = 'claude', cwd, sessionId = null, prompt, permMode = 'bypassPermissions', model, mcp, lane, timeoutMs, onText, signal }) {
+  const useLane = lane || `auto-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  return new Promise((resolve) => {
+    let lastAssistant = '';
+    let newSessionId = null;
+    let settled = false;
+    let timer = null;
+    const finish = (r) => {
+      if (settled) return; settled = true;
+      if (timer) { clearTimeout(timer); timer = null; }
+      try { sessionClose({ cwd, lane: useLane }); } catch { /* */ }
+      resolve({ sessionId: newSessionId || sessionId || null, ...r });
+    };
+    const fakeSender = {
+      isDestroyed: () => false,
+      send: (_ch, payload) => {
+        const ev = payload && payload.ev;
+        if (!ev) return;
+        switch (ev.type) {
+          case 'assistant': {
+            const c = ev.message && ev.message.content;
+            let t = '';
+            if (Array.isArray(c)) { for (const b of c) if (b && b.type === 'text' && b.text) t += b.text; }
+            else if (typeof c === 'string') t = c;
+            if (t) { lastAssistant = t; if (onText) { try { onText(t); } catch { /* */ } } }
+            break;
+          }
+          case 'system':
+            if (ev.subtype === 'init' && ev.session_id) newSessionId = ev.session_id;
+            break;
+          case 'permission_request':   // bypass 下不该来；保险起见放行
+            try { permissionRespond(ev.permId, { behavior: 'allow', updatedInput: ev.input || {} }); } catch { /* */ }
+            break;
+          case 'question_request':     // 无人值守：按默认继续，不挂起
+            try { permissionRespond(ev.permId, { behavior: 'deny', message: '自动化任务（无人值守）：请按默认/最稳妥方式继续，不要等待用户选择。' }); } catch { /* */ }
+            break;
+          case 'error':
+            finish({ ok: false, error: String(ev.error || 'error'), output: lastAssistant });
+            break;
+          case 'result':
+            finish({ ok: ev.subtype === 'success' || !ev.subtype, output: lastAssistant, subtype: ev.subtype || 'success' });
+            break;
+          case 'session_closed':
+            finish({ ok: !!lastAssistant, output: lastAssistant });
+            break;
+          default: break;
+        }
+      },
+    };
+    timer = setTimeout(() => finish({ ok: false, error: 'timeout', output: lastAssistant }), timeoutMs || 30 * 60 * 1000);
+    if (timer.unref) timer.unref();
+    if (signal) signal.addEventListener('abort', () => { try { sessionInterrupt({ cwd, lane: useLane }); } catch { /* */ } finish({ ok: false, error: 'aborted', output: lastAssistant }); });
+    Promise.resolve()
+      .then(() => sessionSend(fakeSender, { provider, cwd, lane: useLane, sessionId, prompt, permMode, model, mcp }))
+      .then((r) => { if (!r || r.ok === false) finish({ ok: false, error: 'start failed', output: '' }); })
+      .catch((e) => finish({ ok: false, error: String(e && e.message || e), output: '' }));
+  });
+}
+
+/* ------------------------------------------------------------------ *
  * IPC 注册
  * ------------------------------------------------------------------ */
 let _reaperTimer = null;
@@ -1946,7 +2371,7 @@ function registerLocalAgent(ipcMain, dialog) {
   console.log('[localAgent] ready · multi-session lane routing (runKey=cwd#@#lane)');
   // 每 60s 扫一遍，收掉闲置 >15min 的常驻会话（防多会话/预热进程长期占内存）。
   if (!_reaperTimer) { _reaperTimer = setInterval(reapIdleSessions, 60_000); if (_reaperTimer.unref) _reaperTimer.unref(); }
-  ipcMain.handle('localAgent:detect', () => detect());
+  ipcMain.handle('localAgent:detect', (_e, only) => detect(only));
   ipcMain.handle('localAgent:pickFolder', async () => {
     const res = await dialog.showOpenDialog({
       title: '选择本地 Agent 的工作目录',
@@ -1993,10 +2418,17 @@ function registerLocalAgent(ipcMain, dialog) {
   ipcMain.handle('localAgent:setMcp', (_e, { cwd, mcp, lane }) => sessionSetMcp({ cwd, mcp, lane }));
   ipcMain.handle('localAgent:mcpStatus', (_e, { cwd, lane }) => sessionMcpStatus({ cwd, lane }));
   ipcMain.handle('localAgent:reconnectMcp', (_e, { cwd, name, lane }) => sessionReconnectMcp({ cwd, name, lane }));
+  ipcMain.handle('localAgent:detectEditors', () => detectEditors());
+  ipcMain.handle('localAgent:openInEditor', (_e, { editor, dir }) => openInEditor(editor, dir));
+  ipcMain.handle('localAgent:gitStatus', (_e, { dir }) => gitStatus(dir));
+  ipcMain.handle('localAgent:gitDiffFile', (_e, { dir, file, untracked }) => gitDiffFile(dir, file, untracked));
 }
 
 module.exports = {
   registerLocalAgent,
+  runHeadless,       // automation.cjs：无人值守跑一条 prompt
+  gitBin,            // automation.cjs：解析好的 git 全路径（GUI PATH 兜底）
+  childEnv,          // automation.cjs：带补充 PATH 的环境
   killAllSessions,   // main.cjs 在渲染进程重载/崩溃/退出时调，回收孤儿 claude 子进程
   // 仅供本地冒烟测试，不在渲染进程使用。
   _internals: { detect, findProjectDir, listSessions, readSession, listCommands, deleteSession, codexListAllSessions },

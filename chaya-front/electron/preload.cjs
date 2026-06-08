@@ -9,7 +9,7 @@ contextBridge.exposeInMainWorld('chateeElectron', {
 
   // 本地 Agent 桥（纯本地，与 Chaya 后端无关）
   localAgent: {
-    detect: () => ipcRenderer.invoke('localAgent:detect'),
+    detect: (only) => ipcRenderer.invoke('localAgent:detect', only),
     pickFolder: () => ipcRenderer.invoke('localAgent:pickFolder'),
     pickFiles: () => ipcRenderer.invoke('localAgent:pickFiles'),
     listSessions: (provider, cwd) => ipcRenderer.invoke('localAgent:listSessions', { provider, cwd }),
@@ -29,11 +29,52 @@ contextBridge.exposeInMainWorld('chateeElectron', {
     setMcp: (cwd, mcp, lane) => ipcRenderer.invoke('localAgent:setMcp', { cwd, mcp, lane }),
     mcpStatus: (cwd, lane) => ipcRenderer.invoke('localAgent:mcpStatus', { cwd, lane }),
     reconnectMcp: (cwd, name, lane) => ipcRenderer.invoke('localAgent:reconnectMcp', { cwd, name, lane }),
+    // 外部编辑器：检测本机装了哪些 / 把工作目录甩给 VSCode / Cursor 打开。
+    detectEditors: () => ipcRenderer.invoke('localAgent:detectEditors'),
+    openInEditor: (editor, dir) => ipcRenderer.invoke('localAgent:openInEditor', { editor, dir }),
+    // git 工作区改动（文件夹事实，跨 session）：列改动文件 / 懒取单文件 diff。
+    gitStatus: (dir) => ipcRenderer.invoke('localAgent:gitStatus', { dir }),
+    gitDiffFile: (dir, file, untracked) => ipcRenderer.invoke('localAgent:gitDiffFile', { dir, file, untracked }),
     // 订阅流式事件；返回取消订阅函数。
     onEvent: (cb) => {
       const handler = (_e, data) => cb(data);
       ipcRenderer.on('localAgent:event', handler);
       return () => ipcRenderer.removeListener('localAgent:event', handler);
+    },
+  },
+
+  // 自动化任务桥（纯本地，存 userData；调度仅在 App 运行期间）
+  automation: {
+    list: (cwd) => ipcRenderer.invoke('automation:list', { cwd }),
+    save: (task) => ipcRenderer.invoke('automation:save', { task }),
+    delete: (id) => ipcRenderer.invoke('automation:delete', { id }),
+    setEnabled: (id, enabled) => ipcRenderer.invoke('automation:setEnabled', { id, enabled }),
+    runNow: (id) => ipcRenderer.invoke('automation:runNow', { id }),
+    cancel: (id) => ipcRenderer.invoke('automation:cancel', { id }),
+    runs: (id) => ipcRenderer.invoke('automation:runs', { id }),
+    graph: () => ipcRenderer.invoke('automation:graph'),
+    branches: (cwd) => ipcRenderer.invoke('automation:branches', { cwd }),
+    onEvent: (cb) => {
+      const handler = (_e, data) => cb(data);
+      ipcRenderer.on('automation:event', handler);
+      return () => ipcRenderer.removeListener('automation:event', handler);
+    },
+  },
+
+  // 代码评审桥（纯本地，存 userData；只看 git 工作区改动，自由选 provider 跑只读评审）
+  review: {
+    list: (cwd) => ipcRenderer.invoke('review:list', { cwd }),
+    sessions: (cwd) => ipcRenderer.invoke('review:sessions', { cwd }),
+    resetSession: (cwd, provider) => ipcRenderer.invoke('review:resetSession', { cwd, provider }),
+    preview: (cwd) => ipcRenderer.invoke('review:preview', { cwd }),
+    run: (payload) => ipcRenderer.invoke('review:run', payload),
+    cancel: (id) => ipcRenderer.invoke('review:cancel', { id }),
+    delete: (cwd, id) => ipcRenderer.invoke('review:delete', { cwd, id }),
+    clear: (cwd) => ipcRenderer.invoke('review:clear', { cwd }),
+    onEvent: (cb) => {
+      const handler = (_e, data) => cb(data);
+      ipcRenderer.on('review:event', handler);
+      return () => ipcRenderer.removeListener('review:event', handler);
     },
   },
 
@@ -60,6 +101,14 @@ contextBridge.exposeInMainWorld('chateeElectron', {
     stop: () => ipcRenderer.invoke('fbot:stop'),
     status: () => ipcRenderer.invoke('fbot:status'),
     sendCard: (chatId, kind) => ipcRenderer.invoke('fbot:sendCard', { chatId, kind }),  // kind: 'menu' | 'form'
+    reply: (messageId, text, title) => ipcRenderer.invoke('fbot:reply', { messageId, text, title }),  // 回贴答复到原 @ 消息
+    patchCard: (messageId, text, title) => ipcRenderer.invoke('fbot:patchCard', { messageId, text, title }),  // 非流式回退
+    streamStart: (replyTo, title, template) => ipcRenderer.invoke('fbot:streamStart', { replyTo, title, template }),  // AI 流式卡：create+发卡 → {cardId,messageId}
+    streamPush: (cardId, text, sequence) => ipcRenderer.invoke('fbot:streamPush', { cardId, text, sequence }),       // 覆盖式推全量(打字机)
+    streamSettle: (cardId, text, sequence, title, template) => ipcRenderer.invoke('fbot:streamSettle', { cardId, text, sequence, title, template }),  // 定稿关流式
+    getAcl: () => ipcRenderer.invoke('fbot:getAcl'),            // 提问白名单 {enabled, entries:[{openId,name}], greetTemplate, denyMessage}
+    setAcl: (data) => ipcRenderer.invoke('fbot:setAcl', data),
+    resolveUser: (openId) => ipcRenderer.invoke('fbot:resolveUser', { openId }),  // open_id→{name}（白名单/通讯录，best-effort）
     getSpec: () => ipcRenderer.invoke('fbot:getSpec'),          // 读卡片配置 {menu, forms}
     setSpec: (data) => ipcRenderer.invoke('fbot:setSpec', data),// 存卡片配置(热更新)
     resetSpec: () => ipcRenderer.invoke('fbot:resetSpec'),      // 恢复默认

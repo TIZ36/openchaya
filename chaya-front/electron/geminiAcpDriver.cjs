@@ -99,13 +99,14 @@ function normalizeUpdate(update, ctx) {
 
 /* ---- JSON-RPC over stdio (ndjson) 连接 ---- */
 class AcpConn {
-  /** @param {{bin:string, cwd:string, env:object, onNotify:(m,p)=>void, onRequest:(m,p)=>Promise<any>, onClose:(code)=>void, onError:(e)=>void}} o */
+  /** @param {{bin:string, args?:string[], cwd:string, env:object, onNotify:(m,p)=>void, onRequest:(m,p)=>Promise<any>, onClose:(code)=>void, onError:(e)=>void}} o
+   *  args 默认 gemini 的 `--experimental-acp`；copilot 传 `['--acp']`。 */
   constructor(o) {
     this.o = o;
     this.id = 0;
     this.pending = new Map();   // id -> {resolve, reject}
     this.buf = '';
-    this.child = spawn(o.bin, ['--experimental-acp'], { cwd: o.cwd, env: o.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    this.child = spawn(o.bin, o.args || ['--experimental-acp'], { cwd: o.cwd, env: o.env, stdio: ['pipe', 'pipe', 'pipe'] });
     this.child.stdout.on('data', (d) => this._onData(d));
     this.child.stderr.on('data', () => {});   // ACP 的 stderr 是日志，忽略
     this.child.on('error', (e) => { try { o.onError && o.onError(e); } catch { /* */ } });

@@ -617,7 +617,8 @@ const WikiDocView: React.FC<{ item: WikiItem; onBack: () => void; onInsertRef: (
 export const WikiNotes: React.FC<{
   wiki: WikiNotesApi;
   onInsert: (text: string) => void;     // insert a wiki ref into the composer
-}> = ({ wiki, onInsert }) => {
+  isActive?: boolean;                   // 是否当前激活的窗格：只有它响应顶栏的 wiki 开关
+}> = ({ wiki, onInsert, isActive = true }) => {
   const { t: tr } = useI18n();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
@@ -629,12 +630,32 @@ export const WikiNotes: React.FC<{
     if (!open) return;
     wiki.reload();
     requestAnimationFrame(() => inputRef.current?.focus());
+    // 与代码编辑器列共用 grid 第二列 → 互斥：开 wiki 时广播占用、收到别人占用即让位。
+    window.dispatchEvent(new CustomEvent('chaya:inspector-open', { detail: { who: 'wiki' } }));
+    const onOther = (e: Event) => { const who = (e as CustomEvent).detail?.who; if (who && who !== 'wiki') setOpen(false); };
+    window.addEventListener('chaya:inspector-open', onOther as EventListener);
     // 抽屉是 portal 到 body 的，外点交给遮罩处理；这里只管 Esc：先退文档视图,再关抽屉。
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { if (peekRef.current) setPeek(null); else setOpen(false); } };
     window.addEventListener('keydown', onKey);
-    return () => { window.removeEventListener('keydown', onKey); };
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('chaya:inspector-open', onOther as EventListener); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+  // wiki 开关已移到顶栏右上角（与代码列同区）：只有激活窗格响应。detail.open 显式设值，否则翻转。
+  useEffect(() => {
+    if (!isActive || !wiki.available) return;
+    const onToggle = (e: Event) => {
+      const v = (e as CustomEvent).detail?.open;
+      setOpen((o) => (typeof v === 'boolean' ? v : !o));
+    };
+    window.addEventListener('chaya:wiki-toggle', onToggle as EventListener);
+    return () => window.removeEventListener('chaya:wiki-toggle', onToggle as EventListener);
+  }, [isActive, wiki.available]);
+  // 切走该窗格 → 关掉它的 wiki（避免非激活窗格的抽屉残留在 inspector 列里叠加）。
+  useEffect(() => { if (!isActive) setOpen(false); }, [isActive]);
+  // 把开合状态回报给外壳（顶栏按钮高亮）：仅激活窗格的状态可信。
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('chaya:wiki-open', { detail: { open, active: isActive } }));
+  }, [open, isActive]);
   // 打开时给根节点打 data-wiki-right：CSS 据此把 grid 第三列(--insp-w)展开到 --wiki-w
   // （main 1fr 自动让位，侧栏保持可见）。同时回填上次拖出的宽度。
   useEffect(() => {
@@ -688,10 +709,7 @@ export const WikiNotes: React.FC<{
     && (document.getElementById('v2-inspector-slot') || document.querySelector('.chaya-v2'))) || document.body;
   return (
     <div className="v2-note" ref={wrapRef}>
-      <button className={`v2-note-pill${open ? ' on' : ''}`} title={tr('local.wiki.openTitle')} onClick={() => setOpen((o) => !o)}>
-        <IconNoteBook /><span>{tr('local.wiki.pill')}</span>
-        {wiki.notes.length > 0 && <span className="badge">{wiki.notes.length}</span>}
-      </button>
+      {/* 触发按钮已移到顶栏右上角（ClientShell），这里只保留 portal 出来的右侧抽屉。 */}
       {open && createPortal(
         <>
           {/* wiki 作为右侧检视栏(grid 第三列)，与主界面平行（非浮层遮罩）：侧栏保持可见，

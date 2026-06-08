@@ -21,6 +21,7 @@
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
+const os = require('os');
 
 // electron 可选：独立进程里没有它，照样能跑（只是少了 userData 持久化 / 窗口广播）。
 let electron = null;
@@ -87,6 +88,76 @@ async function saveConfig(cfg) {
   catch { return false; }
 }
 
+// ---------- 提问白名单（ACL）：按 open_id 放行 + 寒暄；不在名单则婉拒 ----------
+// 飞书无可靠的「open_id→姓名」应用级接口（受通讯录数据范围限制），故名单直接存 {openId,name}：
+// 提交记录里能看到提交人 ou_*，复制进名单 + 填姓名即可。匹配按 open_id，寒暄用存的姓名。
+function aclPath() {
+  try { return path.join(electron.app.getPath('userData'), 'fbotAcl.json'); }
+  catch { return path.join(__dirname, '.fbotAcl.json'); }
+}
+function loadAcl() {
+  try {
+    const o = JSON.parse(fs.readFileSync(aclPath(), 'utf8'));
+    if (o && Array.isArray(o.entries)) return { enabled: !!o.enabled, entries: o.entries, greetTemplate: o.greetTemplate || '', denyMessage: o.denyMessage || '' };
+  } catch { /* */ }
+  return { enabled: false, entries: [], greetTemplate: '', denyMessage: '' };
+}
+async function saveAcl(next) {
+  const data = {
+    enabled: !!next.enabled,
+    entries: (Array.isArray(next.entries) ? next.entries : []).filter((e) => e && e.openId).map((e) => ({ openId: String(e.openId).trim(), name: String(e.name || '').trim() })),
+    greetTemplate: next.greetTemplate || '', denyMessage: next.denyMessage || '',
+  };
+  acl = data;
+  try { await fsp.writeFile(aclPath(), JSON.stringify(data, null, 2), 'utf8'); return { ok: true }; }
+  catch (err) { return { ok: false, error: String(err && err.message || err) }; }
+}
+let acl = loadAcl();
+function aclFind(openId) { return openId ? (acl.entries || []).find((e) => e.openId === openId) || null : null; }
+// open_id → 姓名：先查白名单，再 best-effort 调飞书通讯录（受通讯录数据范围限制，查不到返回 null）。结果缓存。
+const nameCache = new Map();
+async function resolveUserName(openId) {
+  if (!openId) return null;
+  const hit = aclFind(openId);
+  if (hit && hit.name) return hit.name;
+  if (nameCache.has(openId)) return nameCache.get(openId);
+  if (!state.client) return null;
+  try {
+    const res = await state.client.contact.v3.user.get({ path: { user_id: openId }, params: { user_id_type: 'open_id' } });
+    const data = (res && res.data) || res;                         // 兼容信封/解包两种返回
+    const u = data && data.user;
+    const name = (u && (u.name || u.en_name)) || null;
+    if (name) { nameCache.set(openId, name); return name; }
+    // 查到了但没名字 / code!=0 —— 多半是缺 contact:user.base:readonly 或通讯录数据范围没圈到这人。
+    log('error', '通讯录查姓名无结果（多半缺 contact:user.base:readonly 或通讯录数据范围）', JSON.stringify({ code: res && res.code, msg: res && res.msg, openId }).slice(0, 200));
+    nameCache.set(openId, null);   // 明确无结果才缓存
+    return null;
+  } catch (err) {
+    log('error', '通讯录查姓名失败（检查 contact:user.base:readonly + 通讯录数据范围 + 是否发版）', String((err && (err.message || err.msg)) || err).slice(0, 200));
+    return null;   // 报错不缓存：开通权限/发版后下次自动重试
+  }
+}
+// 取「提问」文本：优先第一个有值的多行/单行字段，否则拼所有非空值。
+function summarizeQuestion(formKey, values) {
+  const f = spec.forms[formKey] || { fields: [] };
+  const prefer = (f.fields || []).find((fl) => (fl.kind === 'multiline' || fl.kind === 'input') && values[fl.name]);
+  if (prefer) return String(values[prefer.name]);
+  const vals = Object.values(values || {}).filter((v) => v && String(v).trim());
+  return vals.join('；') || (f.title || '你的问题');
+}
+function buildDenyCard(msg) {
+  return { schema: '2.0', config: { update_multi: true },
+    header: { title: { tag: 'plain_text', content: '暂无提问权限' }, template: 'orange' },
+    body: { elements: [{ tag: 'markdown', content: msg || '不好意思，你需要先开通提问权限。' }] } };
+}
+function buildGreetCard(name, question, tpl) {
+  const t = (tpl && tpl.trim()) || '好的，「{name}」，我这就去帮你查询问题：「{question}」';
+  const content = t.replace(/\{name\}/g, name || '').replace(/\{question\}/g, question || '');
+  return { schema: '2.0', config: { update_multi: true },
+    header: { title: { tag: 'plain_text', content: '已收到，正在处理' }, template: 'blue' },
+    body: { elements: [{ tag: 'markdown', content }] } };
+}
+
 // ---------- 提交记录收集（把每次表单提交落盘，UI 可回看）----------
 function submissionsPath() {
   try { return path.join(electron.app.getPath('userData'), 'fbotSubmissions.json'); }
@@ -105,6 +176,8 @@ function recordSubmission(formKey, values, ctx) {
     formTitle: (spec.forms[formKey] && spec.forms[formKey].title) || formKey,
     values: values || {},
     operator: (ctx && ctx.operator) || null,
+    replyTo: (ctx && ctx.openMessageId) || null,   // 原 @ 消息 id，供「答复回原会话」用
+    userName: (ctx && ctx.userName) || null,       // 白名单解析出的姓名（如启用门禁）
   };
   list.push(item);
   if (list.length > 500) list.splice(0, list.length - 500);   // 只留最近 500 条
@@ -115,7 +188,7 @@ function recordSubmission(formKey, values, ctx) {
 
 // ---------- 运行态 ----------
 const state = {
-  client: null, wsClient: null, running: false, botName: '',
+  client: null, wsClient: null, running: false, botName: '', botOpenId: '',
   config: loadConfig(),
 };
 // 独立进程直接注入凭证用。
@@ -198,7 +271,7 @@ function buildFormCard(formKey) {
 function buildReceiptCard(formKey, values, result) {
   const f = spec.forms[formKey] || { fields: [] };
   const lines = (f.fields || []).map((fl) => `- **${fl.label}**：${values[fl.name] || '(空)'}`);
-  const head = (result && result.title) || '✅ 已提交';
+  const head = (result && result.title) || '已提交';
   const note = (result && result.message) || '';
   const elements = [{ tag: 'markdown', content: lines.join('\n') || '(无字段)' }];
   // v2 卡片不支持 note 标签，用浅色 markdown 代替小字注脚。
@@ -223,6 +296,14 @@ function extractText(message) {
 async function onMessage(data) {
   const msg = data && data.message;
   if (!msg) return;
+  // 群聊：只有 @ 了本 bot 才弹菜单（否则群里随便说话都触发，太吵）；私聊：任何消息都响应。
+  if (msg.chat_type === 'group') {
+    const mentions = msg.mentions || [];
+    const atBot = mentions.some((m) =>
+      (m && m.id && m.id.open_id && state.botOpenId && m.id.open_id === state.botOpenId)
+      || (state.botName && m && m.name === state.botName));
+    if (!atBot) return;
+  }
   const text = extractText(msg);
   emit({ type: 'message', chatId: msg.chat_id, chatType: msg.chat_type, text, ts: Date.now() });
   log('info', `收到消息 [${msg.chat_type}] "${text}"`);
@@ -246,6 +327,15 @@ async function onCardAction(data) {
   if (value.action === 'menu') {
     const opt = (spec.menu.options || []).find((o) => o.key === value.key);
     if (!opt) return { toast: { type: 'warning', content: '未知选项' } };
+    // Grafana 报表：异步出图（渲染+上传可能 >3s），先回「生成中」卡，出图后 patch 同一张卡。
+    if (opt.route && opt.route.kind === 'http') {
+      const msgId = ctx.openMessageId;
+      (async () => { try { const card = await runGrafana(opt); if (msgId) await patchRawCard(msgId, card); } catch (err) { log('error', 'Grafana 动作异常', String(err && err.message || err)); } })();
+      const loading = { schema: '2.0', config: { update_multi: true },
+        header: { title: { tag: 'plain_text', content: opt.text || 'Grafana 报表' }, template: 'blue' },
+        body: { elements: [{ tag: 'markdown', content: '报表生成中，请稍候…' }] } };
+      return { toast: { type: 'info', content: '生成中…' }, card: { type: 'raw', data: loading } };
+    }
     if (opt.form) return { toast: { type: 'info', content: '请填写信息' }, card: { type: 'raw', data: buildFormCard(opt.form) } };
     if (opt.action && typeof spec.onAction === 'function') {
       const r = await spec.onAction(opt.action, ctx);   // 业务自定义动作（如查询）
@@ -258,6 +348,16 @@ async function onCardAction(data) {
   // 2) 表单提交
   if (value.action === 'submit') {
     const formKey = value.form;
+    const operatorId = ctx.operator && (ctx.operator.open_id || ctx.operator.openId);
+    // —— 提问白名单门禁 ——（不在名单：婉拒，不落库、不派发）
+    if (acl.enabled) {
+      const hit = aclFind(operatorId);
+      if (!hit) {
+        log('info', `拦截非白名单提交 open_id=${operatorId}`);
+        return { toast: { type: 'warning', content: '暂无提问权限' }, card: { type: 'raw', data: buildDenyCard(acl.denyMessage) } };
+      }
+      ctx.userName = hit.name || '';   // 命中：把姓名带进 ctx（记录 + 寒暄用）
+    }
     let result = { ok: true };
     try {
       if (typeof spec.onSubmit === 'function') result = await spec.onSubmit(formKey, formValue, ctx) || { ok: true };
@@ -267,8 +367,11 @@ async function onCardAction(data) {
     }
     if (result.ok === false) return { toast: { type: 'error', content: result.message || '校验未通过' } };
     recordSubmission(formKey, formValue, ctx);   // 落盘 + 推 UI（提交记录可回看）
-    const card = result.card || buildReceiptCard(formKey, formValue, result);
-    return { toast: { type: 'success', content: result.toast || '已提交' }, card: { type: 'raw', data: card } };
+    // 命中白名单 → 先寒暄一句（真正答复随后由 #4 reply 回贴）；否则走常规回执。
+    const card = acl.enabled
+      ? buildGreetCard(ctx.userName, summarizeQuestion(formKey, formValue), acl.greetTemplate)
+      : (result.card || buildReceiptCard(formKey, formValue, result));
+    return { toast: { type: 'success', content: result.toast || '已收到' }, card: { type: 'raw', data: card } };
   }
 
   return { toast: { type: 'warning', content: '未识别的操作' } };
@@ -288,6 +391,7 @@ async function start() {
     try {
       const info = await state.client.request({ method: 'GET', url: '/open-apis/bot/v3/info' });
       state.botName = (info && info.bot && info.bot.app_name) || '';
+      state.botOpenId = (info && info.bot && info.bot.open_id) || '';   // 用于判断群消息是否 @ 了本 bot
     } catch { /* 非致命 */ }
     const eventDispatcher = new L.EventDispatcher({}).register({
       'im.message.receive_v1': onMessage,
@@ -313,6 +417,166 @@ async function stop() {
   log('info', '已停止长连接');
   emit({ type: 'status', running: false });
   return { ok: true };
+}
+
+// 答复卡：把本地 CLI 会话跑出来的结果回贴到原 @ 消息（reply-in-thread）。
+function buildAnswerCard(text, title, template) {
+  return {
+    schema: '2.0', config: { update_multi: true },
+    header: { title: { tag: 'plain_text', content: title || '助手答复' }, template: template || 'blue' },
+    body: { elements: [{ tag: 'markdown', content: String(text || '正在处理…').slice(0, 9000) }] },
+  };
+}
+// 回贴答复到原消息（messageId = 提交时记下的 openMessageId）。
+async function reply(messageId, text, title) {
+  if (!state.client) return { ok: false, error: '未启动' };
+  if (!messageId) return { ok: false, error: '缺少 message_id' };
+  try {
+    const res = await state.client.im.v1.message.reply({
+      path: { message_id: messageId },
+      data: { msg_type: 'interactive', content: JSON.stringify(buildAnswerCard(text, title)) },
+    });
+    log('info', `已答复回原会话 (${messageId})`);
+    return { ok: true, messageId: res && res.data && res.data.message_id };
+  } catch (err) { const e = String(err && err.message || err); log('error', '答复失败', e); return { ok: false, error: e }; }
+}
+
+/* ============================================================
+   Feishu AI 流式卡（cardkit）——「打字机」效果 + 历史全量保留。
+   流程：create 卡实体(streaming_mode) → reply 发到原会话 → cardElement.content
+   覆盖式推全量文本(飞书自动 diff 出打字机) → settings 关流式定稿。
+   ============================================================ */
+const STREAM_EL = 'answer';   // 流式 markdown 组件的 element_id
+function buildStreamingCard(title, template) {
+  return {
+    schema: '2.0',
+    config: { streaming_mode: true, summary: { content: '正在生成回答…' } },
+    header: { title: { tag: 'plain_text', content: title || '正在处理' }, template: template || 'blue' },
+    body: { elements: [{ tag: 'markdown', element_id: STREAM_EL, content: '' }] },
+  };
+}
+// 起一张流式卡：create 卡实体 → reply 发到原会话。返回 {ok, cardId, messageId}。
+async function streamStart(replyTo, title, template) {
+  if (!state.client) return { ok: false, error: '未启动' };
+  if (!replyTo) return { ok: false, error: '缺少 message_id' };
+  try {
+    const created = await state.client.cardkit.v1.card.create({ data: { type: 'card_json', data: JSON.stringify(buildStreamingCard(title, template)) } });
+    const cardId = created && created.data && created.data.card_id;
+    if (!cardId) return { ok: false, error: '创建卡片失败' };
+    const res = await state.client.im.v1.message.reply({
+      path: { message_id: replyTo },
+      data: { msg_type: 'interactive', content: JSON.stringify({ type: 'card', data: { card_id: cardId } }) },
+    });
+    return { ok: true, cardId, messageId: res && res.data && res.data.message_id };
+  } catch (err) { const e = String(err && err.message || err); log('error', '流式卡创建失败', e); return { ok: false, error: e }; }
+}
+// 覆盖式推全量文本（sequence 必须递增）。飞书自动识别增量 → 打字机。
+async function streamPush(cardId, text, sequence) {
+  if (!state.client || !cardId) return { ok: false };
+  try {
+    await state.client.cardkit.v1.cardElement.content({
+      path: { card_id: cardId, element_id: STREAM_EL },
+      data: { content: String(text == null ? '' : text).slice(0, 9500), sequence },
+    });
+    return { ok: true };
+  } catch (err) { return { ok: false, error: String(err && err.message || err) }; }
+}
+// 定稿：推最终全量 + 关流式 + 更新标题/配色。
+async function streamSettle(cardId, finalText, sequence, title, template) {
+  if (!state.client || !cardId) return { ok: false };
+  try {
+    if (finalText != null) await streamPush(cardId, finalText, sequence);
+    await state.client.cardkit.v1.card.settings({
+      path: { card_id: cardId },
+      data: {
+        settings: JSON.stringify({ config: { streaming_mode: false }, header: { title: { tag: 'plain_text', content: title || '答复' }, template: template || 'green' } }),
+        sequence: (sequence || 0) + 1,
+      },
+    });
+    return { ok: true };
+  } catch (err) { return { ok: false, error: String(err && err.message || err) }; }
+}
+
+// 流式更新已发出的卡片（按 message_id patch 内容）—— 非流式回退用。
+async function patchCard(messageId, text, title) {
+  if (!state.client) return { ok: false, error: '未启动' };
+  if (!messageId) return { ok: false, error: '缺少 message_id' };
+  try {
+    await state.client.im.v1.message.patch({
+      path: { message_id: messageId },
+      data: { content: JSON.stringify(buildAnswerCard(text, title)) },
+    });
+    return { ok: true };
+  } catch (err) { return { ok: false, error: String(err && err.message || err) }; }
+}
+
+/* ============================================================
+   Grafana 报表动作（#5）：点菜单选项 → 渲染看板 PNG → 传飞书 → 卡片(图+链接)。
+   渲染/上传可能 >3s（飞书卡回调超时），故先回「生成中」卡，异步出图后 patch 同一张卡。
+   ============================================================ */
+function deriveRenderUrl(linkUrl, width, height) {
+  try {
+    const u = new URL(linkUrl);
+    u.pathname = u.pathname.replace(/^\/d\//, '/render/d/');   // /d/<uid>/.. → /render/d/<uid>/..
+    u.searchParams.set('width', String(width || 1200));
+    u.searchParams.set('height', String(height || 800));
+    if (!u.searchParams.has('kiosk')) u.searchParams.set('kiosk', '');
+    return u.toString();
+  } catch { return ''; }
+}
+async function fetchGrafanaImage(renderUrl, token) {
+  try {
+    const resp = await fetch(renderUrl, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    const ct = resp.headers.get('content-type') || '';
+    if (!resp.ok || !ct.startsWith('image/')) {
+      const body = await resp.text().catch(() => '');
+      return { ok: false, reason: `HTTP ${resp.status} · ${ct} · ${body.slice(0, 140)}` };
+    }
+    return { ok: true, buffer: Buffer.from(await resp.arrayBuffer()) };
+  } catch (err) { return { ok: false, reason: String(err && err.message || err) }; }
+}
+async function uploadFeishuImage(buffer) {
+  if (!state.client) return { key: null, error: '未启动' };
+  const tmp = path.join(os.tmpdir(), `fbot-grafana-${Date.now()}.png`);
+  try {
+    fs.writeFileSync(tmp, buffer);
+    const res = await state.client.im.v1.image.create({ data: { image_type: 'message', image: fs.createReadStream(tmp) } });
+    // image.create 返回的是「解包后的 data」（{image_key} 在顶层），不像 message.* 在 res.data 下 —— 两种都兜住。
+    const key = res && (res.image_key || (res.data && res.data.image_key));
+    if (!key) { const dump = JSON.stringify((res && (res.data || res)) || {}).slice(0, 200); log('error', '飞书上传图片无 image_key', dump); return { key: null, error: `无 image_key ${dump}` }; }
+    return { key };
+  } catch (err) {
+    const e = String((err && (err.message || err.msg)) || err);
+    log('error', '飞书上传图片失败', e);
+    return { key: null, error: e };
+  } finally { try { fs.unlinkSync(tmp); } catch { /* */ } }
+}
+function buildGrafanaCard(title, imageKey, linkUrl, buttonText, note) {
+  const elements = [];
+  if (imageKey) elements.push({ tag: 'img', img_key: imageKey, alt: { tag: 'plain_text', content: title || '报表' }, mode: 'fit_horizontal', preview: true });
+  if (note) elements.push({ tag: 'markdown', content: `<font color='grey'>${note}</font>` });
+  if (linkUrl) elements.push({ tag: 'markdown', content: `[${buttonText || '在 Grafana 打开完整看板 ↗'}](${linkUrl})` });
+  return { schema: '2.0', config: { update_multi: true },
+    header: { title: { tag: 'plain_text', content: title || 'Grafana 报表' }, template: imageKey ? 'green' : 'blue' },
+    body: { elements: elements.length ? elements : [{ tag: 'markdown', content: '（无内容）' }] } };
+}
+async function runGrafana(opt) {
+  const r = opt.route || {};
+  const linkUrl = r.linkUrl || '';
+  const renderUrl = r.renderUrl || deriveRenderUrl(linkUrl, r.width, r.height);
+  let imageKey = null, note = '';
+  if (renderUrl) {
+    const img = await fetchGrafanaImage(renderUrl, r.token);
+    if (img.ok) { const up = await uploadFeishuImage(img.buffer); imageKey = up.key; if (!imageKey) note = `图片上传飞书失败（${up.error || ''}）。多半是缺「上传图片」权限，点下方链接查看。`; }
+    else { note = '看板图片渲染暂不可用（可能未装 image-renderer 插件），点下方链接查看。'; log('error', 'Grafana 渲染失败', img.reason); }
+  } else { note = '未配置渲染地址，仅给链接。'; }
+  return buildGrafanaCard(opt.text || 'Grafana 报表', imageKey, linkUrl, r.buttonText, note);
+}
+// 用任意卡片对象覆盖已发消息（Grafana 异步出图后定稿用）。
+async function patchRawCard(messageId, card) {
+  if (!state.client || !messageId) return { ok: false };
+  try { await state.client.im.v1.message.patch({ path: { message_id: messageId }, data: { content: JSON.stringify(card) } }); return { ok: true }; }
+  catch (err) { return { ok: false, error: String(err && err.message || err) }; }
 }
 
 // 主动发卡（UI/测试用）。
@@ -347,6 +611,15 @@ function registerFbot(ipcMain) {
   ipcMain.handle('fbot:stop', () => stop());
   ipcMain.handle('fbot:status', () => ({ running: state.running, botName: state.botName, appId: state.config.appId || '' }));
   ipcMain.handle('fbot:sendCard', (_e, { chatId, kind }) => sendCard(chatId, kind));
+  ipcMain.handle('fbot:reply', (_e, { messageId, text, title }) => reply(messageId, text, title));
+  ipcMain.handle('fbot:patchCard', (_e, { messageId, text, title }) => patchCard(messageId, text, title));
+  ipcMain.handle('fbot:streamStart', (_e, { replyTo, title, template }) => streamStart(replyTo, title, template));
+  ipcMain.handle('fbot:streamPush', (_e, { cardId, text, sequence }) => streamPush(cardId, text, sequence));
+  ipcMain.handle('fbot:streamSettle', (_e, { cardId, text, sequence, title, template }) => streamSettle(cardId, text, sequence, title, template));
+  // 提问白名单（ACL）读写。
+  ipcMain.handle('fbot:getAcl', () => acl);
+  ipcMain.handle('fbot:setAcl', (_e, data) => saveAcl(data || {}));
+  ipcMain.handle('fbot:resolveUser', async (_e, { openId }) => ({ name: await resolveUserName(openId) }));
   // 卡片配置（菜单/表单）读写 + 复位。
   ipcMain.handle('fbot:getSpec', () => getSpecData());
   ipcMain.handle('fbot:setSpec', (_e, data) => setSpecData(data));
@@ -356,4 +629,4 @@ function registerFbot(ipcMain) {
   ipcMain.handle('fbot:clearSubmissions', () => { try { fs.writeFileSync(submissionsPath(), '[]', 'utf8'); } catch { /* */ } return { ok: true }; });
 }
 
-module.exports = { registerFbot, configure, setSpec, getSpecData, setSpecData, start, stop, sendCard };
+module.exports = { registerFbot, configure, setSpec, getSpecData, setSpecData, start, stop, sendCard, reply, patchCard, streamStart, streamPush, streamSettle };

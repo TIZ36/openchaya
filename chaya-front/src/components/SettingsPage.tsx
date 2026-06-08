@@ -49,7 +49,7 @@ export interface ClientSettings {
   ragScope?: 'auto' | 'agent' | 'workspace';
   defaultLLMConfigId?: string;
   /** Local Agents 默认 provider（本地功能，桌面版）。 */
-  localAgentProvider?: 'claude' | 'cursor' | 'codex' | 'gemini';
+  localAgentProvider?: 'claude' | 'cursor' | 'codex' | 'gemini' | 'copilot';
   /** 对话(闲聊 + agent) 出字平滑：开关 + 速度档。默认开 / 适中。 */
   chatStreamSmooth?: boolean;
   chatStreamSpeed?: TypeSpeed;

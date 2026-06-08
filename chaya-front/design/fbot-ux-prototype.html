@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>飞书录入助手 · 设计稿（Pure light/dark · 全页面）</title>
+<style>
+  :root{
+    --paper: oklch(0.988 0.003 285); --sidebar: oklch(0.960 0.004 285); --bg: oklch(0.975 0.004 285);
+    --ink: oklch(0.200 0.013 255); --ink2: oklch(0.330 0.013 255); --ink3: oklch(0.470 0.013 255);
+    --ink4: oklch(0.600 0.013 255); --ink5: oklch(0.715 0.012 255);
+    --rule: color-mix(in oklab, oklch(0.38 0.015 255) 15%, transparent);
+    --surface: oklch(0.965 0.005 245);
+    --hover: color-mix(in oklab, oklch(0.67 0.022 255) 11%, transparent);
+    --selected: color-mix(in oklab, oklch(0.68 0.045 270) 16%, transparent);
+    --accent: oklch(0.64 0.060 272); --accent-strong: oklch(0.42 0.065 272);
+    --accent-bg: color-mix(in oklab, oklch(0.64 0.060 272) 15%, transparent);
+    --success: oklch(0.48 0.07 160); --success-bg: color-mix(in oklab, oklch(0.70 0.09 160) 16%, transparent);
+    --danger: oklch(0.53 0.10 25); --warn: oklch(0.55 0.09 75);
+    --sans: -apple-system, BlinkMacSystemFont, 'PingFang SC', system-ui, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    --r-sm:6px; --r-md:8px; --r-lg:10px; --r-pill:999px;
+  }
+  body.dark{
+    --paper: oklch(0.190 0.006 260); --sidebar: oklch(0.210 0.007 260); --bg: oklch(0.165 0.006 260);
+    --ink: oklch(0.950 0.006 250); --ink2: oklch(0.825 0.009 250); --ink3: oklch(0.700 0.011 250);
+    --ink4: oklch(0.580 0.012 250); --ink5: oklch(0.465 0.012 250);
+    --rule: color-mix(in oklab, oklch(0.86 0.008 250) 15%, transparent);
+    --surface: oklch(0.300 0.010 260);
+    --hover: color-mix(in oklab, oklch(0.80 0.012 250) 12%, transparent);
+    --selected: color-mix(in oklab, oklch(0.80 0.028 265) 18%, transparent);
+    --accent: oklch(0.74 0.045 265); --accent-strong: oklch(0.88 0.030 265);
+    --accent-bg: color-mix(in oklab, oklch(0.74 0.045 265) 18%, transparent);
+    --success: oklch(0.78 0.07 160); --success-bg: color-mix(in oklab, oklch(0.70 0.09 160) 18%, transparent);
+    --danger: oklch(0.74 0.08 25); --warn: oklch(0.80 0.08 78);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;transition:background .2s,color .2s}
+
+  .chooser{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:10px;padding:11px 18px;background:color-mix(in oklab,var(--paper) 86%,transparent);backdrop-filter:blur(12px);border-bottom:1px solid var(--rule)}
+  .chooser h1{margin:0;font-size:14px;font-weight:650}
+  .sp{flex:1}.note{font-size:12px;color:var(--ink4)}
+  .seg{display:inline-flex;gap:2px;background:var(--surface);border:1px solid var(--rule);border-radius:var(--r-pill);padding:3px}
+  .seg button{font:inherit;font-size:12.5px;font-weight:550;border:0;background:transparent;color:var(--ink3);padding:5px 12px;border-radius:var(--r-pill);cursor:pointer}
+  .seg button.on{background:var(--paper);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.06)}
+  body.dark .seg button.on{box-shadow:inset 0 0 0 1px var(--rule)}
+
+  .stage{padding:20px;display:flex;justify-content:center}
+  .app{width:min(1180px,100%);height:780px;border:1px solid var(--rule);border-radius:14px;overflow:hidden;background:var(--sidebar);box-shadow:0 24px 60px -34px rgba(40,40,60,.4);display:flex;flex-direction:column}
+  body.dark .app{box-shadow:0 24px 60px -30px rgba(0,0,0,.7)}
+  .titlebar{height:46px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--sidebar);border-bottom:1px solid var(--rule)}
+  .dots{display:flex;gap:8px;margin-right:6px}.dots i{width:12px;height:12px;border-radius:50%}
+  .dots i:nth-child(1){background:#ff5f57}.dots i:nth-child(2){background:#febc2e}.dots i:nth-child(3){background:#28c840}
+  .tnav{display:flex;gap:2px}
+  .pin{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:var(--r-pill);background:transparent;color:var(--ink3);font-size:12.5px;font-weight:500;border:0;cursor:pointer}
+  .pin.on{background:var(--paper);color:var(--ink);box-shadow:inset 0 0 0 1px var(--rule)}
+
+  .body{flex:1;min-height:0;display:flex;background:var(--sidebar)}
+  .side{width:296px;flex:0 0 auto;display:flex;flex-direction:column;min-height:0;padding:8px 8px 8px}
+  .main{flex:1;min-width:0;margin:4px 6px 6px 0;background:var(--paper);border:1px solid var(--rule);border-radius:var(--r-lg);overflow:hidden;display:flex;flex-direction:column;box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 18px 40px -34px color-mix(in oklab,var(--ink) 30%,transparent)}
+  body.dark .main{box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 18px 40px -30px rgba(0,0,0,.6);border-color:color-mix(in oklab,var(--ink) 22%,transparent)}
+
+  /* sidebar */
+  .statusrow{display:flex;align-items:center;gap:7px;height:34px;padding:0 5px 0 11px;border:1px solid var(--rule);background:var(--surface);border-radius:var(--r-md);margin-bottom:8px}
+  .sdot{width:7px;height:7px;border-radius:50%;background:var(--ink4);flex:0 0 auto}
+  .statusrow.on .sdot{background:var(--success);box-shadow:0 0 0 3px var(--success-bg)}
+  .statusrow .lab{flex:1;min-width:0;font-size:12.5px;font-weight:500;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .runbtn{font-size:11.5px;font-weight:600;color:var(--accent-strong);background:var(--accent-bg);border:0;border-radius:var(--r-sm);padding:4px 11px;cursor:pointer}
+  .sec{display:flex;align-items:center;padding:8px 10px 6px;font-size:11px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:var(--ink4)}
+  .sec .n{margin-left:6px;text-transform:none;letter-spacing:0;color:var(--ink4)}
+  .sec .add{margin-left:auto;color:var(--ink4);background:none;border:0;cursor:pointer;font-size:14px}
+  .list{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:1px;padding:0 4px 8px}
+  .item{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:var(--r-md);background:transparent;cursor:pointer;text-align:left;border:1px solid transparent}
+  .item:hover{background:var(--hover)}.item.on{background:var(--selected)}
+  .item .ti{font-size:13px;font-weight:550;color:var(--ink);display:flex;align-items:center;gap:6px}
+  .item .me{font-size:11px;color:var(--ink4)}
+  .st{width:6px;height:6px;border-radius:50%;flex:0 0 auto}
+  .st.run{background:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}.st.ok{background:var(--success)}.st.err{background:var(--danger)}
+  .foot{flex:0 0 auto;margin-top:6px;padding:6px 4px 2px;border-top:1px solid var(--rule);display:flex;flex-direction:column;gap:1px}
+  .footrow{display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;border-radius:var(--r-md);background:transparent;color:var(--ink3);font-size:12.5px;cursor:pointer;text-align:left;border:0}
+  .footrow:hover{background:var(--hover);color:var(--ink2)}.footrow.on{background:var(--selected);color:var(--ink);font-weight:600}
+  .footrow .nm{flex:1}.badge{font-size:11px;font-weight:600;color:var(--ink3);background:var(--surface);border-radius:9px;padding:0 6px;min-width:18px;text-align:center}
+  .footrow.on .badge{background:var(--accent-bg);color:var(--accent-strong)}
+  .pdot{width:5px;height:5px;border-radius:50%;background:var(--accent)}
+
+  /* main pages */
+  .pad{padding:22px 26px;overflow:auto;flex:1;min-height:0}
+  .page{display:none}.page.on{display:block}
+  .phd{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:6px}
+  .hint{font-size:12.5px;color:var(--ink4);margin:0 0 18px;max-width:560px;line-height:1.6}
+  .lab{font-size:11px;color:var(--ink3);letter-spacing:.04em;display:block;margin-bottom:6px}
+  .field{margin-bottom:14px}
+  input.f,textarea.f,select.f{width:100%;padding:8px 11px;border-radius:var(--r-md);background:var(--surface);border:1px solid transparent;color:var(--ink);font:inherit;font-size:13px}
+  input.f:focus,textarea.f:focus,select.f:focus{outline:0;background:var(--paper);border-color:var(--rule);box-shadow:0 0 0 2px var(--accent-bg)}
+  .sech{display:flex;align-items:center;gap:10px;margin:18px 0 10px;font-size:11px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:var(--ink4)}
+  .sech .add{margin-left:auto;text-transform:none;letter-spacing:0}
+  .btn{font:inherit;font-size:12px;font-weight:550;color:var(--ink2);background:var(--surface);border:1px solid var(--rule);border-radius:var(--r-md);padding:6px 12px;cursor:pointer}
+  .btn.pri{background:var(--ink);color:var(--paper);border-color:transparent}
+  .btn.sm{padding:3px 9px;font-size:11px;border-radius:var(--r-sm)}
+  .btn.acc{color:var(--accent-strong);background:var(--accent-bg);border:0}
+  .row{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+  .row .grow{flex:1}
+  .key{font-family:var(--mono);font-size:10px;color:var(--ink4);background:var(--surface);border-radius:4px;padding:2px 6px;white-space:nowrap}
+  .formbox{border:1px solid var(--rule);border-radius:var(--r-lg);padding:12px;margin-bottom:12px;background:var(--hover)}
+  .routebox{margin-top:12px;padding-top:12px;border-top:1px dashed var(--rule)}
+  .routebody{margin-top:12px;padding:12px;border-radius:var(--r-md);background:color-mix(in oklab,var(--accent) 5%,var(--surface));display:flex;flex-direction:column;gap:12px}
+  .grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .toggle{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--ink2);cursor:pointer}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+  .chip{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:var(--r-pill);border:1px solid var(--rule);background:var(--surface);color:var(--ink2);font-size:11.5px;cursor:pointer}
+  .chip code{font-family:var(--mono);font-size:10px;color:var(--ink4)}
+  table.kv{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:18px}
+  table.kv th{text-align:left;width:120px;padding:8px 10px;color:var(--ink3);font-weight:600;font-family:var(--mono);font-size:11px;vertical-align:top;border-bottom:1px solid var(--rule)}
+  table.kv td{padding:8px 10px;border-bottom:1px solid var(--rule)}
+  .answer{border:1px solid var(--rule);border-radius:var(--r-lg);overflow:hidden;background:var(--surface)}
+  .answer .ah{display:flex;align-items:center;gap:8px;padding:9px 13px;font-size:11.5px;font-weight:600;color:var(--ink2);background:color-mix(in oklab,var(--accent) 6%,var(--surface));border-bottom:1px solid var(--rule)}
+  .answer.live .ah::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);animation:pulse 1.1s infinite}
+  @keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+  .answer .loc{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink4)}
+  .answer .ab{padding:14px;font-size:13px;line-height:1.65;white-space:pre-wrap}
+  .cursor{display:inline-block;width:7px;height:15px;background:var(--accent);vertical-align:-2px;animation:blink 1s steps(2) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .meta{font-size:11.5px;color:var(--ink4);margin:6px 0 16px}.meta b{color:var(--ink2)}.meta code{font-family:var(--mono);font-size:10.5px}
+  .acc-add{margin-left:6px;font-size:11px;color:var(--accent-strong);background:var(--accent-bg);border:0;border-radius:var(--r-sm);padding:2px 7px;cursor:pointer}
+  .log{background:var(--surface);border-radius:var(--r-md);padding:10px 12px;font-family:var(--mono);font-size:11px;line-height:1.7;color:var(--ink2);max-height:240px;overflow:auto}
+  .log .ts{color:var(--ink4);margin-right:6px}
+  /* guide steps */
+  .step{display:flex;gap:12px;padding:14px 0;border-top:1px solid var(--rule)}.step:first-child{border-top:0}
+  .stepn{flex:0 0 auto;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--ink3);background:var(--surface);border:1px solid var(--rule)}
+  .stepn.done{color:var(--paper);background:var(--success);border-color:transparent}
+  .stephd{display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600}
+  .stepd{margin-top:5px;font-size:12.5px;line-height:1.7;color:var(--ink3)}
+  .stepd code{font-family:var(--mono);font-size:11px;padding:1px 5px;background:var(--surface);border-radius:4px}
+  .go{margin-left:auto;font-size:12px;color:var(--accent-strong);background:transparent;border:0;cursor:pointer}
+  .ok{color:var(--success);font-weight:600;margin-left:6px;font-size:11px}.warn{color:var(--warn);font-weight:600;margin-left:6px;font-size:11px}
+  /* B feed */
+  .feed{display:flex;flex-direction:column;gap:16px;max-width:720px}
+  .qb{align-self:flex-start;max-width:80%;background:var(--surface);border:1px solid var(--rule);border-radius:14px 14px 14px 4px;padding:11px 14px}
+  .qb .who{font-size:11px;color:var(--ink4);margin-bottom:3px}
+  .ab2{align-self:stretch;background:color-mix(in oklab,var(--accent) 4%,var(--paper));border:1px solid var(--rule);border-radius:4px 14px 14px 14px;overflow:hidden}
+  .ab2 .h{display:flex;align-items:center;gap:8px;padding:8px 13px;font-size:11px;font-weight:600;color:var(--accent-strong);border-bottom:1px solid var(--rule)}
+  .ab2 .b{padding:13px;font-size:13.5px;line-height:1.65;white-space:pre-wrap}
+  .av{width:24px;height:24px;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--accent-strong));display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px}
+  /* C ops table */
+  table.ops{width:100%;border-collapse:collapse;font-size:13px}
+  table.ops th{text-align:left;font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink4);padding:0 12px 8px;border-bottom:1px solid var(--rule)}
+  table.ops td{padding:11px 12px;border-bottom:1px solid var(--rule)}
+  table.ops tr.open{background:var(--selected)}
+  .pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:var(--r-pill)}
+  .pill.run{color:var(--accent-strong);background:var(--accent-bg)}.pill.ok{color:var(--success);background:var(--success-bg)}.pill.err{color:var(--danger);background:color-mix(in oklab,var(--danger) 14%,transparent)}
+  .imgcard{border:1px solid var(--rule);border-radius:var(--r-md);overflow:hidden;max-width:520px;margin-bottom:8px}
+  .imgcard .ph{height:190px;background:repeating-linear-gradient(45deg,color-mix(in oklab,var(--accent) 9%,var(--surface)),color-mix(in oklab,var(--accent) 9%,var(--surface)) 12px,var(--surface) 12px,var(--surface) 24px);display:flex;align-items:center;justify-content:center;color:var(--ink4);font-size:12px}
+  .imgcard .cap{padding:8px 12px;font-size:12px;color:var(--accent-strong)}
+
+  /* ---- richer sidebar inbox rows ---- */
+  .irow{display:flex;gap:9px;padding:8px 9px;border-radius:var(--r-md);background:transparent;cursor:pointer;text-align:left;border:1px solid transparent;align-items:flex-start}
+  .irow:hover{background:var(--hover)}.irow.on{background:var(--selected)}
+  .iav{flex:0 0 auto;width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:#fff;margin-top:1px}
+  .ibody{flex:1;min-width:0}
+  .itop{display:flex;align-items:center;gap:6px}
+  .ititle{flex:1;min-width:0;font-size:13px;font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .idot{flex:0 0 auto;width:7px;height:7px;border-radius:50%}
+  .idot.run{background:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}.idot.ok{background:var(--success)}.idot.err{background:var(--danger)}
+  .iprev{font-size:12px;color:var(--ink3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
+  .imeta{font-size:11px;color:var(--ink4);margin-top:2px}
+
+  /* ---- card-config: grouped + ability widgets ---- */
+  .cardcfg{max-width:740px}
+  .gcard{border:1px solid var(--rule);border-radius:var(--r-lg);background:var(--surface);padding:14px 16px;margin-bottom:18px}
+  .gcard .gt{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--ink4);margin-bottom:12px;display:flex;align-items:center;gap:8px}
+  .gcard .gt .add{margin-left:auto;text-transform:none;letter-spacing:0;font-size:11px;color:var(--accent-strong);background:var(--accent-bg);border:0;border-radius:var(--r-sm);padding:3px 9px;cursor:pointer}
+  .ability{border:1px solid var(--rule);border-radius:var(--r-lg);background:var(--paper);margin-bottom:10px;overflow:hidden}
+  .abhd{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer}
+  .abhd:hover{background:var(--hover)}
+  .caret{color:var(--ink4);font-size:10px;transition:transform .15s;width:10px}
+  .ability.open .caret{transform:rotate(90deg)}
+  .abic{font-size:15px}
+  .abnm{flex:1;min-width:0;font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tag{font-size:11px;font-weight:600;padding:2px 8px;border-radius:var(--r-pill)}
+  .tag.t-main{color:var(--accent-strong);background:var(--accent-bg)}
+  .tag.t-form{color:var(--ink3);background:var(--surface)}
+  .tag.t-graf{color:var(--success);background:var(--success-bg)}
+  .tag.t-cli{color:var(--accent-strong);background:var(--accent-bg)}
+  .abbody{display:none;padding:4px 14px 16px;border-top:1px solid var(--rule)}
+  .ability.open .abbody{display:block}
+  .subsec{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--ink4);margin:16px 0 9px;display:flex;align-items:center;gap:8px}
+  .subsec .add{margin-left:auto;text-transform:none;letter-spacing:0;font-size:11px;color:var(--ink3);background:var(--surface);border:1px solid var(--rule);border-radius:var(--r-sm);padding:2px 8px;cursor:pointer}
+  .fwidget{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:var(--r-md);background:var(--surface);margin-bottom:6px}
+  .fwidget .fn{font-weight:550;font-size:13px;color:var(--ink)}
+  .fwidget .fmeta{font-size:11px;color:var(--ink4);margin-left:2px}
+  .fwidget .grow{flex:1}
+  .fwidget .edit{color:var(--ink4);background:none;border:0;cursor:pointer;font-size:13px}
+  .pill-row{display:flex;flex-wrap:wrap;gap:5px;margin-left:auto}
+  .ppill{font-size:10.5px;color:var(--ink4);background:color-mix(in oklab,var(--ink) 6%,transparent);border-radius:var(--r-pill);padding:1px 7px}
+  .dispatch-card{border:1px solid color-mix(in oklab,var(--accent) 30%,var(--rule));border-radius:var(--r-md);background:color-mix(in oklab,var(--accent) 5%,var(--surface));padding:12px;margin-top:6px}
+  .dispatch-hd{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--accent-strong);margin-bottom:10px}
+  .switch{width:30px;height:17px;border-radius:99px;background:var(--accent);position:relative;flex:0 0 auto}
+  .switch::after{content:'';position:absolute;top:2px;left:15px;width:13px;height:13px;border-radius:50%;background:#fff}
+
+  /* ---- card-config: editor + live 飞书卡片预览 ---- */
+  .cfg-split{display:flex;gap:18px;align-items:flex-start}
+  .cfg-editor{flex:1;min-width:0}
+  .cfg-preview{flex:0 0 308px;position:sticky;top:0}
+  .pv-canvas{border:1px solid var(--rule);border-radius:var(--r-lg);background:var(--surface);padding:16px 14px 20px;display:flex;flex-direction:column;align-items:center;gap:12px}
+  .pv-head{display:flex;align-items:center;width:100%;gap:8px;margin-bottom:2px}
+  .pv-label{font-size:10px;color:var(--ink4);text-transform:uppercase;letter-spacing:.5px}
+  .pv-switch{margin-left:auto;display:inline-flex;gap:2px;background:var(--paper);border:1px solid var(--rule);border-radius:var(--r-pill);padding:2px}
+  .pv-switch button{font:inherit;font-size:10.5px;font-weight:550;border:0;background:transparent;color:var(--ink3);padding:3px 9px;border-radius:var(--r-pill);cursor:pointer}
+  .pv-switch button.on{background:var(--accent-bg);color:var(--accent-strong)}
+  .pv-note{font-size:11px;color:var(--ink4);text-align:center;line-height:1.5}
+  /* 飞书卡片真实观感（始终飞书浅色，因为卡片渲染在飞书端） */
+  .fcard{width:280px;border-radius:10px;overflow:hidden;border:1px solid #e7e9eb;background:#fff;box-shadow:0 10px 30px rgba(20,30,60,.16);color:#1f2329}
+  .fhd{padding:12px 15px;font-size:15px;font-weight:600;color:#fff}
+  .fhd.blue{background:#3370ff}.fhd.wathet{background:#5e8df5}.fhd.green{background:#34a853}.fhd.turquoise{background:#1fb6c8}.fhd.orange{background:#ff8800}
+  .fbd{padding:13px 15px;display:flex;flex-direction:column;gap:9px}
+  .fintro{font-size:13.5px;line-height:1.5}
+  .fbtn{text-align:center;padding:9px 12px;border-radius:6px;font-size:13.5px;font-weight:500}
+  .fbtn.primary{background:#3370ff;color:#fff}.fbtn.default{background:#fff;color:#1f2329;border:1px solid #d4d7da}.fbtn.danger{background:#fff;color:#f54a45;border:1px solid #f8c4c2}
+  .fflab{font-size:12.5px;color:#646a73;margin-bottom:-3px}
+  .ffield{background:#f5f6f7;border:1px solid #e7e9eb;border-radius:6px;padding:9px 11px;font-size:12.5px;color:#8f959e}
+  .freq{color:#f54a45}
+  .fimg{height:130px;border-radius:6px;background:repeating-linear-gradient(45deg,#eef1ff,#eef1ff 10px,#f7f8fa 10px,#f7f8fa 20px);display:flex;align-items:center;justify-content:center;color:#8f959e;font-size:12px}
+  .flink{color:#3370ff;font-size:13px;font-weight:500}
+  .pv-card{display:none}.pv-card.on{display:block}
+
+  /* ---- footer config rows with icons ---- */
+  .footrow .fi{flex:0 0 auto;width:15px;height:15px;color:var(--ink4)}
+  .footrow:hover .fi{color:var(--ink3)}.footrow.on .fi{color:var(--accent-strong)}
+
+  /* ---- sidebar: P0 卡片配置 hero + 功能 nav ---- */
+  .hero{display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:var(--r-md);border:1px solid color-mix(in oklab,var(--accent) 28%,transparent);background:var(--accent-bg);cursor:pointer;margin-bottom:12px;text-align:left;width:100%}
+  .hero:hover{background:color-mix(in oklab,var(--accent) 20%,transparent)}
+  .hero.on{box-shadow:0 0 0 2px var(--accent-bg)}
+  .hero .hi{flex:0 0 auto;width:19px;height:19px;color:var(--accent-strong)}
+  .hero .ht{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+  .hero .ht .t{font-size:13.5px;font-weight:650;color:var(--ink)}
+  .hero .ht .s{font-size:11px;color:var(--accent-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hero .arr{color:var(--accent-strong);font-size:14px}
+  .navx{display:flex;flex-direction:column;gap:1px;padding:0 4px}
+  .nxrow{display:flex;align-items:center;gap:9px;height:34px;padding:0 10px;border-radius:var(--r-md);background:transparent;color:var(--ink2);font-size:13px;cursor:pointer;text-align:left;border:0}
+  .nxrow:hover{background:var(--hover)}.nxrow.on{background:var(--selected);color:var(--ink);font-weight:600}
+  .nxrow .nxi{flex:0 0 auto;width:16px;height:16px;color:var(--ink4)}
+  .nxrow:hover .nxi{color:var(--ink3)}.nxrow.on .nxi{color:var(--accent-strong)}
+  .nxrow .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* ---- 运维台 ops table: clickable rows + expand ---- */
+  table.ops tr.opsrow{cursor:pointer}
+  table.ops tr.opsrow:hover{background:var(--hover)}
+  table.ops tr.opsrow.open{background:var(--selected)}
+  .ops-expand>td{padding:0;border-bottom:1px solid var(--rule)}
+  .ops-expand .inner{padding:14px 16px;background:var(--surface)}
+</style>
+</head>
+<body>
+  <div class="chooser">
+    <h1>飞书录入助手 · 设计稿</h1>
+    <div class="seg" id="mode"><button data-m="light" class="on">☀︎ Light</button><button data-m="dark">☾ Dark</button></div>
+    <div class="sp"></div>
+    <div class="note">卡片配置(P0) 置顶 · 提交记录 = 运维台（点行看状态） · Pure light / dark</div>
+  </div>
+
+  <div class="stage"><div class="app">
+    <div class="titlebar"><div class="dots"><i></i><i></i><i></i></div>
+      <div class="tnav"><button class="pin">💬 chat</button><button class="pin">⌘ code</button><button class="pin">📖 wiki</button><button class="pin">🖼 gallery</button><button class="pin on">🛰 feishu</button></div>
+    </div>
+    <div class="body">
+      <!-- SIDEBAR (corrected hierarchy: list primary, config footer) -->
+      <aside class="side">
+        <div class="statusrow on"><span class="sdot"></span><span class="lab">在线 · 录入助手</span><button class="runbtn">停止</button></div>
+        <!-- P0：卡片配置置顶、突出 -->
+        <button class="hero on" id="hero">
+          <svg class="hi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 13h7M7 16.5h4"/></svg>
+          <span class="ht"><span class="t">卡片配置</span><span class="s">搭建飞书能力卡片 · 核心</span></span>
+          <span class="arr">›</span>
+        </button>
+        <div class="sec"><span>功能</span></div>
+        <div class="navx" id="nav">
+          <button class="nxrow" data-p="inbox"><svg class="nxi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10"/></svg><span class="nm">提交记录 · 运维台</span><span class="badge">3</span></button>
+          <button class="nxrow" data-p="acl"><svg class="nxi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4-3 7-7 8-4-1-7-4-7-8V6z"/></svg><span class="nm">提问权限</span><span class="badge">5</span></button>
+          <button class="nxrow" data-p="conn"><svg class="nxi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 8L9 4l-3 8H2"/></svg><span class="nm">连接 · 日志</span></button>
+          <button class="nxrow" data-p="guide"><svg class="nxi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5a2 2 0 0 1 2-2h13v14H6a2 2 0 0 0-2 2 2 2 0 0 0 2 2h13"/></svg><span class="nm">上手指引</span></button>
+        </div>
+      </aside>
+
+      <div class="main"><div class="pad">
+
+        <!-- PAGE: INBOX = 运维台（点行看状态） -->
+        <div class="page" data-page="inbox">
+          <div class="phd"><div style="font-size:15px;font-weight:650">提交记录 · 运维台</div><div><button class="btn sm">刷新</button> <button class="btn sm">导出 CSV</button></div></div>
+          <p class="hint" style="margin-bottom:14px">所有 @机器人 的提交集中盯。<b>点任意一行</b>展开状态 / 答复 / 派发详情。</p>
+          <table class="ops" id="opstable"><thead><tr><th>提交人</th><th>表单 / 提问</th><th>状态</th><th>时间</th></tr></thead><tbody>
+            <tr class="opsrow open"><td><b>张天</b></td><td>查询回传逻辑 · 是否有灰度逻辑…</td><td><span class="pill run">● 运行中</span></td><td>13:32</td></tr>
+            <tr class="ops-expand"><td colspan="4"><div class="inner">
+              <div class="meta" style="margin-top:0">提问：代码中是否有灰度逻辑，灰度逻辑的日志数仓是哪个 · <code>ou_68510e…</code> <button class="acc-add">加入白名单</button></div>
+              <div class="answer live"><div class="ah">运行中 · 流式刷入飞书卡片<span class="loc">claude · 问答(只读) @ /pltv</span></div>
+                <div class="ab">存在灰度开关 `gray_ratio`（config/gray.yaml），按 game_id 维度生效；命中后回传日志写入数仓 `dw_ad.callback_s2s_di`<span class="cursor"></span></div></div>
+            </div></td></tr>
+            <tr class="opsrow"><td><b>李雷</b></td><td>Grafana 报表 · call-back 监控</td><td><span class="pill ok">✓ 已答复</span></td><td>11:08</td></tr>
+            <tr class="ops-expand" style="display:none"><td colspan="4"><div class="inner">
+              <div class="imgcard"><div class="ph">看板截图（PNG）</div><div class="cap">在 Grafana 打开完整看板 ↗</div></div>
+              <div class="meta" style="margin-bottom:0">已渲染看板并回贴飞书原会话 ✓</div>
+            </div></td></tr>
+            <tr class="opsrow"><td><b>韩梅</b></td><td>新建回传需求 · ROK 越南 iOS</td><td><span class="pill ok">✓ 已派发</span></td><td>昨天</td></tr>
+            <tr class="ops-expand" style="display:none"><td colspan="4"><div class="inner">
+              <table class="kv" style="margin-bottom:0"><tbody>
+                <tr><th>需求名称</th><td>ROK 越南 iOS 单账户回传</td></tr>
+                <tr><th>优先级</th><td>P1 高</td></tr>
+                <tr><th>派发</th><td>claude · 改代码 @ /pltv · <span style="color:var(--success);font-weight:600">已答复回飞书</span></td></tr>
+              </tbody></table>
+            </div></td></tr>
+            <tr class="opsrow"><td><span style="color:var(--ink4)">ou_3f9a…</span></td><td>查询状态</td><td><span class="pill err">⚠ 婉拒</span></td><td>昨天</td></tr>
+            <tr class="ops-expand" style="display:none"><td colspan="4"><div class="inner">
+              <div class="meta" style="margin:0">非白名单提交，已按婉拒语回复，未落库、未派发。 <button class="acc-add">加入白名单</button></div>
+            </div></td></tr>
+          </tbody></table>
+        </div>
+
+        <!-- PAGE: CARD CONFIG -->
+        <div class="page" data-page="card"><div class="cardcfg">
+          <div class="phd"><p class="hint">每个「能力」= 飞书菜单里的一个按钮 + 它背后的表单 / 动作，合成一张卡集中编辑、可折叠。保存即热更新到 bot。</p>
+            <div style="display:flex;gap:8px;flex:0 0 auto"><button class="btn">恢复默认</button><button class="btn pri">保存配置</button></div></div>
+
+          <div class="gcard">
+            <div class="gt">能力菜单 · 外观</div>
+            <div class="field"><span class="lab">菜单标题</span><input class="f" value="录入飞书助手"></div>
+            <div class="field" style="margin:0"><span class="lab">引导语（@机器人后弹出）</span><input class="f" value="你好，我是录入助手。请选择要做的事👇"></div>
+          </div>
+
+          <div class="gt" style="margin-bottom:12px">能力 · 3<button class="add" style="margin-left:auto;text-transform:none;letter-spacing:0;font-size:11px;color:var(--accent-strong);background:var(--accent-bg);border:0;border-radius:var(--r-sm);padding:3px 9px;cursor:pointer">＋ 添加能力</button></div>
+
+          <!-- ability 1: form + CLI dispatch (expanded) -->
+          <div class="ability open">
+            <div class="abhd"><span class="caret">▶</span><span class="abic">📝</span><span class="abnm">新建回传需求</span><span class="tag t-main">主</span><span class="tag t-form">表单</span></div>
+            <div class="abbody">
+              <div class="grid2">
+                <div class="field" style="margin:0"><span class="lab">按钮文字</span><input class="f" value="📝 新建回传需求"></div>
+                <div class="field" style="margin:0"><span class="lab">行为</span><select class="f"><option>弹表单</option><option>Grafana 报表</option><option>查询(代码)</option></select></div>
+              </div>
+              <div class="subsec">表单字段 <button class="add">＋ 字段</button></div>
+              <div class="fwidget"><span class="fn">需求名称</span><span class="fmeta">单行 · 必填</span><span class="pill-row"><span class="ppill">title</span></span><button class="edit">⋯</button></div>
+              <div class="fwidget"><span class="fn">关联单号</span><span class="fmeta">单行</span><span class="pill-row"><span class="ppill">ticket</span></span><button class="edit">⋯</button></div>
+              <div class="fwidget"><span class="fn">优先级</span><span class="fmeta">下拉 · 必填</span><span class="pill-row"><span class="ppill">P0</span><span class="ppill">P1</span><span class="ppill">P2</span></span><button class="edit">⋯</button></div>
+              <div class="fwidget"><span class="fn">需求描述</span><span class="fmeta">多行</span><button class="edit" style="margin-left:auto">⋯</button></div>
+              <div class="subsec">提交后派发</div>
+              <div class="dispatch-card">
+                <div class="dispatch-hd"><span class="switch"></span> 派发到本地 CLI 会话（提单 → 自动改代码 / 回答）</div>
+                <div class="field" style="margin-bottom:10px"><span class="lab">关联工作目录</span><div class="row" style="margin:0"><input class="f grow" readonly value="/Users/…/pltv"><button class="btn sm">选择</button></div></div>
+                <div class="grid3">
+                  <div><span class="lab">用途</span><select class="f"><option>问答（只读）</option><option>改代码</option></select></div>
+                  <div><span class="lab">Provider</span><select class="f"><option>Claude</option></select></div>
+                  <div><span class="lab">触发</span><select class="f"><option>提交即自动</option></select></div>
+                </div>
+                <div class="field" style="margin:10px 0 0"><span class="lab">Prompt 模板（留空按「用途」自动拼）</span>
+                  <div class="chips"><span style="font-size:11px;color:var(--ink4);align-self:center">点字段插入占位：</span><span class="chip">需求名称<code>{title}</code></span><span class="chip">优先级<code>{priority}</code></span></div>
+                  <textarea class="f" rows="2" placeholder="用户提单「{title}」(优先级 {priority})，请在本目录完成对应改动。"></textarea></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ability 2: grafana (collapsed) -->
+          <div class="ability">
+            <div class="abhd"><span class="caret">▶</span><span class="abic">📊</span><span class="abnm">查 call-back 监控</span><span class="tag t-form">次</span><span class="tag t-graf">Grafana</span></div>
+            <div class="abbody">
+              <div class="grid2"><div class="field" style="margin:0"><span class="lab">按钮文字</span><input class="f" value="📊 查 call-back 监控"></div><div class="field" style="margin:0"><span class="lab">行为</span><select class="f"><option>Grafana 报表</option></select></div></div>
+              <div class="subsec">Grafana 看板</div>
+              <div class="dispatch-card" style="border-color:color-mix(in oklab,var(--success) 30%,var(--rule));background:color-mix(in oklab,var(--success) 5%,var(--surface))">
+                <div class="field" style="margin-bottom:10px"><span class="lab">看板链接</span><input class="f" value="https://monitor.…/d/jexkmkd/call-back?orgId=3&…"></div>
+                <div class="field" style="margin-bottom:10px"><span class="lab">Service account token（存本机不入库）</span><input class="f" type="password" value="glsa_••••••••"></div>
+                <div class="grid3"><div><span class="lab">按钮文案</span><input class="f" value="打开看板 ↗"></div><div><span class="lab">图宽</span><input class="f" value="1200"></div><div><span class="lab">图高</span><input class="f" value="800"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ability 3: code action (collapsed) -->
+          <div class="ability">
+            <div class="abhd"><span class="caret">▶</span><span class="abic">🔍</span><span class="abnm">查询状态</span><span class="tag t-form">次</span><span class="tag t-cli">查询</span></div>
+            <div class="abbody"><p class="hint" style="margin:10px 0 0">非表单动作：由 <code style="font-family:var(--mono);font-size:11px">fbotMenu.cjs</code> 代码处理（onAction）。</p></div>
+          </div>
+        </div></div>
+
+        <!-- PAGE: ACL -->
+        <div class="page" data-page="acl">
+          <div class="phd"><p class="hint">开启后只有名单内的人能提问。名单存「open_id + 姓名」：提交人 ou_… 在提交记录详情能看到，点「加入白名单」一键带入。命中先寒暄，未命中婉拒。</p><button class="btn pri" style="flex:0 0 auto">保存白名单</button></div>
+          <label class="toggle" style="margin-bottom:16px"><input type="checkbox" checked> 启用提问白名单（关闭 = 所有人可提问）</label>
+          <div class="sech">名单 <button class="btn sm add">＋ 添加</button></div>
+          <div class="row"><input class="f grow" value="ou_68510e962f285abeef3822fc308a50b0"><input class="f" style="width:140px" value="张天"><button class="btn sm">删</button></div>
+          <div class="row"><input class="f grow" value="ou_a1b2c3d4e5…"><input class="f" style="width:140px" value="李雷"><button class="btn sm">删</button></div>
+          <div class="sech" style="margin-top:22px">话术（可选）</div>
+          <div class="field"><span class="lab">寒暄语（命中名单）· 占位 {name} / {question}</span><input class="f" value="好的，「{name}」，我这就去帮你查询问题：「{question}」"></div>
+          <div class="field"><span class="lab">婉拒语（不在名单）</span><input class="f" value="不好意思，你需要先开通提问权限。"></div>
+        </div>
+
+        <!-- PAGE: CONN -->
+        <div class="page" data-page="conn">
+          <p class="hint">飞书自建应用凭证；长连接随 App 在线（启停在左上角状态行）。改后台权限/事件后需重新「发布版本」。</p>
+          <div class="field"><span class="lab">App ID</span><input class="f" value="cli_a940fad4a779dbef"></div>
+          <div class="field"><span class="lab">App Secret</span><input class="f" type="password" value="已配置（留空不改）"></div>
+          <div class="field"><span class="lab">测试群 / 会话 chat_id</span><input class="f" placeholder="oc_xxx"></div>
+          <div class="row"><button class="btn">保存连接</button><button class="btn">发测试卡片</button></div>
+          <div class="sech">运行日志 <button class="btn sm add">清空</button></div>
+          <div class="log"><div><span class="ts">13:32:01</span>收到提交：查询回传逻辑</div><div><span class="ts">13:32:01</span>↗ 派发到会话：/pltv</div><div><span class="ts">13:33:18</span>流式刷入飞书卡片…</div><div><span class="ts">13:33:40</span>已答复回飞书原会话</div></div>
+        </div>
+
+        <!-- PAGE: GUIDE -->
+        <div class="page" data-page="guide">
+          <p class="hint">第一次配置按下面 6 步走一遍即可。每步右边「去配置」跳到对应页。飞书后台那步只需做一次。</p>
+          <div class="step"><span class="stepn">1</span><div><div class="stephd">在飞书开放平台建「自建应用」并开权限 <button class="go">打开权限页 ↗</button></div><div class="stepd">开 <code>im:message</code>、<code>im:resource</code>（上传图片）、<code>contact:user.base:readonly</code>（查姓名）。事件订阅选<b>长连接</b>。改完<b>发布版本</b>。</div></div></div>
+          <div class="step"><span class="stepn done">✓</span><div><div class="stephd">填 App ID / App Secret <button class="go">去配置 →</button></div><div class="stepd">在「连接」页填凭证保存。<span class="ok">已填写</span></div></div></div>
+          <div class="step"><span class="stepn done">✓</span><div><div class="stephd">启动长连接（左上角启动） <button class="go">去连接 →</button></div><div class="stepd">状态变 <b>在线</b> 即成功。<span class="ok">在线 录入助手</span></div></div></div>
+          <div class="step"><span class="stepn done">✓</span><div><div class="stephd">配卡片 + 把表单接到本地 CLI <button class="go">去配置 →</button></div><div class="stepd">每个表单底部开「派发」，选目录 + 触发。<span class="ok">已接 1+ 个表单</span></div></div></div>
+          <div class="step"><span class="stepn done">✓</span><div><div class="stephd">（可选）开提问白名单 <button class="go">去配置 →</button></div><div class="stepd">只允许名单内的人提问。<span class="ok">已开启 · 5 人</span></div></div></div>
+          <div class="step"><span class="stepn">6</span><div><div class="stephd">测一下 <button class="go">去测试 →</button></div><div class="stepd">飞书 <b>@机器人</b> → 选项 → 填表单 → 提交。处理流在提交记录详情实时看，结果回贴原会话。</div></div></div>
+        </div>
+
+      </div></div>
+    </div>
+  </div></div>
+
+<script>
+  const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+  function setPage(p){
+    $$('.page').forEach(x=>x.classList.toggle('on',x.dataset.page===p));
+    $('#hero').classList.toggle('on',p==='card');
+    $$('#nav .nxrow').forEach(x=>x.classList.toggle('on',x.dataset.p===p));
+  }
+  $('#hero').addEventListener('click',()=>setPage('card'));
+  $('#nav').addEventListener('click',e=>{const b=e.target.closest('.nxrow');if(b)setPage(b.dataset.p);});
+  document.addEventListener('click',e=>{const h=e.target.closest('.abhd');if(h)h.parentElement.classList.toggle('open');});
+  // 运维台：点行展开/收起状态详情
+  $$('#opstable tbody tr.opsrow').forEach(r=>r.addEventListener('click',()=>{
+    const ex=r.nextElementSibling; if(!ex||!ex.classList.contains('ops-expand'))return;
+    const open=ex.style.display!=='none'&&ex.style.display!=='';
+    // 先全收
+    $$('#opstable .ops-expand').forEach(x=>x.style.display='none');
+    $$('#opstable .opsrow').forEach(x=>x.classList.remove('open'));
+    if(!open){ ex.style.display='table-row'; r.classList.add('open'); }
+  }));
+  $('#mode').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;[...e.currentTarget.children].forEach(x=>x.classList.toggle('on',x===b));document.body.classList.toggle('dark',b.dataset.m==='dark');});
+  setPage('card');   // 默认落 P0 卡片配置
+</script>
+</body>
+</html>

@@ -5,9 +5,15 @@ const { app, BrowserWindow, shell, ipcMain, dialog, nativeImage } = require('ele
 const path = require('path');
 const { registerLocalAgent, killAllSessions } = require('./localAgent.cjs');
 const { registerNotes } = require('./notes.cjs');
+const { registerAutomation } = require('./automation.cjs');
+const { registerReview } = require('./review.cjs');
 const { registerFbot, stop: stopFbot } = require('./fbot.cjs');
 
 const isDev = !app.isPackaged;
+// Vite dev 服务器需要 inline/eval 脚本与 ws HMR，无法配严格 CSP；Electron 因此打印
+// "Insecure Content-Security-Policy" 警告（仅开发期，打包版用 file:// 不触发）。关掉这条
+// 噪声警告，避免和真实日志混淆。打包版本不受影响。
+if (isDev) process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true';
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5177';
 // v2 is the only shell now; root renders it directly (no router).
 const ENTRY_PATH = process.env.CHAYA_ENTRY || '/';
@@ -123,6 +129,10 @@ function createWindow() {
 // 本地 Agent 桥：纯本地功能，与后端无关。仅注册一次。
 registerLocalAgent(ipcMain, dialog);
 registerNotes(ipcMain, dialog);
+// 自动化任务引擎（纯本地，存 userData；调度仅在 App 运行期间）。
+registerAutomation(ipcMain);
+// 代码评审引擎（纯本地，存 userData；只看 git 工作区改动，自由选 provider 跑只读评审）。
+registerReview(ipcMain);
 // 录入飞书助手桥（长连接 bot，纯本地；启停由渲染层控制，不自动启）。
 registerFbot(ipcMain);
 

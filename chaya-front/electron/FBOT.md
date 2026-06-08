@@ -105,7 +105,45 @@ pnpm electron:dev   # 左栏「飞书」→ 启动
 
 ---
 
-## 7. TODO / Backlog
+## 7. 表单 → 本地 CLI 派发（#4，已实现核心闭环）
+
+飞书提单可直接落到本地 CLI agent 会话，让 agent 自动改代码。**纯 renderer 实现，无需改 Electron**（route 是数据，随 spec 持久化 / `setSpecData` 已回写 `forms[].route` 并 emit `spec`）。
+
+- **数据**：`SpecForm.route?: SpecRoute`（`src/v2/services/fbot.ts`）
+  - `kind:'agent'` · `cwd` · `provider` · `permMode` · `sessionMode:'reuse'|'fresh'` · `trigger:'auto'|'manual'` · `promptTemplate`（`{字段名}` 占位）
+- **配置 UI**：FbotView「卡片配置」→ 每个表单底部「提交后派发到本地 CLI 会话」面板（目录走 `localAgent.pickFolder`）。
+- **派发**：`src/v2/services/fbotDispatch.ts` → `dispatchSubmission()` → `localAgent.send({cwd, prompt, lane})`
+  - lane：reuse=`fbot`（每目录一条常驻）/ fresh=`fbot-<subId>`。走主进程 cwd+lane，**无需 UI 标签**。
+  - prompt：有模板按模板渲染，否则按字段标签自动拼。
+- **自动触发**：`trigger='auto'` 监听放 `ClientShell`（应用层，停在哪个页都生效）；`manual` 在「提交记录」详情点「派发到会话」。
+- **用途 intent**：`SpecRoute.intent='answer'|'change'`。answer=只读问答（dispatch 锁 `permMode='plan'` + 回答类默认提示词，不改代码）；change=改代码（默认）。UI 路由配置「用途」下拉，选问答自动锁权限档。
+- **流式答复回原会话（Feishu AI 流式卡，已实现）**：提交记 `replyTo`；fbotDispatch 监听 lane 流（事件 cwd=`<dir>#@#<lane>` 隔离）→ `fbot.streamStart`(cardkit `card.create`+`message.reply` 起流式卡) → 节流(~700ms) `fbot.streamPush`(cardkit `cardElement.content` 覆盖式推**全量文本**，飞书自动 diff 出**打字机**) → `fbot.streamSettle`(关 streaming_mode + 更新 header 绿/答复)。cardkit 不可用时退回 `reply`/`patchCard`。
+  - **历史全保留**：fbotDispatch 累积 `committed`(每轮 assistant 文本) + `live`(当前增量) + `activity`(工具/子任务进度)，覆盖式推全量 → 前文不被冲掉。
+  - **子 agent 不再「冻住」**：捕获主/子 agent 的 tool_use → `activity` 行（启动子任务/搜索/读取…）实时刷进卡，子任务执行期间也有进度。
+  - **专业化**：卡片去 emoji（✅🤖🔒⚠ → 干净标题 + 模板配色 blue 进行中 / green 答复 / red 未完成 / orange 婉拒）。
+- **⚠ 需重启 Electron**：本轮动了 `electron/fbot.cjs`（reply + replyTo）和 `preload.cjs`（暴露 reply）—— 改 preload/main 必须完整重启 `pnpm electron:dev` 才生效。
+- **prompt 注意**：默认模板写「完成对应改动」；纯查询类提单（如"支持哪些广告id"）会让 agent 试图改代码。查询场景请在该表单的 promptTemplate 里改成"调研并回答，不要改代码"（或等 #5 的查询档）。
+
+## 7b. 提问白名单（ACL）+ 上手指引
+
+- **白名单**：`fbotAcl.json`（`{enabled, entries:[{openId,name}], greetTemplate, denyMessage}`）。门禁在 `fbot.cjs` onCardAction 的 submit 分支，**早于 onSubmit/落库/派发**：
+  - 不在名单 → 回 `buildDenyCard`（婉拒），不落库、不派发。
+  - 在名单 → `ctx.userName=姓名`，落库带 `userName`，回执走 `buildGreetCard`（「好的，「{name}」，我这就去帮你查询问题：「{question}」」），真正答复随后由 #4 reply 回贴。
+  - 飞书无可靠 open_id→姓名接口 → 名单直接存 `{openId,name}`；admin 从「提交记录」详情拷 `ou_*` + 填姓名（详情里有「加入白名单」一键）。
+  - IPC：`fbot:getAcl` / `fbot:setAcl`。UI：FbotView「提问权限」tab。
+- **上手指引**：FbotView 默认落地「上手指引」tab —— 6 步编号清单（飞书后台权限/事件/发版 → 填 creds → 启动 → 配卡片+接 CLI → 白名单 → 测试），每步带完成态 ✓ + 「去配置」跳转。
+
+## 8. TODO / Backlog
+
+### P0 飞书功能 5 件套（本轮路线）
+- [x] **#4 表单 → 本地 CLI 会话**（提单→自动改代码；auto/manual + reuse/fresh + 模板）
+- [ ] **#1 会话列表**：`im.v1.chat.list` → IPC `fbot:listChats` → 新 tab（群名/类型/chat_id）
+- [ ] **#3 功能测试**：从 #1 选会话发卡片 + @bot 实时流面板（现有日志升级成可读时间线）
+- [x] **#4 反馈闭环**：派发会话 done → `fbot.reply` 回贴答复卡到原 @；提交记录详情看实时流 + 答复
+- [ ] **#4+ CLI 视图可见**：把 lane='fbot' 会话也surface成 CLI 标签（现仅在提交记录详情看流）
+- [x] **#5 Grafana 报表（菜单选项直接触发）**：`SpecMenuOption.route.kind='http'`{linkUrl,renderUrl,token,buttonText,width,height}。onCardAction 先回「生成中」卡(避开 3s 回调超时)→异步 `fetch(/render, Bearer token)` 出 PNG→`im.v1.image.create` 传飞书→`patchRawCard` 定稿(图+链接)。出图失败自动降级只给链接(顺带验证 image-renderer 是否装)。token 存 fbotSpec.json(userData)不入库。renderUrl 留空自动 /d/→/render/d/ 推导。
+- [x] **提交人姓名**：`fbot.resolveUser(openId)`→白名单优先,再 best-effort `contact.v3.user.get`(受通讯录范围限制),缓存。提交记录列表/详情显示姓名;「加入白名单」预填已解析的姓名。
+- [ ] **#5+**：表单参数化 Grafana(可变时间/过滤)；HTTP 通用动作(非 Grafana)
 
 ### P0 接真实业务
 - [ ] `onSubmit` 接「回传需求」真实落地（定目标：后端 API / Bitable / 工作项 + 字段表）
