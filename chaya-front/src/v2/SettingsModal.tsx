@@ -1,17 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../utils/apiClient';
 import {
   getLLMConfigs, createLLMConfig, updateLLMConfig, deleteLLMConfig,
   getLLMConfigApiKey, listAvailableModels, getSupportedProviders,
   type LLMConfigFromDB, type SupportedProvider,
 } from '../services/llmApi';
-import { mcpApi, oauthApi, type MCPServer } from '../services/integrationsApi';
+import { mcpApi, oauthApi, type MCPServer, type McpDetectResult } from '../services/integrationsApi';
 import {
   getSmartnoteApiKey, setSmartnoteApiKey,
   getSmartnoteBaseUrl, setSmartnoteBaseUrl,
   smartnoteProbe,
 } from '../services/smartnoteApi';
-import type { ClientSettings, AppearanceMode, ColorTheme, GlassZone } from '../components/SettingsPage';
+import type { ClientSettings, ColorTheme, GlassZone } from '../components/SettingsPage';
 import type { FontId } from '../components/SettingsPage';
 import { type TypeSpeed } from './typewriter';
 import { getBackendUrl } from '../utils/backendUrl';
@@ -79,21 +80,15 @@ const FONTS: { id: FontId; sampleStyle: React.CSSProperties }[] = [
   { id: 'firacode', sampleStyle: { fontFamily: '"Fira Code", ui-monospace, monospace', fontFeatureSettings: '"liga" 1, "calt" 1' } },
 ];
 
-const APPEARANCES: { id: AppearanceMode; label: string; icon: string }[] = [
-  { id: 'light',  label: '浅色',     icon: '☀' },
-  { id: 'dark',   label: '深色',     icon: '☾' },
-  { id: 'system', label: '跟随系统', icon: '⌣' },
-];
-
 // 侧栏玻璃开关已移除(Pure 走窗口 vibrancy 常态)；保留默认 zones 供 ClientShell 引用。
 export const GLASS_DEFAULT_ZONES: GlassZone[] = [];
 
-// surface = swatch canvas (dark-first brands show their dark bg);
-// ramp = [tint, base, deep] accent layers shown as chips
-const THEMES: { id: ColorTheme; label: string; sub: string; surface: string; ramp: [string, string, string] }[] = [
-  { id: 'anthropic', label: 'Anthropic', sub: '象牙陶土',   surface: '#faf9f5', ramp: ['#f5e5de', '#d97757', '#c15f3c'] },
-  { id: 'codex',     label: 'Pure',      sub: '纯净',       surface: '#eef0f3', ramp: ['#e2e4e8', '#9b9da4', '#c8cace'] },
-  { id: 'razer',     label: 'Razer',     sub: '暗夜霓绿',   surface: '#0a0a0a', ramp: ['#0e3300', '#35de12', '#5cff36'] },
+// 独立 light/dark 切换已下线：明暗随主题绑定（anthropic=浅色 · Pure/Razer=深色）。
+// surface = swatch canvas（直接预览该主题的真实明暗）；ramp = [tint, base, deep] accent。
+const THEMES: { id: ColorTheme; label: string; sub: string; mode: 'light' | 'dark'; surface: string; ramp: [string, string, string] }[] = [
+  { id: 'anthropic', label: 'Anthropic', sub: '象牙陶土', mode: 'light', surface: '#faf9f5', ramp: ['#f5e5de', '#d97757', '#c15f3c'] },
+  { id: 'codex',     label: 'Pure',      sub: '纯净',     mode: 'dark',  surface: '#26272d', ramp: ['#33343c', '#8a8d98', '#3a3b44'] },
+  { id: 'razer',     label: 'Razer',     sub: '暗夜霓绿', mode: 'dark',  surface: '#0a0a0a', ramp: ['#0e3300', '#35de12', '#5cff36'] },
 ];
 
 // Flat, ordered section list (drives the single-page layout + scroll-spy).
@@ -376,36 +371,46 @@ const AppearancePane: React.FC<{ settings: ClientSettings; updateSettings: (p: P
           ))}
         </div>
       </Row>
-      <Row label={tr('settings.appearance.title')}>
-        <div className="v2-seg">
-          {APPEARANCES.map((a) => (
-            <button
-              key={a.id}
-              className={`v2-seg-item${(settings.appearance ?? 'dark') === a.id ? ' active' : ''}`}
-              onClick={() => updateSettings({ appearance: a.id })}
-            >
-              <span className="ic">{a.icon}</span>{tr(`settings.appearance.${a.id}`)}
-            </button>
-          ))}
-        </div>
-      </Row>
       <Row label={tr('settings.theme.title')}>
         <div className="v2-theme-row">
-          {THEMES.map((t) => (
-            <button
-              key={t.id}
-              className={`v2-theme-chip${(settings.theme ?? 'codex') === t.id ? ' active' : ''}`}
-              onClick={() => updateSettings({ theme: t.id })}
-              title={`${t.label} · ${tr(`settings.theme.sub.${t.id}`)}`}
-            >
-              <span className="sw" style={{ background: t.surface }}>
-                {t.ramp.map((c, i) => <i key={i} style={{ background: c }} />)}
-              </span>
-              <span className="nm">{t.label}</span>
-            </button>
-          ))}
+          {THEMES.map((t) => {
+            // Pure(codex) 是我们自己的配色：支持明/暗/自动，chip 上的明暗标签跟着用户选择走。
+            // 其它(Anthropic/Razer)是品牌联动主题，只有一种固定配色。
+            const appr = settings.appearance ?? 'dark';
+            const modeKey = t.id === 'codex' ? appr : t.mode;
+            return (
+              <button
+                key={t.id}
+                className={`v2-theme-chip${(settings.theme ?? 'codex') === t.id ? ' active' : ''}`}
+                onClick={() => updateSettings({ theme: t.id })}
+                title={`${t.label} · ${tr(`settings.theme.sub.${t.id}`)} · ${tr(`settings.appearance.${modeKey}`)}`}
+              >
+                <span className="sw" style={{ background: t.surface }}>
+                  {t.ramp.map((c, i) => <i key={i} style={{ background: c }} />)}
+                </span>
+                <span className="nm">{t.label}</span>
+                <span className="md">{tr(`settings.appearance.${modeKey}`)}</span>
+              </button>
+            );
+          })}
         </div>
       </Row>
+      {/* Pure 专属：明 / 暗 / 自动（自动 = 跟随 macOS 实时切换）。其它主题为固定配色，不显示。 */}
+      {(settings.theme ?? 'codex') === 'codex' && (
+        <Row label={tr('settings.appearance.title')} sub={tr('settings.appearance.systemHint') || undefined}>
+          <div className="v2-seg">
+            {(['light', 'dark', 'system'] as const).map((m) => (
+              <button
+                key={m}
+                className={`v2-seg-item${(settings.appearance ?? 'dark') === m ? ' active' : ''}`}
+                onClick={() => updateSettings({ appearance: m })}
+              >
+                {tr(`settings.appearance.${m}`)}
+              </button>
+            ))}
+          </div>
+        </Row>
+      )}
     </Section>
     <Section title={tr('settings.font.title')} hint={tr('settings.font.hint')}>
       <div className="v2-set-grid">
@@ -1209,15 +1214,6 @@ const McpPane: React.FC = () => {
   useEffect(() => { refresh(); }, []);
   const [editing, setEditing] = useState<null | { id?: string; name: string; url: string; type: 'http' | 'sse' | 'stdio'; enabled: boolean }>(null);
 
-  const onProbe = async (m: MCPServer) => {
-    try {
-      const res = await mcpApi.probe(m.id);
-      window.alert(res.ok
-        ? tr('settings.mcp.probeOk', { count: res.tool_count }) + (res.tools ? `\n${res.tools.slice(0, 12).join(', ')}` : '')
-        : tr('settings.mcp.probeFail', { error: res.error || tr('settings.mcp.unknown') }));
-      refresh();
-    } catch (e: any) { window.alert(e?.message || tr('settings.mcp.probeFailed')); }
-  };
   const onToggle = async (m: MCPServer) => {
     try { await mcpApi.update(m.id, { enabled: !m.enabled }); refresh(); }
     catch (e: any) { window.alert(e?.message || tr('settings.mcp.failed')); }
@@ -1237,18 +1233,22 @@ const McpPane: React.FC = () => {
         hint={tr('settings.mcp.hint')}
         trailing={<button className="v2-set-btn primary" onClick={onAdd}>＋ {tr('settings.mcp.add')}</button>}
       >
-        {!list && <div className="v2-set-empty">{tr('settings.mcp.loading')}</div>}
-        {list && list.length === 0 && <div className="v2-set-empty">{tr('settings.mcp.empty')}</div>}
-        {list && list.map((m) => (
-          <McpRow
-            key={m.id}
-            m={m}
-            onProbe={onProbe}
-            onToggle={onToggle}
-            onEdit={onEdit}
-            onDelete={onDelete}
-          />
-        ))}
+        {!list && <div className="v2-mcp-empty">{tr('settings.mcp.loading')}</div>}
+        {list && list.length === 0 && <div className="v2-mcp-empty">{tr('settings.mcp.empty')}</div>}
+        {list && list.length > 0 && (
+          <div className="v2-mcp-list">
+            {list.map((m) => (
+              <McpRow
+                key={m.id}
+                m={m}
+                onChanged={refresh}
+                onToggle={onToggle}
+                onEdit={onEdit}
+                onDelete={onDelete}
+              />
+            ))}
+          </div>
+        )}
       </Section>
 
       {editing && (
@@ -1262,21 +1262,59 @@ const McpPane: React.FC = () => {
   );
 };
 
+/* Bring-your-own-app OAuth credentials, cached per MCP URL in localStorage.
+   Used when a server rejects anonymous Dynamic Client Registration (e.g.
+   Facebook Ads) — the user supplies their own registered client_id/secret,
+   shared between the edit form (proactive config + echo-back) and the
+   authorize() fallback prompt. */
+export const mcpOauthCredKey = (url: string) => `mcp_oauth_client::${url}`;
+export const loadMcpOauthCred = (url: string): { client_id?: string; client_secret?: string } | null => {
+  try { const r = localStorage.getItem(mcpOauthCredKey(url)); return r ? JSON.parse(r) : null; } catch { return null; }
+};
+export const saveMcpOauthCred = (url: string, c: { client_id: string; client_secret: string }) => {
+  try {
+    if (c.client_id) localStorage.setItem(mcpOauthCredKey(url), JSON.stringify(c));
+    else localStorage.removeItem(mcpOauthCredKey(url));
+  } catch { /* ignore quota */ }
+};
+
 /* A single MCP server row. Owns its OAuth state so the authorize/re-authorize
    button + status pill (已授权 / 已过期 / 未授权) live per-server. */
 const McpRow: React.FC<{
   m: MCPServer;
-  onProbe: (m: MCPServer) => void | Promise<void>;
+  onChanged: () => void;
   onToggle: (m: MCPServer) => void | Promise<void>;
   onEdit: (m: MCPServer) => void;
   onDelete: (m: MCPServer) => void | Promise<void>;
-}> = ({ m, onProbe, onToggle, onEdit, onDelete }) => {
+}> = ({ m, onChanged, onToggle, onEdit, onDelete }) => {
   const { t: tr } = useI18n();
   // stdio servers run as a child process — no OAuth. http/sse may need it.
   const oauthEligible = m.type !== 'stdio';
   const [hasToken, setHasToken] = useState<boolean | null>(null);
   const [expired, setExpired] = useState(false);
   const [authBusy, setAuthBusy] = useState<'discover' | 'redirect' | 'polling' | null>(null);
+  // Lightweight classification (skip_dcr) so the row knows whether this server
+  // needs OAuth at all — token-in-URL / no-auth servers show "connect" instead
+  // of "authorize".
+  const [det, setDet] = useState<McpDetectResult | null>(null);
+  // Inline expand / connect — replaces the old centered probe modal: tools,
+  // URL and any connection error live in-place under the row.
+  const [expanded, setExpanded] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [conn, setConn] = useState<null | { ok: boolean; tools?: string[]; error?: string; tokenInUrl?: boolean; provider?: string }>(null);
+  // Electron disables window.prompt(), so DCR-failure recovery collects the
+  // bring-your-own-app client_id/secret through this in-app modal instead.
+  // `resolve` bridges the async authorize() flow to the modal's confirm/cancel.
+  const [credModal, setCredModal] = useState<null | {
+    resolve: (v: { client_id: string; client_secret: string } | null) => void;
+    cid: string;
+    csecret: string;
+  }>(null);
+  const requestCreds = (initial: { client_id?: string; client_secret?: string }) =>
+    new Promise<{ client_id: string; client_secret: string } | null>((resolve) =>
+      setCredModal({ resolve, cid: initial.client_id || '', csecret: initial.client_secret || '' })
+    );
 
   // Probe token status on mount + whenever the URL changes.
   useEffect(() => {
@@ -1285,6 +1323,9 @@ const McpRow: React.FC<{
     oauthApi.tokenStatus(m.url)
       .then((r) => { if (!cancelled) { setHasToken(!!r?.has_token); setExpired(!!r?.expired); } })
       .catch(() => { if (!cancelled) { setHasToken(null); setExpired(false); } });
+    oauthApi.detect(m.url, true)
+      .then((r) => { if (!cancelled) setDet(r); })
+      .catch(() => { /* classification is best-effort */ });
     return () => { cancelled = true; };
   }, [oauthEligible, m.url]);
 
@@ -1292,13 +1333,53 @@ const McpRow: React.FC<{
     if (!m.url) return;
     setAuthBusy('discover');
     try {
-      const meta = await oauthApi.discover(m.url);
+      let meta: Awaited<ReturnType<typeof oauthApi.discover>>;
+      try {
+        meta = await oauthApi.discover(m.url);
+      } catch (discErr) {
+        // Discovery failed — this is often a token-in-URL server (e.g. Feishu
+        // open MCP) that doesn't do OAuth at all. Confirm via detect and guide
+        // the user to regenerate the URL instead of showing a cryptic error.
+        const det = await oauthApi.detect(m.url).catch(() => null);
+        if (det?.token_in_url) {
+          window.alert(tr('settings.mcp.tokenInUrlNotice', {
+            provider: det.provider_hint
+              ? det.provider_hint.charAt(0).toUpperCase() + det.provider_hint.slice(1)
+              : tr('settings.mcp.providerGeneric'),
+          }));
+          setAuthBusy(null);
+          return;
+        }
+        throw discErr;
+      }
       if (!meta?.authorization_endpoint || !meta?.token_endpoint) {
         window.alert(tr('settings.mcp.noOauth'));
         setAuthBusy(null);
         return;
       }
-      const auth = await oauthApi.authorize({ ...meta, mcp_url: m.url });
+      // Some servers (e.g. Facebook Ads) advertise a registration_endpoint but
+      // reject anonymous Dynamic Client Registration — you must bring your own
+      // pre-registered app credentials. Cache them per-URL in localStorage so a
+      // later re-auth (token expiry) doesn't re-prompt. DCR-capable servers are
+      // unaffected: we only prompt after the backend reports a registration error.
+      const saved = loadMcpOauthCred(m.url);
+      const firstBody = saved
+        ? { ...meta, client_id: meta.client_id || saved.client_id, client_secret: meta.client_secret || saved.client_secret }
+        : meta;
+      let auth: Awaited<ReturnType<typeof oauthApi.authorize>>;
+      try {
+        auth = await oauthApi.authorize({ ...firstBody, mcp_url: m.url });
+      } catch (regErr: any) {
+        const msg = String(regErr?.message || '');
+        const dcrFailed = /动态注册|registration|client_id/i.test(msg);
+        if (!dcrFailed) throw regErr;
+        // Server rejects anonymous DCR (e.g. Facebook) — collect bring-your-own
+        // app credentials via the in-app modal (window.prompt is unavailable in Electron).
+        const creds = await requestCreds(saved || {});
+        if (!creds || !creds.client_id) { setAuthBusy(null); return; }
+        saveMcpOauthCred(m.url, creds);
+        auth = await oauthApi.authorize({ ...meta, ...creds, mcp_url: m.url });
+      }
       if (!auth?.authorization_url) {
         window.alert(tr('settings.mcp.noAuthUrl'));
         setAuthBusy(null);
@@ -1308,7 +1389,15 @@ const McpRow: React.FC<{
       // In Electron, setWindowOpenHandler opens the URL in the system browser
       // and denies the in-app popup, so window.open returns null — that's the
       // happy path, not a blocked popup. Only treat null as "blocked" on web.
-      const isElectron = (import.meta as any).env?.VITE_ELECTRON === 'true';
+      // Detect Electron robustly: the preload-exposed flag is the source of
+      // truth (VITE_ELECTRON env isn't reliably set in dev), with a userAgent
+      // fallback. Without this, the system-browser happy path (window.open
+      // returns null because setWindowOpenHandler denied the in-app popup) was
+      // misreported as "popup blocked".
+      const isElectron =
+        !!(window as any).chateeElectron?.isElectron ||
+        (import.meta as any).env?.VITE_ELECTRON === 'true' ||
+        /electron/i.test(navigator.userAgent);
       const popup = window.open(auth.authorization_url, 'mcp-oauth', 'width=520,height=720,menubar=no,toolbar=no');
       if (!popup && !isElectron) {
         window.alert(tr('settings.mcp.popupBlocked'));
@@ -1331,7 +1420,7 @@ const McpRow: React.FC<{
             setExpired(false);
             setAuthBusy(null);
             if (popup) popup.close();
-            void onProbe(m); // re-probe so tools light up
+            void connect(); // re-connect inline so tools light up
             return;
           }
         } catch { /* ignore one-off poll errors */ }
@@ -1350,43 +1439,163 @@ const McpRow: React.FC<{
     }
   };
 
-  const authPill = () => {
-    if (!oauthEligible) return null;
-    if (authBusy === 'polling') return <span className="v2-pill warn">{tr('settings.mcp.awaitingCallback')}</span>;
-    if (hasToken === true) return <span className="v2-pill ok">{tr('settings.mcp.authorized')}</span>;
-    if (expired) return <span className="v2-pill warn">{tr('settings.mcp.expired')}</span>;
-    if (hasToken === false) return <span className="v2-pill mute">{tr('settings.mcp.unauthorized')}</span>;
-    return null;
+  // Token-in-URL (e.g. Feishu open MCP) and open/no-auth servers don't use our
+  // OAuth flow — they just connect, so show "connect" not "authorize".
+  const noOauthNeeded = !!det && (det.token_in_url || (det.reachable && !det.auth_required));
+  const needsAuth = oauthEligible && !noOauthNeeded && !hasToken; // includes never-authed + expired
+
+  // Connect = probe inline. Result (tools / error / guidance) renders under the row.
+  const connect = async () => {
+    setConnecting(true);
+    setExpanded(true);
+    try {
+      const res = await mcpApi.probe(m.id);
+      let tokenInUrl = false; let provider: string | undefined;
+      if (!res.ok) {
+        const d = await oauthApi.detect(m.url, true).catch(() => null);
+        tokenInUrl = !!d?.token_in_url; provider = d?.provider_hint;
+      }
+      setConn({ ok: !!res.ok, tools: res.tools, error: res.error, tokenInUrl, provider });
+      onChanged();
+    } catch (e: any) {
+      setConn({ ok: false, error: e?.message || tr('settings.mcp.probeFailed') });
+    } finally {
+      setConnecting(false);
+    }
   };
 
-  const authLabel =
-    authBusy === 'discover' ? tr('settings.mcp.discovering')
-    : authBusy === 'redirect' ? tr('settings.mcp.redirecting')
-    : authBusy === 'polling' ? tr('settings.mcp.callback')
-    : (hasToken || expired ? tr('settings.mcp.reauthorize') : tr('settings.mcp.authorize'));
+  // One quiet status glyph + word, in place of the old pill soup.
+  const status: { g: string; w: string; tone: 'ok' | 'warn' | 'busy' | 'mute' } = (() => {
+    if (!m.enabled) return { g: '◌', w: tr('settings.mcp.disabled'), tone: 'mute' };
+    if (connecting || authBusy) return { g: '◐', w: authBusy ? tr('settings.mcp.discovering') : tr('settings.mcp.stConnecting'), tone: 'busy' };
+    if (m.healthy || conn?.ok) return { g: '●', w: tr('settings.mcp.online'), tone: 'ok' };
+    if (det?.token_in_url && conn && !conn.ok) return { g: '○', w: tr('settings.mcp.stTokenInvalid'), tone: 'warn' };
+    if (needsAuth) return { g: '○', w: expired ? tr('settings.mcp.expired') : tr('settings.mcp.stNeedsAuth'), tone: 'warn' };
+    if (conn && !conn.ok) return { g: '○', w: tr('settings.mcp.stOffline'), tone: 'warn' };
+    return { g: '○', w: tr('settings.mcp.stOffline'), tone: 'mute' };
+  })();
+
+  const host = m.url.replace(/^[a-z]+:\/\//i, '').replace(/\/$/, '');
+  const toolCount = conn?.tools?.length;
+
+  // The single contextual action shown on the row.
+  const primary = needsAuth
+    ? { label: authBusy ? (authBusy === 'polling' ? tr('settings.mcp.callback') : authBusy === 'redirect' ? tr('settings.mcp.redirecting') : tr('settings.mcp.discovering')) : (expired ? tr('settings.mcp.reauthorize') : tr('settings.mcp.authorize')), run: authorize, busy: !!authBusy, warn: true }
+    : { label: connecting ? tr('settings.mcp.stConnecting') : (m.healthy || conn?.ok ? tr('settings.mcp.reconnect') : tr('settings.mcp.connect')), run: connect, busy: connecting, warn: false };
 
   return (
-    <div className="v2-set-card-row">
-      <div className="l">
-        <div className="t">{m.name} <small>{m.type}</small></div>
-        <div className="s">
-          {m.enabled ? <span className="v2-pill ok">{tr('settings.mcp.enabled')}</span> : <span className="v2-pill mute">{tr('settings.mcp.disabled')}</span>}
-          {m.healthy ? <span className="v2-pill ok">{tr('settings.mcp.online')}</span> : <span className="v2-pill mute">{tr('settings.mcp.unprobed')}</span>}
-          {authPill()}
-          <span className="v2-pill mute" title={m.url}>{m.url.length > 40 ? m.url.slice(0, 38) + '…' : m.url}</span>
+    <div className={`v2-mcp-row${!m.enabled ? ' is-off' : ''}`}>
+      <div className="v2-mcp-head">
+        <button className="v2-mcp-main" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
+          <span className={`v2-mcp-glyph ${status.tone}`}>{status.g}</span>
+          <span className="v2-mcp-txt">
+            <span className="v2-mcp-nm">{m.name}</span>
+            <span className="v2-mcp-meta" title={m.url}>
+              {host}
+              <span className="dot">·</span>
+              <span className={`st${status.tone === 'warn' ? ' warn' : ''}`}>{status.w}</span>
+              {toolCount != null && <><span className="dot">·</span>{tr('settings.mcp.toolsHead', { count: toolCount })}</>}
+            </span>
+          </span>
+        </button>
+        <div className="v2-mcp-acts">
+          <Switch checked={m.enabled} onChange={() => void onToggle(m)} />
+          {m.enabled && (
+            <button className={`v2-mcp-link${primary.warn ? ' warn' : ''}`} onClick={() => void primary.run()} disabled={primary.busy}>
+              {primary.label}
+            </button>
+          )}
+          <div className="v2-mcp-menu-wrap">
+            <button className={`v2-mcp-more${menuOpen ? ' open' : ''}`} onClick={() => setMenuOpen((v) => !v)} aria-label="more">⋯</button>
+            {menuOpen && (
+              <>
+                <div style={{ position: 'fixed', inset: 0, zIndex: 29 }} onClick={() => setMenuOpen(false)} />
+                <div className="v2-mcp-menu">
+                  <button onClick={() => { setMenuOpen(false); onEdit(m); }}>{tr('settings.mcp.edit')}</button>
+                  <button onClick={() => { setMenuOpen(false); setExpanded(true); void connect(); }}>{tr('settings.mcp.viewTools')}</button>
+                  <button className="danger" onClick={() => { setMenuOpen(false); void onDelete(m); }}>{tr('common.delete')}</button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
-      <div className="r">
-        <button className="v2-set-btn" onClick={() => void onProbe(m)}>{tr('settings.mcp.probe')}</button>
-        {oauthEligible && (
-          <button className="v2-set-btn" onClick={() => void authorize()} disabled={!!authBusy || !m.enabled}>
-            {authLabel}
-          </button>
-        )}
-        <button className="v2-set-btn" onClick={() => void onToggle(m)}>{m.enabled ? tr('settings.mcp.disable') : tr('settings.mcp.enable')}</button>
-        <button className="v2-set-btn" onClick={() => onEdit(m)}>{tr('settings.mcp.edit')}</button>
-        <button className="v2-set-danger" onClick={() => void onDelete(m)}>{tr('common.delete')}</button>
-      </div>
+
+      {expanded && (
+        <div className="v2-mcp-detail">
+          <div className="v2-mcp-rule" />
+          {conn?.tokenInUrl && (
+            <div className="v2-mcp-note">
+              {tr('settings.mcp.tokenInUrlNotice', {
+                provider: conn.provider ? conn.provider.charAt(0).toUpperCase() + conn.provider.slice(1) : tr('settings.mcp.providerGeneric'),
+              })}
+            </div>
+          )}
+          {conn && !conn.ok && !conn.tokenInUrl && conn.error && (
+            <div className="v2-mcp-err">{conn.error}</div>
+          )}
+          {conn?.ok && conn.tools && conn.tools.length > 0 && (
+            <>
+              <div className="v2-mcp-toolhd">{tr('settings.mcp.toolsHead', { count: conn.tools.length })}</div>
+              <div className="v2-mcp-tools">
+                {conn.tools.map((t) => <span key={t} className="v2-mcp-tool">{t}</span>)}
+              </div>
+            </>
+          )}
+          {conn?.ok && (!conn.tools || conn.tools.length === 0) && (
+            <div className="v2-mcp-err">{tr('settings.mcp.connectedNoTools')}</div>
+          )}
+          <div className="v2-mcp-url">{m.url}</div>
+        </div>
+      )}
+      {credModal && createPortal(
+        <div
+          className="v2-modal-mask"
+          style={{ zIndex: 120, background: 'var(--c-bg)', backdropFilter: 'none', WebkitBackdropFilter: 'none' }}
+          onMouseDown={(e) => { if (e.target === e.currentTarget) { credModal.resolve(null); setCredModal(null); } }}
+        >
+          <div className="v2-modal" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="v2-modal-hd">
+              <h3>{tr('settings.mcp.oauthCredTitle')}</h3>
+              <button className="x" onClick={() => { credModal.resolve(null); setCredModal(null); }}>✕</button>
+            </div>
+            <div className="v2-modal-body">
+              <div className="v2-modal-sec">
+                <div className="lab" style={{ fontWeight: 400, opacity: 0.7, lineHeight: 1.5 }}>{tr('settings.mcp.oauthCredHint')}</div>
+              </div>
+              <div className="v2-modal-sec">
+                <div className="lab">{tr('settings.mcp.oauthClientId')}</div>
+                <input
+                  autoFocus
+                  value={credModal.cid}
+                  placeholder={tr('settings.mcp.oauthClientIdPlaceholder')}
+                  onChange={(e) => setCredModal({ ...credModal, cid: e.target.value })}
+                />
+              </div>
+              <div className="v2-modal-sec">
+                <div className="lab">{tr('settings.mcp.oauthClientSecret')} <span style={{ opacity: 0.55, fontWeight: 400 }}>{tr('settings.mcp.oauthClientSecretHint')}</span></div>
+                <input
+                  type="password"
+                  value={credModal.csecret}
+                  onChange={(e) => setCredModal({ ...credModal, csecret: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="v2-modal-foot">
+              <button className="v2-mbtn" onClick={() => { credModal.resolve(null); setCredModal(null); }}>{tr('common.cancel')}</button>
+              <button
+                className="v2-mbtn primary"
+                disabled={!credModal.cid.trim()}
+                onClick={() => {
+                  credModal.resolve({ client_id: credModal.cid.trim(), client_secret: credModal.csecret.trim() });
+                  setCredModal(null);
+                }}
+              >{tr('common.confirm')}</button>
+            </div>
+          </div>
+        </div>,
+        (typeof document !== 'undefined' && document.querySelector('.chaya-v2')) || document.body
+      )}
     </div>
   );
 };
@@ -1399,11 +1608,50 @@ const McpEditModal: React.FC<{
   const { t: tr } = useI18n();
   const [d, setD] = useState(draft);
   const [busy, setBusy] = useState(false);
+  // Bring-your-own OAuth app credentials (only meaningful for http/sse servers
+  // whose AS rejects anonymous DCR, e.g. Facebook). Echo back whatever was
+  // cached for this URL so the user sees their saved client_id on re-open.
+  const initialCred = loadMcpOauthCred(draft.url) || {};
+  const [oauthClientId, setOauthClientId] = useState(initialCred.client_id || '');
+  const [oauthClientSecret, setOauthClientSecret] = useState(initialCred.client_secret || '');
+  // Auto-detection: transport + auth requirements, debounced on the URL. Lets
+  // the user paste a URL/command and have type + OAuth fields + tags filled in.
+  const [detect, setDetect] = useState<McpDetectResult | null>(null);
+  const [detecting, setDetecting] = useState(false);
+  const detectSeq = useRef(0);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+  useEffect(() => {
+    const raw = d.url.trim();
+    if (!raw) { setDetect(null); setDetecting(false); return; }
+    const seq = ++detectSeq.current;
+    const isUrl = /^https?:\/\//i.test(raw);
+    // Non-URL (stdio command) is detected synchronously — no round-trip needed.
+    if (!isUrl) {
+      setDetect({ transport: 'stdio', reachable: false, auth_required: false, oauth: false, token_in_url: false, dcr_supported: false, needs_manual_client: false });
+      if (d.type !== 'stdio') setD((p) => ({ ...p, type: 'stdio' }));
+      setDetecting(false);
+      return;
+    }
+    setDetecting(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await oauthApi.detect(raw);
+        if (seq !== detectSeq.current) return; // stale
+        setDetect(res);
+        if (res.transport && res.transport !== d.type) setD((p) => ({ ...p, type: res.transport }));
+      } catch {
+        if (seq === detectSeq.current) setDetect(null);
+      } finally {
+        if (seq === detectSeq.current) setDetecting(false);
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d.url]);
   const save = async () => {
     if (!d.name.trim() || !d.url.trim()) { window.alert(tr('settings.mcp.nameUrlRequired')); return; }
     setBusy(true);
@@ -1413,6 +1661,10 @@ const McpEditModal: React.FC<{
       } else {
         await mcpApi.create({ name: d.name.trim(), url: d.url.trim(), type: d.type, enabled: d.enabled });
       }
+      // Persist OAuth creds against the (possibly edited) URL. Stored client-side
+      // only — never sent to our backend except as the client_id/secret used in
+      // the standard authorize → token exchange.
+      if (d.type !== 'stdio') saveMcpOauthCred(d.url.trim(), { client_id: oauthClientId.trim(), client_secret: oauthClientSecret.trim() });
       onSaved();
     } catch (e: any) { window.alert(e?.message || tr('settings.mcp.saveFailed')); }
     finally { setBusy(false); }
@@ -1432,10 +1684,34 @@ const McpEditModal: React.FC<{
           <div className="v2-modal-sec">
             <div className="lab">{tr('settings.mcp.urlCommand')}</div>
             <input value={d.url} onChange={(e) => setD({ ...d, url: e.target.value })} placeholder={tr('settings.mcp.urlPlaceholder')} />
+            {(detecting || detect) && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, alignItems: 'center' }}>
+                {detecting && <span className="v2-pill mute">{tr('settings.mcp.detecting')}</span>}
+                {!detecting && detect && (
+                  <>
+                    <span className="v2-pill mute" style={{ textTransform: 'uppercase', letterSpacing: '0.04em' }}>{detect.transport}</span>
+                    {detect.provider_hint && <span className="v2-pill mute" style={{ textTransform: 'capitalize' }}>{detect.provider_hint}</span>}
+                    {detect.transport !== 'stdio' && !detect.reachable && <span className="v2-pill mute">{tr('settings.mcp.tagUnreachable')}</span>}
+                    {detect.transport !== 'stdio' && detect.reachable && !detect.auth_required && <span className="v2-pill ok">{tr('settings.mcp.tagAuthNone')}</span>}
+                    {detect.token_in_url && <span className="v2-pill warn">{tr('settings.mcp.tagTokenInUrl')}</span>}
+                    {detect.auth_required && detect.oauth && !detect.needs_manual_client && <span className="v2-pill ok">{tr('settings.mcp.tagAuth')}{detect.dcr_supported ? ` · ${tr('settings.mcp.tagAutoRegister')}` : ''}</span>}
+                    {detect.needs_manual_client && <span className="v2-pill warn">{tr('settings.mcp.tagManualClient')}</span>}
+                  </>
+                )}
+              </div>
+            )}
           </div>
           <div className="v2-modal-sec">
             <div className="lab">{tr('settings.mcp.transport')}</div>
-            <select className="v2-set-select" style={{ width: '100%' }} value={d.type} onChange={(e) => setD({ ...d, type: e.target.value as any })}>
+            {/* Auto-filled & locked once detection succeeds — the transport is derived
+                from the URL/probe, so manual editing only invites mistakes. */}
+            <select
+              className="v2-set-select"
+              style={{ width: '100%', ...(detect ? { opacity: 0.7, cursor: 'not-allowed' } : {}) }}
+              value={d.type}
+              disabled={!!detect}
+              onChange={(e) => setD({ ...d, type: e.target.value as any })}
+            >
               <option value="http">http</option>
               <option value="sse">sse</option>
               <option value="stdio">stdio</option>
@@ -1447,6 +1723,58 @@ const McpEditModal: React.FC<{
               <Switch checked={d.enabled} onChange={(v) => setD({ ...d, enabled: v })} />
             </div>
           </div>
+          {/* Token-in-URL servers (e.g. Feishu open MCP) don't use OAuth — guide
+              the user to regenerate the token-bearing URL instead of authorizing. */}
+          {detect?.token_in_url && (
+            <div className="v2-modal-sec">
+              <div style={{
+                fontSize: 12, lineHeight: 1.55, color: 'var(--c-ink-2, var(--c-ink))',
+                background: 'color-mix(in oklab, var(--c-warn, #c9803a) 12%, transparent)',
+                border: '1px solid color-mix(in oklab, var(--c-warn, #c9803a) 32%, transparent)',
+                borderRadius: 'var(--c-radius-md, 8px)', padding: '9px 11px',
+              }}>
+                {tr('settings.mcp.tokenInUrlNotice', {
+                  provider: detect.provider_hint
+                    ? detect.provider_hint.charAt(0).toUpperCase() + detect.provider_hint.slice(1)
+                    : tr('settings.mcp.providerGeneric'),
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Only append the credential fields when detection says the server
+              rejects anonymous DCR — those servers require a pre-registered app. */}
+          {d.type !== 'stdio' && detect?.needs_manual_client && (
+            <>
+              <div className="v2-modal-sec">
+                <div style={{
+                  fontSize: 12, lineHeight: 1.55, color: 'var(--c-ink-2, var(--c-ink))',
+                  background: 'color-mix(in oklab, var(--c-warn, #c9803a) 12%, transparent)',
+                  border: '1px solid color-mix(in oklab, var(--c-warn, #c9803a) 32%, transparent)',
+                  borderRadius: 'var(--c-radius-md, 8px)', padding: '9px 11px',
+                }}>
+                  {tr('settings.mcp.manualClientNotice', {
+                    provider: detect.provider_hint
+                      ? detect.provider_hint.charAt(0).toUpperCase() + detect.provider_hint.slice(1)
+                      : tr('settings.mcp.providerGeneric'),
+                  })}
+                </div>
+              </div>
+              <div className="v2-modal-sec">
+                <div className="lab">{tr('settings.mcp.oauthClientId')}</div>
+                <input
+                  value={oauthClientId}
+                  onChange={(e) => setOauthClientId(e.target.value)}
+                  placeholder={tr('settings.mcp.oauthClientIdPlaceholder')}
+                  style={!oauthClientId.trim() ? { borderColor: 'var(--c-warn, #c9803a)' } : undefined}
+                />
+              </div>
+              <div className="v2-modal-sec">
+                <div className="lab">{tr('settings.mcp.oauthClientSecret')} <span style={{ opacity: 0.55, fontWeight: 400 }}>{tr('settings.mcp.oauthClientSecretHint')}</span></div>
+                <input type="password" value={oauthClientSecret} onChange={(e) => setOauthClientSecret(e.target.value)} />
+              </div>
+            </>
+          )}
         </div>
         <div className="v2-modal-foot">
           <button className="v2-mbtn" onClick={onClose} disabled={busy}>{tr('common.cancel')}</button>

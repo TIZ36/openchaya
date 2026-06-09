@@ -136,7 +136,7 @@ const KnowledgeView: React.FC<{ standalone?: boolean }> = ({ standalone }) => {
   // 按钮也能驱动）；分屏 wiki 窗格无 provider，退回本地状态自管。filter（看哪类）始终本地。
   const kbList = useContext(KbListContext);
   const [filter, setFilter] = useState<PeekFilter>('all');
-  const [standaloneOpen, setStandaloneOpen] = useState(false);
+  const [standaloneOpen, setStandaloneOpen] = useState(true);   // 默认展开左树（CLI 风格常驻两栏）
   const listOpen = standalone ? standaloneOpen : (kbList?.open ?? false);
   const setListOpen = useCallback((v: boolean) => {
     if (standalone) setStandaloneOpen(v); else kbList?.setOpen(v);

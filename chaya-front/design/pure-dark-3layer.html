@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="zh" data-mode="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pure · 三层结构原型</title>
+<style>
+/* ============================================================
+   三层结构 (3-Layer)
+   L0 底层 · 透明玻璃壁纸 (wall)          —— 折射的来源
+   L1 中层 · 灰黑/灰白面板 透明度~30%      —— 结构与承载
+   L2 顶层 · 透明玻璃组件 (liquid glass)   —— 可交互控件
+   ============================================================ */
+:root, [data-mode="light"] {
+  --c-sans: -apple-system, "SF Pro Text", "Segoe UI", system-ui, "PingFang SC", "Microsoft Yahei", sans-serif;
+  --c-mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, monospace;
+
+  --c-ink:   oklch(0.215 0.013 255);
+  --c-ink-2: oklch(0.355 0.013 255);
+  --c-ink-3: oklch(0.480 0.013 255);
+  --c-ink-4: oklch(0.600 0.013 255);
+  --accent:  oklch(0.58 0.13 264);
+
+  /* ---- L0 底层壁纸 ---- */
+  --wall:
+    radial-gradient(circle at 18% 12%, color-mix(in oklab, oklch(0.70 0.13 265) 42%, transparent), transparent 32%),
+    radial-gradient(circle at 86% 16%, color-mix(in oklab, oklch(0.80 0.11 330) 38%, transparent), transparent 34%),
+    radial-gradient(circle at 76% 88%, color-mix(in oklab, oklch(0.82 0.10 165) 34%, transparent), transparent 40%),
+    radial-gradient(circle at 30% 80%, color-mix(in oklab, oklch(0.78 0.12 50) 30%, transparent), transparent 38%),
+    linear-gradient(140deg, oklch(0.965 0.01 255), oklch(0.92 0.012 250));
+  --wall-blur: 0px;       /* L0 模糊 */
+  --wall-opacity: 1;      /* L0 透明 */
+  --wall-sat: 100%;       /* L0 折射(饱和) */
+
+  /* ---- L1 中层面板：灰白 30% ---- */
+  --plate-tint: oklch(0.97 0.004 255);
+  --plate-alpha: 0.30;    /* L1 透明 */
+  --plate: color-mix(in oklab, var(--plate-tint) calc(var(--plate-alpha) * 100%), transparent);
+  --plate-blur: 30px;     /* L1 模糊 */
+  --plate-sat: 135%;      /* L1 折射 */
+  --plate-line: color-mix(in oklab, var(--c-ink) 12%, transparent);
+  --plate-rim: rgba(255,255,255,0.65);
+  --plate-shadow: 0 30px 70px -40px rgba(40,42,55,0.55);
+
+  /* ---- L2 顶层玻璃组件 ---- */
+  --lq-rgb:    255,255,255;
+  --lq-alpha:  0.40;      /* L2 透明 */
+  --lq-blur:   12px;      /* L2 模糊 */
+  --lq-sat:    180%;      /* L2 折射(饱和) */
+  --lq-bright: 1.04;
+  --lq-fill:    rgba(var(--lq-rgb), var(--lq-alpha));
+  --lq-fill-2:  rgba(var(--lq-rgb), calc(var(--lq-alpha) * 0.6));
+  --lq-backdrop: blur(var(--lq-blur)) saturate(var(--lq-sat)) brightness(var(--lq-bright));
+  --lq-rim-top: rgba(255,255,255,0.75);
+  --lq-rim-bot: color-mix(in oklab, var(--c-ink) 10%, transparent);
+  --lq-ring:    color-mix(in oklab, var(--c-ink) 14%, transparent);
+  --lq-streak:  rgba(255,255,255,0.55);
+  --lq-shadow:
+    inset 0 1px 0 var(--lq-rim-top),
+    inset 0 -1px 0 var(--lq-rim-bot),
+    inset 0 0 0 1px var(--lq-ring),
+    0 1px 1px -0.5px color-mix(in oklab, var(--c-ink) 12%, transparent),
+    0 18px 38px -32px color-mix(in oklab, var(--c-ink) 26%, transparent);
+}
+
+[data-mode="dark"] {
+  --c-ink:   oklch(0.945 0.010 250);
+  --c-ink-2: oklch(0.815 0.010 250);
+  --c-ink-3: oklch(0.690 0.011 250);
+  --c-ink-4: oklch(0.560 0.012 255);
+  --accent:  oklch(0.74 0.12 268);
+
+  --wall:
+    radial-gradient(circle at 18% 12%, color-mix(in oklab, oklch(0.60 0.16 268) 50%, transparent), transparent 32%),
+    radial-gradient(circle at 86% 16%, color-mix(in oklab, oklch(0.55 0.15 330) 44%, transparent), transparent 34%),
+    radial-gradient(circle at 76% 88%, color-mix(in oklab, oklch(0.58 0.13 168) 40%, transparent), transparent 40%),
+    radial-gradient(circle at 30% 78%, color-mix(in oklab, oklch(0.55 0.14 40) 34%, transparent), transparent 38%),
+    linear-gradient(140deg, oklch(0.215 0.008 262), oklch(0.165 0.008 258));
+
+  /* L1 中层：灰黑 30% */
+  --plate-tint: oklch(0.30 0.008 260);
+  --plate-alpha: 0.30;
+  --plate-blur: 20px;
+  --plate-sat: 135%;
+  --plate-line: color-mix(in oklab, oklch(0.9 0.01 250) 14%, transparent);
+  --plate-rim: rgba(255,255,255,0.14);
+  --plate-shadow: 0 34px 80px -36px rgba(0,0,0,0.66);
+
+  --lq-alpha:  0.06;
+  --lq-blur:   15px;
+  --lq-sat:    160%;
+  --lq-bright: 0.98;
+  --lq-rim-top: rgba(255,255,255,0.18);
+  --lq-rim-bot: rgba(0,0,0,0.32);
+  --lq-ring:    rgba(255,255,255,0.08);
+  --lq-streak:  rgba(255,255,255,0.30);
+  --lq-shadow:
+    inset 0 1px 0 var(--lq-rim-top),
+    inset 1px 0 0 rgba(255,255,255,0.05),
+    inset 0 0 0 1px var(--lq-ring),
+    inset 0 -16px 28px -22px rgba(0,0,0,0.30),
+    0 16px 38px -18px rgba(0,0,0,0.55);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: var(--c-sans);
+  color: var(--c-ink);
+  background: oklch(0.18 0.006 260);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+/* L0 底层壁纸：独立元素，可单独调模糊/透明/折射 */
+#wall {
+  position: fixed; inset: -60px; z-index: -1; pointer-events: none;
+  background: var(--wall); background-size: cover; background-position: center;
+  filter: blur(var(--wall-blur)) saturate(var(--wall-sat));
+  opacity: var(--wall-opacity);
+  transition: filter .2s, opacity .2s;
+}
+
+/* 顶栏控制条 ---------------------------------------------------- */
+.bar {
+  position: fixed; top: 0; left: 0; right: 0; height: 56px; z-index: 100;
+  display: flex; align-items: center; gap: 14px; padding: 0 18px;
+  background: var(--lq-fill);
+  -webkit-backdrop-filter: var(--lq-backdrop); backdrop-filter: var(--lq-backdrop);
+  box-shadow: var(--lq-shadow);
+}
+.bar .brand { font-weight: 700; font-size: 14.5px; letter-spacing: .2px; }
+.bar .brand b { color: var(--accent); }
+.bar .sub { font-size: 12px; color: var(--c-ink-3); }
+.bar .spacer { flex: 1; }
+
+.ctrl { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--c-ink-2); }
+.ctrl input[type=range] { width: 96px; accent-color: var(--accent); }
+.seg { display: inline-flex; gap: 3px; padding: 3px; border-radius: 10px; background: var(--lq-fill-2);
+       box-shadow: inset 0 0 0 1px var(--lq-ring); }
+.seg button { border: 0; background: transparent; color: var(--c-ink-3); font: 600 12px var(--c-sans);
+              padding: 5px 13px; border-radius: 7px; cursor: pointer; transition: .18s; }
+.seg button[aria-pressed=true] { background: var(--lq-fill); color: var(--c-ink); box-shadow: var(--lq-shadow); }
+
+/* 三层控制面板 ------------------------------------------------- */
+.panel {
+  position: fixed; top: 72px; right: 18px; z-index: 95; width: 232px;
+  display: flex; flex-direction: column; gap: 4px; padding: 14px;
+  border-radius: 18px; background: var(--lq-fill);
+  -webkit-backdrop-filter: var(--lq-backdrop); backdrop-filter: var(--lq-backdrop);
+  box-shadow: var(--lq-shadow);
+}
+.panel .grp { padding: 8px 0; }
+.panel .grp + .grp { border-top: 1px solid var(--lq-ring); }
+.panel .gh { font: 700 12px var(--c-sans); margin-bottom: 7px; display: flex; align-items: center; gap: 7px; }
+.panel .gh b { font: 700 11px var(--c-mono); color: var(--accent);
+  background: var(--lq-fill-2); padding: 2px 6px; border-radius: 6px; }
+.panel label { display: grid; grid-template-columns: 40px 1fr 40px; align-items: center; gap: 8px;
+  font-size: 11.5px; color: var(--c-ink-2); margin: 5px 0; }
+.panel input[type=range] { width: 100%; accent-color: var(--accent); height: 4px; }
+.panel label span { text-align: right; font: 600 11px var(--c-mono); color: var(--c-ink-3); }
+
+/* 舞台 -------------------------------------------------------- */
+.stage {
+  position: absolute; inset: 56px 0 0 0;
+  display: grid; place-items: center;
+  perspective: 1600px;
+}
+
+/* ===== 组合视图：三层真实叠在一起 ===== */
+.scene {
+  position: relative; width: min(880px, 92vw); height: min(560px, 76vh);
+  transform-style: preserve-3d;
+  transition: transform .7s cubic-bezier(.2,.7,.2,1);
+}
+
+/* L1 · 中层面板（灰黑/灰白 30%） */
+.plate {
+  position: absolute; inset: 0; border-radius: 26px;
+  background: var(--plate);
+  -webkit-backdrop-filter: blur(var(--plate-blur)) saturate(var(--plate-sat));
+  backdrop-filter: blur(var(--plate-blur)) saturate(var(--plate-sat));
+  box-shadow:
+    inset 0 1px 0 var(--plate-rim),
+    inset 0 0 0 1px var(--plate-line),
+    var(--plate-shadow);
+  transition: background .25s, backdrop-filter .25s;
+}
+
+/* L2 · 顶层玻璃组件层（内容） */
+.content {
+  position: absolute; inset: 0; padding: 26px;
+  display: grid; grid-template-columns: 200px 1fr; grid-template-rows: auto 1fr; gap: 16px;
+  transform: translateZ(0.1px);
+}
+.content .head { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; }
+.content .head h2 { margin: 0; font-size: 17px; }
+.content .head p { margin: 2px 0 0; font-size: 12px; color: var(--c-ink-3); }
+.avatar { width: 38px; height: 38px; border-radius: 12px; flex: none;
+  background: var(--lq-fill); box-shadow: var(--lq-shadow);
+  -webkit-backdrop-filter: var(--lq-backdrop); backdrop-filter: var(--lq-backdrop);
+  display: grid; place-items: center; font-size: 18px; }
+
+/* 玻璃组件通用 */
+.glass {
+  position: relative;
+  background: var(--lq-fill);
+  -webkit-backdrop-filter: var(--lq-backdrop); backdrop-filter: var(--lq-backdrop);
+  box-shadow: var(--lq-shadow);
+  border-radius: 16px; overflow: hidden;
+}
+
+.side { padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+.side .nav { display: flex; align-items: center; gap: 9px; padding: 9px 11px; border-radius: 11px;
+  font-size: 13px; color: var(--c-ink-2); cursor: pointer; transition: .15s; position: relative; z-index: 1; }
+.side .nav .ico { width: 18px; text-align: center; opacity: .8; }
+.side .nav:hover { background: var(--lq-fill-2); }
+.side .nav.on { background: var(--lq-fill); box-shadow: var(--lq-shadow); color: var(--c-ink); }
+
+.main { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.card { padding: 14px 15px; position: relative; z-index: 1; }
+.card h3 { margin: 0 0 4px; font-size: 13.5px; }
+.card p { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--c-ink-3); }
+
+.row { display: flex; gap: 10px; align-items: center; }
+.btn { border: 0; cursor: pointer; font: 600 12.5px var(--c-sans); color: var(--c-ink);
+  padding: 9px 16px; border-radius: 11px; position: relative; z-index: 1;
+  background: var(--lq-fill); -webkit-backdrop-filter: var(--lq-backdrop); backdrop-filter: var(--lq-backdrop);
+  box-shadow: var(--lq-shadow); transition: transform .12s; }
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: color-mix(in oklab, var(--accent) 80%, transparent); color: white;
+  box-shadow: var(--lq-shadow), 0 8px 22px -10px var(--accent); }
+.pill { font-size: 11px; color: var(--c-ink-3); padding: 5px 11px; border-radius: 999px;
+  background: var(--lq-fill-2); box-shadow: inset 0 0 0 1px var(--lq-ring); }
+
+/* ===== 拆层标签（仅 explode 时显示） ===== */
+.tag {
+  position: absolute; left: 100%; top: 18px; margin-left: 22px; white-space: nowrap;
+  font: 600 11.5px var(--c-mono); color: var(--c-ink); padding: 6px 11px; border-radius: 9px;
+  background: var(--lq-fill); box-shadow: var(--lq-shadow);
+  -webkit-backdrop-filter: var(--lq-backdrop); backdrop-filter: var(--lq-backdrop);
+  opacity: 0; transition: opacity .4s; pointer-events: none;
+}
+.tag b { color: var(--accent); }
+.tag::before { content:""; position:absolute; right:100%; top:50%; width:22px; height:1px;
+  background: var(--plate-line); }
+
+/* explode 模式：三层在 3D 中炸开 */
+.scene.explode { transform: rotateX(52deg) rotateZ(-32deg); }
+.scene .layerZ { transition: transform .7s cubic-bezier(.2,.7,.2,1); transform-style: preserve-3d; }
+.scene.explode .wallcard { transform: translateZ(-150px); }
+.scene.explode .plate    { transform: translateZ(0px); }
+.scene.explode .content  { transform: translateZ(150px); }
+.scene.explode .tag { opacity: 1; }
+
+/* explode 时露出的底层壁纸卡（代表 L0 透明玻璃底） */
+.wallcard {
+  position: absolute; inset: 0; border-radius: 26px; opacity: 0;
+  background: var(--wall); background-size: 180% 180%; background-position: center;
+  box-shadow: inset 0 0 0 1px var(--plate-line), var(--plate-shadow);
+  transition: opacity .5s;
+}
+.scene.explode .wallcard { opacity: 1; }
+
+/* 图例 -------------------------------------------------------- */
+.legend {
+  position: fixed; left: 18px; bottom: 18px; z-index: 90;
+  display: flex; flex-direction: column; gap: 8px; padding: 14px;
+  border-radius: 16px; background: var(--lq-fill);
+  -webkit-backdrop-filter: var(--lq-backdrop); backdrop-filter: var(--lq-backdrop);
+  box-shadow: var(--lq-shadow); font-size: 12px; max-width: 250px;
+}
+.legend .lg { display: flex; gap: 9px; align-items: flex-start; }
+.legend .sw { width: 26px; height: 26px; border-radius: 8px; flex: none; margin-top: 1px;
+  box-shadow: inset 0 0 0 1px var(--lq-ring); }
+.legend .sw.l0 { background: var(--wall); background-size: 280% 280%; }
+.legend .sw.l1 { background: var(--plate); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.legend .sw.l2 { background: var(--lq-fill); box-shadow: var(--lq-shadow); }
+.legend b { font-size: 12px; }
+.legend small { color: var(--c-ink-3); font-size: 11px; display: block; line-height: 1.4; }
+.hint { position: fixed; right: 18px; bottom: 18px; z-index: 90; font-size: 11.5px; color: var(--c-ink-3);
+  background: var(--lq-fill-2); padding: 7px 12px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--lq-ring); }
+</style>
+</head>
+<body data-mode="dark">
+
+  <div id="wall"></div>
+
+  <div class="bar">
+    <div class="brand">Pure · <b>三层结构</b></div>
+    <div class="sub">L0 壁纸玻璃 · L1 面板30% · L2 玻璃组件</div>
+    <div class="spacer"></div>
+
+    <div class="seg" id="modeSeg">
+      <button data-mode="dark" aria-pressed="true">暗</button>
+      <button data-mode="light" aria-pressed="false">亮</button>
+    </div>
+    <div class="seg">
+      <button id="explodeBtn" aria-pressed="false">拆层视图</button>
+    </div>
+  </div>
+
+  <!-- 三层控制面板：每层独立调 模糊/透明/折射 -->
+  <div class="panel glass" id="panel">
+    <div class="grp" data-layer="L2">
+      <div class="gh"><b>L2</b> 顶层 · 玻璃组件</div>
+      <label>模糊<input type="range" data-var="--lq-blur" data-unit="px" min="0" max="40"><span></span></label>
+      <label>透明<input type="range" data-var="--lq-alpha" data-scale="0.01" min="0" max="60"><span></span></label>
+      <label>折射<input type="range" data-var="--lq-sat" data-unit="%" min="100" max="320"><span></span></label>
+    </div>
+    <div class="grp" data-layer="L1">
+      <div class="gh"><b>L1</b> 中层 · 灰面板</div>
+      <label>模糊<input type="range" data-var="--plate-blur" data-unit="px" min="0" max="50"><span></span></label>
+      <label>透明<input type="range" data-var="--plate-alpha" data-scale="0.01" min="0" max="90"><span></span></label>
+      <label>折射<input type="range" data-var="--plate-sat" data-unit="%" min="100" max="300"><span></span></label>
+    </div>
+    <div class="grp" data-layer="L0">
+      <div class="gh"><b>L0</b> 底层 · 壁纸玻璃</div>
+      <label>模糊<input type="range" data-var="--wall-blur" data-unit="px" min="0" max="60"><span></span></label>
+      <label>透明<input type="range" data-var="--wall-opacity" data-scale="0.01" min="10" max="100"><span></span></label>
+      <label>折射<input type="range" data-var="--wall-sat" data-unit="%" min="40" max="220"><span></span></label>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="scene" id="scene">
+      <!-- L0 底层：透明玻璃壁纸（拆层时露出） -->
+      <div class="wallcard">
+        <span class="tag"><b>L0</b> · 底层 · 透明玻璃壁纸</span>
+      </div>
+      <!-- L1 中层：灰黑/灰白面板 30% -->
+      <div class="plate">
+        <span class="tag"><b>L1</b> · 中层 · 面板 <span id="tagAlpha">30%</span></span>
+      </div>
+      <!-- L2 顶层：透明玻璃组件 -->
+      <div class="content">
+        <span class="tag"><b>L2</b> · 顶层 · 透明玻璃组件</span>
+
+        <div class="head">
+          <div class="avatar">◑</div>
+          <div>
+            <h2>三层叠加预览</h2>
+            <p>组件折射穿过中层，最终落在底层壁纸上</p>
+          </div>
+        </div>
+
+        <div class="glass side">
+          <div class="nav on"><span class="ico">◇</span> 对话</div>
+          <div class="nav"><span class="ico">⌥</span> 代码</div>
+          <div class="nav"><span class="ico">▤</span> 知识库</div>
+          <div class="nav"><span class="ico">✦</span> 画廊</div>
+          <div class="nav"><span class="ico">⚑</span> 飞书</div>
+        </div>
+
+        <div class="main">
+          <div class="glass card">
+            <h3>玻璃在面板上漂浮</h3>
+            <p>每个控件都是独立的液态玻璃，自带镜面顶边、底沉边与一圈缘。它们的模糊采样的是下方的<strong>中层面板</strong>，而面板又透出最底的壁纸色。</p>
+          </div>
+          <div class="row">
+            <button class="btn primary">主操作</button>
+            <button class="btn">次操作</button>
+            <span class="pill">backdrop-filter</span>
+            <span class="pill">30% plate</span>
+          </div>
+          <div class="glass card">
+            <h3>调上面的滑块试试 →</h3>
+            <p>把「中层透明度」拉到 0，面板消失，组件直接漂在壁纸上；拉高则结构感增强、壁纸被压住。这就是三层各自的职责边界。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="lg"><div class="sw l2"></div><div><b>L2 顶层</b><small>透明玻璃组件 · 可交互 · 折射</small></div></div>
+    <div class="lg"><div class="sw l1"></div><div><b>L1 中层</b><small>灰黑/灰白面板 30% · 结构承载</small></div></div>
+    <div class="lg"><div class="sw l0"></div><div><b>L0 底层</b><small>透明玻璃壁纸 · 折射来源</small></div></div>
+  </div>
+  <div class="hint">每层独立调 模糊/透明/折射 · 点「拆层视图」看 3D 堆叠</div>
+
+<script>
+  const $ = s => document.querySelector(s);
+  const $$ = s => [...document.querySelectorAll(s)];
+  const body = document.body;
+
+  // 每个模式下三层的默认值（滑块原始数值，未乘 scale）
+  const DEF = {
+    dark: {
+      '--lq-blur': 15, '--lq-alpha': 6,  '--lq-sat': 160,
+      '--plate-blur': 20, '--plate-alpha': 30, '--plate-sat': 135,
+      '--wall-blur': 0,  '--wall-opacity': 100, '--wall-sat': 100,
+    },
+    light: {
+      '--lq-blur': 12, '--lq-alpha': 40, '--lq-sat': 180,
+      '--plate-blur': 30, '--plate-alpha': 30, '--plate-sat': 135,
+      '--wall-blur': 0,  '--wall-opacity': 100, '--wall-sat': 100,
+    },
+  };
+
+  const sliders = $$('.panel input[type=range]');
+
+  function apply(inp) {
+    const scale = parseFloat(inp.dataset.scale || '1');
+    const unit  = inp.dataset.unit || '';
+    const raw   = parseFloat(inp.value);
+    const val   = raw * scale;
+    body.style.setProperty(inp.dataset.var, val + unit);
+    // 显示：有 unit 直接带；scale<1（透明类）显示百分比
+    inp.parentElement.querySelector('span').textContent =
+      unit ? inp.value + unit : (scale < 1 ? inp.value + '%' : inp.value);
+    if (inp.dataset.var === '--plate-alpha') $('#tagAlpha').textContent = inp.value + '%';
+  }
+
+  sliders.forEach(inp => inp.addEventListener('input', () => apply(inp)));
+
+  // 用某模式的默认值刷新所有滑块位置 + 应用
+  function syncMode(mode) {
+    const d = DEF[mode];
+    sliders.forEach(inp => {
+      if (d[inp.dataset.var] != null) inp.value = d[inp.dataset.var];
+      apply(inp);
+    });
+  }
+
+  // 亮/暗
+  $('#modeSeg').addEventListener('click', e => {
+    const btn = e.target.closest('button'); if (!btn) return;
+    body.dataset.mode = btn.dataset.mode;
+    [...$('#modeSeg').children].forEach(b => b.setAttribute('aria-pressed', b === btn));
+    syncMode(btn.dataset.mode);
+  });
+
+  // 拆层视图
+  const explodeBtn = $('#explodeBtn');
+  explodeBtn.addEventListener('click', () => {
+    const on = $('#scene').classList.toggle('explode');
+    explodeBtn.setAttribute('aria-pressed', on);
+    explodeBtn.textContent = on ? '合并视图' : '拆层视图';
+  });
+
+  // 侧栏交互
+  $$('.side .nav').forEach(n =>
+    n.addEventListener('click', () => {
+      $$('.side .nav').forEach(x => x.classList.remove('on'));
+      n.classList.add('on');
+    }));
+
+  // 初始化：用当前模式默认值填充滑块
+  syncMode(body.dataset.mode);
+</script>
+</body>
+</html>

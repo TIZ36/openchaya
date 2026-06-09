@@ -860,7 +860,7 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, 
       session.query = q;
       // 拉一次该 provider/账号下可选模型，推给渲染层填「模型选择器」（/model 等价）。
       if (typeof q.supportedModels === 'function') {
-        q.supportedModels().then((ms) => emit({ type: 'models', models: ms })).catch(() => {});
+        q.supportedModels().then((ms) => { cacheModels('claude', ms); emit({ type: 'models', models: ms }); }).catch(() => {});
       }
       for await (const msg of q) { if (!emit(msg)) break; }   // 帧没了就停，别空转
     } catch (e) {
@@ -1426,6 +1426,7 @@ function fetchCodexModels(bin, emit) {
     _codexModelsInflight = new Promise((resolve) => {
       execFile(bin, ['debug', 'models', '--bundled'], { env: childEnv(), timeout: 10000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
         _codexModels = err ? [] : parseCodexModels(stdout);
+        cacheModels('codex', _codexModels);
         _codexModelsInflight = null;
         resolve(_codexModels);
       });
@@ -1587,6 +1588,7 @@ function fetchCursorModels(bin, apiKey, emit) {
     _cursorModelsInflight = new Promise((resolve) => {
       execFile(bin, ['models'], { env: { ...childEnv(), ...(apiKey ? { CURSOR_API_KEY: apiKey } : {}) }, timeout: 10000 }, (err, stdout) => {
         _cursorModels = err ? [] : cursorDriver.parseModels(stdout);
+        cacheModels('cursor', _cursorModels);
         _cursorModelsInflight = null;
         resolve(_cursorModels);
       });
@@ -1690,6 +1692,51 @@ const GEMINI_MODELS = [
   { value: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
 ];
 
+/* claude 模型别名（Claude Code 稳定解析）：会话起来后会被真实 supportedModels 覆盖进缓存。 */
+const CLAUDE_MODELS = [
+  { value: 'default', displayName: '默认' },
+  { value: 'opus', displayName: 'Claude Opus' },
+  { value: 'sonnet', displayName: 'Claude Sonnet' },
+  { value: 'haiku', displayName: 'Claude Haiku' },
+];
+
+/* 进程级模型缓存：任意会话拿到真实 supportedModels 就存这里，listModels 优先返回它。 */
+const _modelsByProvider = {};
+function cacheModels(provider, models) {
+  if (provider && Array.isArray(models) && models.length) _modelsByProvider[provider] = models;
+}
+
+/** 主动取某 provider 的可选模型（无需先开会话）：
+ *  cursor/gemini 真实拉取；claude/codex/copilot 用真实缓存(若有)否则静态兜底。一律可被前端自由输入覆盖。 */
+async function listModels(provider, { apiKey } = {}) {
+  if (_modelsByProvider[provider]) return _modelsByProvider[provider];
+  switch (provider) {
+    case 'gemini': return GEMINI_MODELS;
+    case 'claude': return CLAUDE_MODELS;
+    case 'cursor': {
+      const bin = resolveBin('cursor-agent');
+      if (!bin) return [];
+      const models = await new Promise((res) => {
+        execFile(bin, ['models'], { env: { ...childEnv(), ...(apiKey ? { CURSOR_API_KEY: apiKey } : {}) }, timeout: 10000 },
+          (err, stdout) => res(err ? [] : cursorDriver.parseModels(stdout)));
+      });
+      cacheModels('cursor', models);
+      return models;
+    }
+    case 'codex': {
+      const bin = resolveBin('codex');
+      if (!bin) return [];
+      const models = await new Promise((res) => {
+        execFile(bin, ['debug', 'models', '--bundled'], { env: childEnv(), timeout: 10000, maxBuffer: 16 * 1024 * 1024 },
+          (err, stdout) => res(err ? [] : parseCodexModels(stdout)));
+      });
+      cacheModels('codex', models);
+      return models;
+    }
+    default: return [];   // copilot：首次跑过会话后走缓存，之前留空让前端自由输入
+  }
+}
+
 /** ACP session/request_permission → 复用渲染层既有权限 UI(canUseTool 同款)。
  *  自动档(bypass/acceptEdits) 直接放行，default 弹给用户。返回 ACP outcome。 */
 function geminiPermission(sess, params) {
@@ -1759,6 +1806,7 @@ async function geminiEnsure(sender, { cwd, lane, sessionId, permMode, model, mcp
       const ns = await conn.request('session/new', { cwd: realCwd, mcpServers });
       s.sessionId = ns.sessionId;
     }
+    cacheModels('gemini', GEMINI_MODELS);
     emit({ type: 'models', models: GEMINI_MODELS });
   })();
   try { await s._init; } catch (e) { emit({ type: 'error', error: 'gemini ACP 初始化失败: ' + (e && e.message || e) }); try { s.conn && s.conn.kill(); } catch { /* */ } geminiSessions.delete(key); return null; }
@@ -1855,7 +1903,7 @@ async function copilotEnsure(sender, { cwd, lane, sessionId, permMode, model, mc
       s.sessionId = ns.sessionId;
     }
     s.models = mapCopilotModels(ns);
-    if (s.models.length) emit({ type: 'models', models: s.models });
+    if (s.models.length) { cacheModels('copilot', s.models); emit({ type: 'models', models: s.models }); }
     if (s.model && s.model !== 'auto') { try { await conn.request('session/set_model', { sessionId: s.sessionId, modelId: s.model }); } catch { /* 不支持就算了 */ } }
   })();
   try { await s._init; } catch (e) { emit({ type: 'error', error: 'copilot ACP 初始化失败（可能需 `copilot login`）：' + (e && e.message || e) }); try { s.conn && s.conn.kill(); } catch { /* */ } copilotSessions.delete(key); return null; }
@@ -2401,6 +2449,7 @@ function registerLocalAgent(ipcMain, dialog) {
     }
     return out;
   });
+  ipcMain.handle('localAgent:listModels', (_e, { provider, apiKey } = {}) => listModels(provider, { apiKey }));
   ipcMain.handle('localAgent:listSessions', (_e, { provider, cwd }) => listSessions(provider, cwd));
   ipcMain.handle('localAgent:scanCodexSessions', () => codexListAllSessions());
   ipcMain.handle('localAgent:readSession', (_e, { provider, cwd, sessionId }) => readSession(provider, cwd, sessionId));

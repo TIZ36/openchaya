@@ -11,7 +11,7 @@ import KnowledgeView, { domainColor, KbAccountContext, type KbAccount, KbListCon
 import {
   smartnoteTags, smartnoteRetrieve, getSmartnoteApiKey, type Tag as DomainTag,
 } from '../services/smartnoteApi';
-import type { ClientSettings } from '../components/SettingsPage';
+import type { ClientSettings, ColorTheme } from '../components/SettingsPage';
 import SettingsModal from './SettingsModal';
 
 const LS_SETTINGS = 'settings';
@@ -186,7 +186,7 @@ const ShellInner: React.FC = () => {
     onOpen: () => { if (authed) setSettingsOpen(true); else requireLogin(); },
   }), [authed, wsState, requireLogin]);
   // KB 停靠列表栏开合（提到 shell，使顶栏右上角折叠按钮也能驱动）。
-  const [kbListOpen, setKbListOpen] = useState(false);
+  const [kbListOpen, setKbListOpen] = useState(true);   // 知识库默认展开左树（CLI 风格常驻两栏）
   const kbListCtx = useMemo(() => ({ open: kbListOpen, setOpen: setKbListOpen }), [kbListOpen]);
   const [rowMenu, setRowMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
   const [agentSettingsFor, setAgentSettingsFor] = useState<Session | null>(null);
@@ -430,16 +430,12 @@ const ShellInner: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agents, recents, teahouses]);
 
-  // Color theme + light/dark appearance → attributes on the .chaya-v2 root.
-  // 'system' follows the OS via matchMedia and live-updates.
-  const appearance = settings.appearance ?? 'dark';   // 默认(含未登录) = 深色
-  // 'warm' / 'linear' were retired from the theme picker — silently coerce any
-  // persisted value back to the minimalist default so users on a stale setting
-  // don't get a CSS variant that's no longer maintained or selectable in UI.
-  // 默认主题 = anthropic（象牙陶土）。'default'（极简）已下线 —— 持久化在 localStorage
-   // 里的旧值统一规整回 anthropic，确保用户不会停在已不再维护的 CSS 变体。
+  // 明暗策略：Pure(codex) 是我们自己的配色，支持 浅/深/自动 三态(settings.appearance)；
+  // 自动 = 跟随 macOS 外观实时切换。其它都是品牌「联动主题」，只有一种固定配色：
+  //   anthropic = 固定 light · razer = 固定 dark(纯黑)。
+  // 退役主题(warm/linear/cursor/xcode/default…)统一规整回 anthropic。
   const rawTheme = settings.theme ?? 'codex';   // 默认主题 = Pure
-  const theme: typeof rawTheme = (
+  const theme: ColorTheme = (
     (rawTheme as string) === 'warm' ||
     (rawTheme as string) === 'linear' ||
     (rawTheme as string) === 'midnight' ||
@@ -447,17 +443,35 @@ const ShellInner: React.FC = () => {
     (rawTheme as string) === 'xcode' ||
     (rawTheme as string) === 'default'
   ) ? 'anthropic' : rawTheme;
-  const [systemDark, setSystemDark] = useState(
-    () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-color-scheme: dark)').matches,
-  );
+
+  // 系统外观跟随：matchMedia 在浏览器/Electron 渲染层都能实时反映 OS（Electron 下
+  // 由 nativeTheme.themeSource 驱动，见下方桥接 effect），切换 macOS 明暗会即时回调。
+  const [systemDark, setSystemDark] = useState<boolean>(() =>
+    typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-color-scheme: dark)').matches);
   useEffect(() => {
-    if (appearance !== 'system' || typeof window === 'undefined' || !window.matchMedia) return;
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches);
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  }, [appearance]);
-  const resolvedMode = appearance === 'system' ? (systemDark ? 'dark' : 'light') : appearance;
+    const mq = window.matchMedia?.('(prefers-color-scheme: dark)');
+    if (!mq) return;
+    const on = () => setSystemDark(mq.matches);
+    mq.addEventListener?.('change', on);
+    return () => mq.removeEventListener?.('change', on);
+  }, []);
+
+  // Pure 的明暗：浅/深 直选，自动(system) 跟随 systemDark；默认 dark(保持既有观感)。
+  const pureAppearance = settings.appearance ?? 'dark';
+  const resolvedMode: 'light' | 'dark' =
+    theme === 'anthropic' ? 'light'
+    : theme === 'razer' ? 'dark'
+    : (pureAppearance === 'system' ? (systemDark ? 'dark' : 'light') : pureAppearance);
+
+  // Electron 原生外观桥：把目标外观推给主进程的 nativeTheme.themeSource。
+  // 这一步同时解决两件事——① 渲染层 prefers-color-scheme 跟着走(自动模式实时切换)；
+  // ② 窗口 under-window vibrancy 的明暗也跟着走，避免「浅色 CSS 罩在暗色毛玻璃上发灰」。
+  useEffect(() => {
+    const ap = (window as any).chateeElectron?.appearance;
+    if (!ap?.set) return;
+    // Pure 自动 → 'system'(交回 OS)；其余(含 Pure 浅/深、anthropic、razer) → 锁定具体明暗。
+    ap.set(theme === 'codex' && pureAppearance === 'system' ? 'system' : resolvedMode);
+  }, [theme, pureAppearance, resolvedMode]);
 
   // Frosted glass: per-zone toggles + global intensity. CSS matches each zone
   // via [data-glass~="<zone>"]. Sidebar/topbar vibrancy only reads when there's
@@ -1171,6 +1185,8 @@ const ShellInner: React.FC = () => {
   return (
     <FbotProvider>
     <div className="chaya-v2" data-mode={resolvedMode} data-theme={theme} data-glass={glassAttr} data-glass-i={glassIntensity} onDragOver={swallowDragOver} onDrop={onDrop}>
+      {/* L0 底层壁纸：固定铺满、置于内容之后（Pure 三层结构的最底层透明玻璃面） */}
+      <div id="v2-wall" aria-hidden />
       {/* ===== 全宽统一顶栏：红绿灯 + 图标导航 + 置顶 + tab + 折叠，全在这一行（跨整窗宽） ===== */}
       <div className="v2-titlebar">
         <div className="v2-dots" aria-hidden><i /><i /><i /></div>
@@ -1276,6 +1292,14 @@ const ShellInner: React.FC = () => {
             onClick={() => setCollapsed((c) => !c)}
           ><IconSidebar /></button>
         )}
+        {/* 常驻拖窗手柄：顶栏被 tab/按钮占满后没有空白可拖窗，这里固定留一小块可长按拖拽区。 */}
+        <div className="v2-titlebar-drag" title={tr('shell.dragWindow')} aria-label={tr('shell.dragWindow')}>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden>
+            <circle cx="9" cy="6" r="1.4" /><circle cx="15" cy="6" r="1.4" />
+            <circle cx="9" cy="12" r="1.4" /><circle cx="15" cy="12" r="1.4" />
+            <circle cx="9" cy="18" r="1.4" /><circle cx="15" cy="18" r="1.4" />
+          </svg>
+        </div>
       </div>
 
       <div className={`v2-app${collapsed ? ' collapsed' : ''}`} data-nav={activeNav}>

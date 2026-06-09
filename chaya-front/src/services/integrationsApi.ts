@@ -96,12 +96,30 @@ function flattenDiscovery(raw: any): OAuthMetadata {
   };
 }
 
+export interface McpDetectResult {
+  transport: 'http' | 'sse' | 'stdio';
+  reachable: boolean;
+  auth_required: boolean;
+  oauth: boolean;
+  token_in_url: boolean;
+  dcr_supported: boolean;
+  needs_manual_client: boolean;
+  provider_hint?: string;
+  scopes?: string[];
+}
+
 export const oauthApi = {
   /** Probe an MCP URL for OAuth requirements + endpoints. */
   discover: async (mcpUrl: string): Promise<OAuthMetadata> => {
     const raw = await api.post<any>('/api/mcp/oauth/discover', { mcp_url: mcpUrl });
     return flattenDiscovery(raw);
   },
+
+  /** Auto-detect transport + auth requirements for an MCP URL (entry-form helper).
+   *  `skipDcr` skips the side-effecting Dynamic Client Registration probe — use it
+   *  for lightweight classification (list rows) where transport/auth is enough. */
+  detect: (mcpUrl: string, skipDcr = false) =>
+    api.post<McpDetectResult>('/api/mcp/oauth/detect', { mcp_url: mcpUrl, skip_dcr: skipDcr }),
 
   /** Build the authorization URL (PKCE + state stashed in backend Redis). */
   authorize: (body: OAuthMetadata & { mcp_url: string }) =>

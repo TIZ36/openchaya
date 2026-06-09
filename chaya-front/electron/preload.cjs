@@ -7,11 +7,18 @@ contextBridge.exposeInMainWorld('chateeElectron', {
   isElectron: true,
   platform: process.platform,
 
+  // 外观桥：渲染层把目标明暗('light'|'dark'|'system')推给主进程，主进程设 nativeTheme.themeSource。
+  // 'system' = 交回 macOS 实时跟随；具体明暗 = 同时锁定 prefers-color-scheme 与窗口 vibrancy 的明暗。
+  appearance: {
+    set: (mode) => ipcRenderer.invoke('appearance:set', mode),
+  },
+
   // 本地 Agent 桥（纯本地，与 Chaya 后端无关）
   localAgent: {
     detect: (only) => ipcRenderer.invoke('localAgent:detect', only),
     pickFolder: () => ipcRenderer.invoke('localAgent:pickFolder'),
     pickFiles: () => ipcRenderer.invoke('localAgent:pickFiles'),
+    listModels: (provider, apiKey) => ipcRenderer.invoke('localAgent:listModels', { provider, apiKey }),
     listSessions: (provider, cwd) => ipcRenderer.invoke('localAgent:listSessions', { provider, cwd }),
     scanCodexSessions: () => ipcRenderer.invoke('localAgent:scanCodexSessions'),
     readSession: (provider, cwd, sessionId) => ipcRenderer.invoke('localAgent:readSession', { provider, cwd, sessionId }),

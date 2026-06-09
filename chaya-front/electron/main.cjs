@@ -1,7 +1,7 @@
 /**
  * Electron 主进程：加载 Vite 开发服务器或打包后的 dist，后端始终通过 HTTP 独立连接。
  */
-const { app, BrowserWindow, shell, ipcMain, dialog, nativeImage } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, dialog, nativeImage, nativeTheme } = require('electron');
 const path = require('path');
 const { registerLocalAgent, killAllSessions } = require('./localAgent.cjs');
 const { registerNotes } = require('./notes.cjs');
@@ -135,6 +135,14 @@ registerAutomation(ipcMain);
 registerReview(ipcMain);
 // 录入飞书助手桥（长连接 bot，纯本地；启停由渲染层控制，不自动启）。
 registerFbot(ipcMain);
+
+// 外观桥：渲染层（Pure 主题）推送目标明暗。设 nativeTheme.themeSource —
+//   'system' → 交回 macOS 实时跟随（自动模式）；'light'/'dark' → 锁定，
+//   同时让 prefers-color-scheme 与 under-window vibrancy 的明暗都跟着走。
+ipcMain.handle('appearance:set', (_e, mode) => {
+  nativeTheme.themeSource = (mode === 'light' || mode === 'dark') ? mode : 'system';
+  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+});
 
 app.whenReady().then(() => {
   // Dev dock icon (packaged macOS uses build/icon.icns from the bundle).

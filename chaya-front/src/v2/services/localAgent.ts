@@ -193,6 +193,7 @@ interface LocalAgentBridge {
   detect(only?: ProviderId): Promise<DetectedProvider[]>;
   pickFolder(): Promise<string | null>;
   pickFiles(): Promise<Array<{ kind: 'image' | 'file'; name: string; path: string; mime: string | null; size: number; dataUrl?: string }>>;
+  listModels(provider: ProviderId, apiKey?: string | null): Promise<ModelInfo[]>;
   listSessions(provider: ProviderId, cwd: string): Promise<SessionSummary[]>;
   scanCodexSessions(): Promise<CodexSessionSummary[]>;
   readSession(provider: ProviderId, cwd: string, sessionId: string): Promise<{ messages: TranscriptMessage[] }>;
@@ -231,6 +232,8 @@ export const localAgent = {
   detect: (only?: ProviderId) => bridge()?.detect(only) ?? Promise.resolve([] as DetectedProvider[]),
   pickFolder: () => bridge()?.pickFolder() ?? Promise.resolve(null),
   pickFiles: () => bridge()?.pickFiles() ?? Promise.resolve([]),
+  listModels: (provider: ProviderId, apiKey?: string | null) =>
+    bridge()?.listModels(provider, apiKey) ?? Promise.resolve([] as ModelInfo[]),
   listSessions: (provider: ProviderId, cwd: string) =>
     bridge()?.listSessions(provider, cwd) ?? Promise.resolve([] as SessionSummary[]),
   scanCodexSessions: () =>

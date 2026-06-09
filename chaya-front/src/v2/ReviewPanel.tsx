@@ -53,17 +53,19 @@ const ProviderPick: React.FC<{ value: string; detected: DetectedProvider[]; onCh
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
-    window.addEventListener('mousedown', onDown);
-    return () => window.removeEventListener('mousedown', onDown);
+    // 捕获阶段：评审面板所在的 CodeEditorLayer 抽屉对 mousedown 做了 stopPropagation，
+    // 冒泡到 window 收不到面板内空白处的点击 —— 用 capture 在 stopPropagation 之前拿到。
+    window.addEventListener('mousedown', onDown, true);
+    return () => window.removeEventListener('mousedown', onDown, true);
   }, [open]);
   return (
-    <div className="v2-rev-engine" ref={ref}>
-      <button type="button" className="v2-rev-engine-btn" onClick={() => setOpen((o) => !o)}>
+    <div className="v2-rev-ctl v2-rev-engine" ref={ref}>
+      <button type="button" className="v2-rev-ctl-btn" onClick={() => setOpen((o) => !o)} title={PROVIDER_LABELS[value] || value}>
         <ProviderLogo id={value} /><span className="lb">{PROVIDER_LABELS[value] || value}</span>
         <span className="chev"><IcoChevDown /></span>
       </button>
       {open && (
-        <div className="v2-rev-engine-menu" role="listbox">
+        <div className="v2-rev-menu" role="listbox">
           {PROVIDERS.map((p) => (
             <button key={p} type="button" role="option" aria-selected={p === value} className={`it${p === value ? ' on' : ''}${ready(p) ? '' : ' off'}`} onClick={() => { onChange(p); setOpen(false); }}>
               <ProviderLogo id={p} className={ready(p) ? '' : 'off'} />
@@ -78,24 +80,46 @@ const ProviderPick: React.FC<{ value: string; detected: DetectedProvider[]; onCh
   );
 };
 
-/* 模型选择器：可选已知模型或自由输入任意模型 id（空 = 引擎默认模型）。 */
-const ModelPick: React.FC<{ value: string; suggestions: ModelInfo[]; onChange: (v: string) => void }> = ({ value, suggestions, onChange }) => {
+/* 模型选择器：紧凑下拉（默认 + 拉到的模型 + 自定义输入）。空 = 引擎默认模型。 */
+const ModelPick: React.FC<{ value: string; suggestions: ModelInfo[]; loading?: boolean; onChange: (v: string) => void; onOpen?: () => void }> = ({ value, suggestions, loading, onChange, onOpen }) => {
   const { t: tr } = useI18n();
-  const listId = 'v2-rev-models';
+  const [open, setOpen] = useState(false);
+  const [custom, setCustom] = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+  const toggle = () => setOpen((o) => { if (!o) onOpen?.(); return !o; });
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    // 捕获阶段：评审面板所在的 CodeEditorLayer 抽屉对 mousedown 做了 stopPropagation，
+    // 冒泡到 window 收不到面板内空白处的点击 —— 用 capture 在 stopPropagation 之前拿到。
+    window.addEventListener('mousedown', onDown, true);
+    return () => window.removeEventListener('mousedown', onDown, true);
+  }, [open]);
+  const cur = value ? (suggestions.find((m) => m.value === value)?.displayName || value) : tr('review.modelDefault');
+  const commitCustom = () => { const v = custom.trim(); if (v) { onChange(v); setCustom(''); setOpen(false); } };
   return (
-    <div className="v2-rev-model">
-      <input
-        list={listId}
-        value={value}
-        spellCheck={false}
-        placeholder={tr('review.modelDefault')}
-        onChange={(e) => onChange(e.target.value)}
-        title={tr('review.model')}
-      />
-      <datalist id={listId}>
-        {suggestions.map((m) => <option key={m.value} value={m.value}>{m.displayName || m.value}</option>)}
-      </datalist>
-      {value && <button className="clr" onClick={() => onChange('')} title={tr('review.modelDefault')} aria-label="clear">×</button>}
+    <div className="v2-rev-ctl v2-rev-model" ref={ref}>
+      <button type="button" className={`v2-rev-ctl-btn${value ? ' on' : ''}`} onClick={toggle} title={`${tr('review.model')}: ${value || tr('review.modelDefault')}`}>
+        <span className="lb">{cur}</span>
+        <span className="chev">{loading ? <span className="v2-rev-spin" aria-label={tr('review.modelLoading')} /> : <IcoChevDown />}</span>
+      </button>
+      {open && (
+        <div className="v2-rev-menu v2-rev-menu-r" role="listbox">
+          <button type="button" role="option" aria-selected={!value} className={`it${!value ? ' on' : ''}`} onClick={() => { onChange(''); setOpen(false); }}>
+            <span className="nm">{tr('review.modelDefault')}</span>{!value && <span className="ck">✓</span>}
+          </button>
+          {suggestions.map((m) => (
+            <button key={m.value} type="button" role="option" aria-selected={m.value === value} className={`it mono${m.value === value ? ' on' : ''}`} onClick={() => { onChange(m.value); setOpen(false); }}>
+              <span className="nm" title={m.value}>{m.displayName || m.value}</span>
+              {m.value === value && <span className="ck">✓</span>}
+            </button>
+          ))}
+          <div className="v2-rev-menu-custom">
+            <input value={custom} spellCheck={false} placeholder={tr('review.modelCustom')} onChange={(e) => setCustom(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') commitCustom(); }} />
+            {custom.trim() && <button className="go" onClick={commitCustom} title={tr('review.modelUse')}>↵</button>}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -115,19 +139,21 @@ const SessionPick: React.FC<{ value: string | null; options: ReviewRun[]; onPick
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
-    window.addEventListener('mousedown', onDown);
-    return () => window.removeEventListener('mousedown', onDown);
+    // 捕获阶段：评审面板所在的 CodeEditorLayer 抽屉对 mousedown 做了 stopPropagation，
+    // 冒泡到 window 收不到面板内空白处的点击 —— 用 capture 在 stopPropagation 之前拿到。
+    window.addEventListener('mousedown', onDown, true);
+    return () => window.removeEventListener('mousedown', onDown, true);
   }, [open]);
   const sel = value ? options.find((o) => o.sessionId === value) : null;
   return (
-    <div className="v2-rev-sess" ref={ref}>
-      <button type="button" className={`v2-rev-sess-btn${value ? ' on' : ''}`} onClick={() => setOpen((o) => !o)} title={value ? tr('review.continueIn') : tr('review.targetNew')}>
+    <div className="v2-rev-ctl v2-rev-sess" ref={ref}>
+      <button type="button" className={`v2-rev-ctl-btn${value ? ' on' : ''}`} onClick={() => setOpen((o) => !o)} title={value ? `${tr('review.continueIn')}: ${runSummary(sel!, tr)}` : tr('review.targetNew')}>
         <IcoReuse />
         <span className="lb">{sel ? runSummary(sel, tr) : tr('review.targetNew')}</span>
         <span className="chev"><IcoChevDown /></span>
       </button>
       {open && (
-        <div className="v2-rev-sess-menu" role="listbox">
+        <div className="v2-rev-menu v2-rev-menu-r" role="listbox">
           <button type="button" role="option" aria-selected={!value} className={`it${!value ? ' on' : ''}`} onClick={() => { onPick(null); setOpen(false); }}>
             <span className="nm">{tr('review.targetNew')}</span>{!value && <span className="ck">✓</span>}
           </button>
@@ -233,11 +259,31 @@ export const ReviewPanel: React.FC<{ cwd: string | null; provider?: string; mode
   // 换引擎 → 回到「跟最近会话」默认（会话不能跨引擎续）+ 清掉模型（模型 id 是引擎专属）。
   useEffect(() => { setAuto(true); setPicked(null); setModel(''); }, [prov]);
 
-  // 模型建议：评审引擎 == 活动会话引擎时用其权威 modelOptions，否则用静态别名；都支持自由输入。
+  // 主动拉该引擎的模型列表（不必先开会话），与对话 CLI 共用 electron 端 _modelsByProvider 缓存：
+  // 命中即秒回；未命中（首次，如 cursor/codex 要 spawn 拉）才真正等待 → 按钮上转圈。
+  const [fetched, setFetched] = useState<ModelInfo[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const refreshModels = useCallback((spin?: boolean) => {
+    if (spin) setModelsLoading(true);
+    localAgent.listModels(prov as ProviderId).then((ms) => { setFetched(ms || []); setModelsLoading(false); });
+  }, [prov]);
+  useEffect(() => { setFetched([]); refreshModels(true); }, [prov, refreshModels]);
+  // 共用缓存的关键：任何会话(对话 CLI / 评审自身)报出模型 → 重新拉一次（缓存已被回填，秒回）。
+  // copilot/gemini 的模型只在 ACP session 起来后才有，靠这个事件让评审实时拿到，而不是停在空列表。
+  useEffect(() => {
+    const off = localAgent.onEvent((data: any) => { if (data?.ev?.type === 'models') refreshModels(); });
+    return off;
+  }, [refreshModels]);
+
+  // 模型建议：主动拉到的 ∪ 活动会话权威列表(同引擎) ∪ 静态别名兜底；都支持自由输入。
   const modelSuggest = useMemo<ModelInfo[]>(() => {
-    if (activeProvider === prov && modelOptions.length) return modelOptions;
-    return (MODEL_SUGGEST[prov] || []).map((v) => ({ value: v, displayName: v }));
-  }, [activeProvider, prov, modelOptions]);
+    const byVal = new Map<string, ModelInfo>();
+    const add = (arr: ModelInfo[]) => arr.forEach((m) => { if (m?.value && !byVal.has(m.value)) byVal.set(m.value, m); });
+    add(fetched);
+    if (activeProvider === prov) add(modelOptions);
+    if (byVal.size === 0) add((MODEL_SUGGEST[prov] || []).map((v) => ({ value: v, displayName: v })));
+    return [...byVal.values()];
+  }, [fetched, activeProvider, prov, modelOptions]);
 
   // 实时：评审进度/完成 + 列表变更回推。
   useEffect(() => {
@@ -290,27 +336,19 @@ export const ReviewPanel: React.FC<{ cwd: string | null; provider?: string; mode
 
   return (
     <div className="v2-rev">
-      {/* 行动栏：引擎 · 提示词开关 · 评审（保持简洁，模型/续用归到下面的设置行）。 */}
+      {/* 行动栏：引擎 · 提示词 · 模型 · 续用 ···· 评审（紧凑一行）。 */}
       <div className="v2-rev-bar">
         <ProviderPick value={prov} detected={detected} onChange={setProv} />
         <button className="v2-rev-guide-btn" onClick={() => setShowGuide((s) => !s)} title={tr('review.guidance')} aria-pressed={showGuide}><IcoPrompt /></button>
+        <ModelPick value={model} suggestions={modelSuggest} loading={modelsLoading} onChange={setModel} onOpen={() => refreshModels()} />
+        {(resumable.length > 0 || !auto) && (
+          <SessionPick value={effectiveResume} options={resumable} onPick={pickTarget} />
+        )}
         <span className="grow" />
         <button className="v2-rev-run-btn" disabled={!hasChanges || starting} onClick={() => runReview({ resumeFrom: effectiveResume })}>
           <IcoPlay />{starting ? tr('review.starting') : effectiveResume ? tr('review.runContinue') : tr('review.run')}
         </button>
       </div>
-
-      {/* 设置行：模型（始终）+ 续用目标（有可续会话时）。 */}
-      <div className="v2-rev-opt">
-        <span className="lbl">{tr('review.model')}</span>
-        <ModelPick value={model} suggestions={modelSuggest} onChange={setModel} />
-      </div>
-      {(resumable.length > 0 || !auto) && (
-        <div className="v2-rev-opt">
-          <span className="lbl">{tr('review.target')}</span>
-          <SessionPick value={effectiveResume} options={resumable} onPick={pickTarget} />
-        </div>
-      )}
 
       {showGuide && (
         <textarea

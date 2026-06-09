@@ -226,10 +226,23 @@ func (a *MCPAPI) probe(w http.ResponseWriter, r *http.Request) {
 	healthy := len(tools) > 0
 	a.db.Model(&pgstore.MCPServer{}).Where("id = ?", s.ID).Update("healthy", healthy)
 
+	// On failure, surface the real initialize error (e.g. expired URL token)
+	// instead of a blank "0 tools" — non-OAuth servers only.
+	var probeErr string
+	if !healthy {
+		if err := a.mcpRegistry.ProbeError(ctx, mcp.ServerConfig{
+			ID: s.ID, TenantID: s.TenantID, Name: s.Name, URL: s.URL,
+			Type: s.Type, Config: s.Config, Enabled: s.Enabled, Healthy: s.Healthy,
+		}); err != nil {
+			probeErr = err.Error()
+		}
+	}
+
 	OK(w, M{
 		"ok":         healthy,
 		"tool_count": len(tools),
 		"tools":      names,
+		"error":      probeErr,
 	})
 }
 

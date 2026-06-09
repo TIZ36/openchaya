@@ -114,6 +114,7 @@ func RegisterMCPOAuthRoutes(r chi.Router, rdb *redis.Client, cfg *internal.Confi
 	}
 	a := &MCPOAuthAPI{rdb: rdb, publicURL: cfg.Server.PublicBaseURL(), db: db, mcpReg: mcpReg}
 	r.Post("/api/mcp/oauth/discover", a.discover)
+	r.Post("/api/mcp/oauth/detect", a.detect)
 	r.Post("/api/mcp/oauth/authorize", a.authorize)
 	r.Get("/api/mcp/oauth/token-status", a.tokenStatus)
 }
@@ -142,6 +143,130 @@ func (a *MCPOAuthAPI) discover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	OK(w, res)
+}
+
+// mcpDetectResult is the auto-detection summary the entry form uses to set the
+// transport, decide whether to show OAuth fields, and render status tags —
+// lowering the bar for users who don't know http/sse/stdio or OAuth details.
+type mcpDetectResult struct {
+	Transport         string   `json:"transport"`           // http | sse | stdio
+	Reachable         bool     `json:"reachable"`           // server answered our probe
+	AuthRequired      bool     `json:"auth_required"`       // 401 / OAuth metadata present
+	OAuth             bool     `json:"oauth"`               // real RFC 9728/8414 OAuth metadata found
+	TokenInURL        bool     `json:"token_in_url"`        // auth required but no OAuth metadata → token is carried in the URL (e.g. Feishu open MCP)
+	DCRSupported      bool     `json:"dcr_supported"`       // anonymous Dynamic Client Registration works
+	NeedsManualClient bool     `json:"needs_manual_client"` // auth required but DCR rejected → user must bring client_id/secret
+	ProviderHint      string   `json:"provider_hint,omitempty"`
+	Scopes            []string `json:"scopes,omitempty"`
+}
+
+func (a *MCPOAuthAPI) detect(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		MCPURL string `json:"mcp_url"`
+		// SkipDCR avoids the side-effecting Dynamic Client Registration probe —
+		// callers that only need transport/auth classification (e.g. the server
+		// list rows) set this so we don't register throwaway clients on every load.
+		SkipDCR bool `json:"skip_dcr"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.MCPURL) == "" {
+		Fail(w, CodeBadRequest, "mcp_url 必填")
+		return
+	}
+	raw := strings.TrimSpace(req.MCPURL)
+
+	// Not an http(s) URL → treat as a stdio launch command (e.g. `npx ...`).
+	u, perr := url.Parse(raw)
+	if perr != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		OK(w, mcpDetectResult{Transport: "stdio"})
+		return
+	}
+
+	out := mcpDetectResult{Transport: "http", ProviderHint: providerHintFromHost(u.Host)}
+
+	// Transport: a `/sse` path is the legacy SSE convention; otherwise default to
+	// Streamable HTTP. The backend negotiates either via content-type at connect
+	// time, so this only drives the label.
+	if strings.HasSuffix(strings.TrimSuffix(u.Path, "/"), "/sse") {
+		out.Transport = "sse"
+	}
+
+	// Probe the endpoint with an unauthenticated initialize. 401 (or successful
+	// OAuth metadata discovery) means auth is required.
+	client := &http.Client{Timeout: 12 * time.Second}
+	body := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"chaya-detect","version":"1.0"}}}`)
+	if preq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, raw, body); err == nil {
+		preq.Header.Set("Content-Type", "application/json")
+		preq.Header.Set("Accept", "application/json, text/event-stream")
+		if resp, err := client.Do(preq); err == nil {
+			out.Reachable = true
+			if resp.StatusCode == http.StatusUnauthorized {
+				out.AuthRequired = true
+			}
+			if resp.StatusCode == http.StatusMethodNotAllowed && out.Transport == "http" {
+				out.Transport = "sse"
+			}
+			resp.Body.Close()
+		}
+	}
+
+	// Confirm/augment via RFC 9728/8414 discovery — also yields the registration
+	// endpoint + scopes. If discovery succeeds, auth is definitely required.
+	if disc, err := discoverOAuthMetadata(r.Context(), raw); err == nil {
+		out.AuthRequired = true
+		out.OAuth = true
+		out.Reachable = true
+		if pr, ok := disc.ProtectedResource.(map[string]any); ok {
+			if arr, ok := pr["scopes_supported"].([]any); ok {
+				for _, s := range arr {
+					if str, ok := s.(string); ok {
+						out.Scopes = append(out.Scopes, str)
+					}
+				}
+			}
+		}
+		// Probe Dynamic Client Registration: if the AS advertises a registration
+		// endpoint, try it. Success → no manual creds needed; rejection (e.g.
+		// Facebook's "not available") → user must supply their own client_id/secret.
+		if as, ok := disc.AuthorizationServer.(map[string]any); ok && !req.SkipDCR {
+			if regEP, _ := as["registration_endpoint"].(string); regEP != "" {
+				redirectURI := a.publicURL + "/mcp/oauth/callback"
+				if _, derr := dynamicRegisterClient(r.Context(), regEP, redirectURI, "Chaya MCP (detect)"); derr == nil {
+					out.DCRSupported = true
+				}
+			}
+		}
+		// Only trustworthy when DCR was actually probed.
+		out.NeedsManualClient = !req.SkipDCR && out.AuthRequired && !out.DCRSupported
+	}
+
+	// Auth required (401) but no standard OAuth metadata → the credential lives in
+	// the URL itself (e.g. Feishu open-platform MCP's /mcp/stream/<grant-token>).
+	// Such servers can't be re-authorized via our OAuth flow; the user must
+	// regenerate the token-bearing URL in the provider console.
+	out.TokenInURL = out.AuthRequired && !out.OAuth
+	if out.TokenInURL {
+		out.NeedsManualClient = false
+	}
+
+	OK(w, out)
+}
+
+// providerHintFromHost maps well-known MCP hosts to a short label for tagging.
+func providerHintFromHost(host string) string {
+	h := strings.ToLower(host)
+	switch {
+	case strings.Contains(h, "facebook.") || strings.Contains(h, "meta."):
+		return "facebook"
+	case strings.Contains(h, "feishu.") || strings.Contains(h, "larksuite."):
+		return "feishu"
+	case strings.Contains(h, "gitlab."):
+		return "gitlab"
+	case strings.Contains(h, "github."):
+		return "github"
+	case strings.Contains(h, "atlassian.") || strings.Contains(h, "jira."):
+		return "atlassian"
+	}
+	return ""
 }
 
 func (a *MCPOAuthAPI) authorize(w http.ResponseWriter, r *http.Request) {
@@ -412,10 +537,24 @@ func discoverOAuthMetadata(ctx context.Context, mcpURL string) (oauthDiscoveryRe
 	base := strings.TrimSuffix(u.String(), "/")
 	client := &http.Client{Timeout: 20 * time.Second}
 
-	tryURLs := []string{
-		base + "/.well-known/oauth-protected-resource",
-		u.Scheme + "://" + u.Host + "/.well-known/oauth-protected-resource",
+	// RFC 9728: the well-known segment is inserted between host and the resource
+	// path, e.g. resource https://host/ads -> https://host/.well-known/oauth-protected-resource/ads.
+	// Older code only appended the well-known to the full URL or used host-root, both of
+	// which 404 for path-scoped resources (e.g. mcp.facebook.com/ads).
+	tryURLs := make([]string, 0, 3)
+	addURL := func(s string) {
+		for _, e := range tryURLs {
+			if e == s {
+				return
+			}
+		}
+		tryURLs = append(tryURLs, s)
 	}
+	if p := strings.Trim(u.Path, "/"); p != "" {
+		addURL(u.Scheme + "://" + u.Host + "/.well-known/oauth-protected-resource/" + p)
+	}
+	addURL(base + "/.well-known/oauth-protected-resource")
+	addURL(u.Scheme + "://" + u.Host + "/.well-known/oauth-protected-resource")
 	var pr map[string]any
 	var lastErr error
 	for _, tu := range tryURLs {
@@ -485,6 +624,12 @@ func fetchAuthorizationServerMetadata(ctx context.Context, client *http.Client, 
 		}
 	}
 	if au, err := url.Parse(asURL); err == nil && au.Scheme != "" && au.Host != "" {
+		// RFC 8414: well-known segment is inserted between host and the issuer path,
+		// e.g. issuer https://host/ads -> https://host/.well-known/oauth-authorization-server/ads
+		// (covers Facebook Ads MCP, where the AS lives under the /ads path).
+		if p := strings.Trim(au.Path, "/"); p != "" {
+			add(au.Scheme + "://" + au.Host + "/.well-known/oauth-authorization-server/" + p)
+		}
 		// Host root (covers Feishu: metadata not under /b/auth/mcp/...)
 		add(au.Scheme + "://" + au.Host + "/.well-known/oauth-authorization-server")
 	}

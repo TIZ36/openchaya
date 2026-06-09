@@ -238,6 +238,33 @@ func (r *Registry) EnsureClient(ctx context.Context, s ServerConfig) {
 	}(client, s.Name)
 }
 
+// ProbeError synchronously connects to a non-OAuth MCP server and returns the
+// initialize error verbatim (nil if it connects). It exists so the /probe
+// endpoint can surface *why* a connection failed (e.g. "MCP grant token has
+// expired" for token-in-URL servers) instead of a blank "0 tools". OAuth
+// servers return nil here — their auth state flows through the token path.
+func (r *Registry) ProbeError(ctx context.Context, s ServerConfig) error {
+	var cfg struct {
+		Headers  map[string]string `json:"headers"`
+		Metadata struct {
+			Headers map[string]string `json:"headers"`
+		} `json:"metadata"`
+		Ext struct {
+			ServerType string `json:"server_type"`
+		} `json:"ext"`
+	}
+	_ = json.Unmarshal(s.Config, &cfg)
+	if cfg.Ext.ServerType == "http_oauth" {
+		return nil
+	}
+	h := cfg.Headers
+	if len(h) == 0 && len(cfg.Metadata.Headers) > 0 {
+		h = cfg.Metadata.Headers
+	}
+	client := NewClient(s.ID, s.Name, ResolveMCPConnectURL(s.URL), h, 8*time.Second, s.TenantID)
+	return client.Initialize(ctx)
+}
+
 // agentMCPBindingRow is a lightweight scan target for the join table.
 type agentMCPBindingRow struct {
 	MCPServerID string `gorm:"column:mcp_server_id"`
