@@ -58,6 +58,7 @@ import { mcpApi, type MCPServer } from '../services/integrationsApi';
 import { LocalAgentTree, LocalAgentConversation, ForeignPaneContext, ProviderSwitcher } from './LocalAgentView';
 import { useLocalAgent, realDir } from './useLocalAgent';
 import { CodeEditorLayer } from './CodeEditorLayer';
+import { InspectorColumn } from './InspectorColumn';
 import { isLocalAgentAvailable, type ProviderId } from './services/localAgent';
 import { isFbotAvailable, fbot, type SpecData } from './services/fbot';
 import { shouldAutoDispatch, dispatchSubmission } from './services/fbotDispatch';
@@ -177,6 +178,17 @@ const ShellInner: React.FC = () => {
   const [generating, setGenerating] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<string | undefined>(undefined);
+  // 全局事件：任意视图（如输入框「管理技能」）派发 chaya:openSettings{section} → 打开设置并滚到该分组。
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const sec = (e as CustomEvent).detail?.section as string | undefined;
+      setSettingsSection(sec);
+      setSettingsOpen(true);
+    };
+    window.addEventListener('chaya:openSettings', onOpen as EventListener);
+    return () => window.removeEventListener('chaya:openSettings', onOpen as EventListener);
+  }, []);
   // 知识库视图侧栏对 kb 收起 → 账号入口改由 KB rail 底部承载（经 KbAccountContext 注入）。
   const kbAccount = useMemo<KbAccount>(() => ({
     authed,
@@ -1667,9 +1679,12 @@ const ShellInner: React.FC = () => {
           </div>{/* /.v2-view-frame */}
         </main>
 
-        {/* ===== inspector ===== wiki 伴随面板的 grid 第三列槽位（--insp-w 控宽）。
-             WikiNotes 通过 portal 把抽屉挂进这里 —— 真正的弹性第三区，main 自动让位。 */}
-        <div className="v2-inspector-slot" id="v2-inspector-slot" />
+        {/* ===== inspector ===== grid 第二列（--insp-w 控宽）。上下分屏：代码改动在上、笔记在下，
+             各自 portal 进 #v2-inspector-editor / #v2-inspector-note 子槽；默认等分、可拖、可各自关闭。 */}
+        <InspectorColumn
+          editorOpen={editorOpen && activeNav === 'local'}
+          noteOpen={wikiOpen && activeNav === 'local'}
+        />
         {/* 「代码改动」检视列：portal 进 inspector-slot，与 wiki 抽屉互斥（共用第二列）。 */}
         <CodeEditorLayer
           open={editorOpen && activeNav === 'local'}
@@ -1755,7 +1770,8 @@ const ShellInner: React.FC = () => {
           settings={settings}
           updateSettings={updateSettings}
           onLogout={handleLogout}
-          onClose={() => setSettingsOpen(false)}
+          onClose={() => { setSettingsOpen(false); setSettingsSection(undefined); }}
+          initialSection={settingsSection as any}
         />
       )}
 

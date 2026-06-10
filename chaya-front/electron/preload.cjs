@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('chateeElectron', {
     readSession: (provider, cwd, sessionId) => ipcRenderer.invoke('localAgent:readSession', { provider, cwd, sessionId }),
     deleteSession: (provider, cwd, sessionId) => ipcRenderer.invoke('localAgent:deleteSession', { provider, cwd, sessionId }),
     listCommands: (provider, cwd) => ipcRenderer.invoke('localAgent:listCommands', { provider, cwd }),
+    scanCliSkills: () => ipcRenderer.invoke('localAgent:scanCliSkills'),
     send: (payload) => ipcRenderer.invoke('localAgent:send', payload),
     warm: (payload) => ipcRenderer.invoke('localAgent:warm', payload),
     permissionRespond: (permId, decision) => ipcRenderer.invoke('localAgent:permissionRespond', { permId, decision }),
@@ -42,6 +43,19 @@ contextBridge.exposeInMainWorld('chateeElectron', {
     // git 工作区改动（文件夹事实，跨 session）：列改动文件 / 懒取单文件 diff。
     gitStatus: (dir) => ipcRenderer.invoke('localAgent:gitStatus', { dir }),
     gitDiffFile: (dir, file, untracked) => ipcRenderer.invoke('localAgent:gitDiffFile', { dir, file, untracked }),
+    gitRevertFile: (dir, file, untracked) => ipcRenderer.invoke('localAgent:gitRevertFile', { dir, file, untracked }),
+    gitRevertAll: (dir) => ipcRenderer.invoke('localAgent:gitRevertAll', { dir }),
+    // CLI 登录 pty：起会话 / 键入 / 杀 / 查状态 + 订阅按 id 路由的输出事件。
+    loginStart: (provider, cols, rows) => ipcRenderer.invoke('localAgent:loginStart', { provider, cols, rows }),
+    loginInput: (id, data) => ipcRenderer.invoke('localAgent:loginInput', { id, data }),
+    loginResize: (id, cols, rows) => ipcRenderer.invoke('localAgent:loginResize', { id, cols, rows }),
+    loginKill: (id) => ipcRenderer.invoke('localAgent:loginKill', { id }),
+    loginStatus: (provider) => ipcRenderer.invoke('localAgent:loginStatus', { provider }),
+    onLogin: (cb) => {
+      const handler = (_e, data) => cb(data);
+      ipcRenderer.on('localAgent:login', handler);
+      return () => ipcRenderer.removeListener('localAgent:login', handler);
+    },
     // 订阅流式事件；返回取消订阅函数。
     onEvent: (cb) => {
       const handler = (_e, data) => cb(data);

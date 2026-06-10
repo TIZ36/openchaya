@@ -126,12 +126,10 @@ export const IconAttach = () => (
   </svg>
 );
 
-// 创作魔法棒（之前的"三角"实在太泛）
+// 技能：干净的四角星辉（之前的魔法棒太碎太丑）；composer 按钮里配「Skill」文字一起用。
 export const IconSkill = () => (
   <svg viewBox="0 0 24 24" {...stroke}>
-    <path d="M5 19L14 10" />
-    <path d="M15 5l2 2M19 9l2 2M11 5l1 2M18 14l2 1" />
-    <path d="M14 10l2-2 4 4-2 2-4-4z" />
+    <path d="M12 4.5l1.9 5.6 5.6 1.9-5.6 1.9-1.9 5.6-1.9-5.6L4.5 12l5.6-1.9z" />
   </svg>
 );
 

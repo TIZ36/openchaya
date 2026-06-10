@@ -10,11 +10,11 @@
    读写本地文件交给本机 VSCode / Cursor —— 头部按钮把会话工作目录当工程打开。
    与 wiki 抽屉互斥（共用 grid 第二列）：开一个自动关另一个，靠 window 事件总线。
    ============================================================ */
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useI18n } from '../i18n';
 import { localAgent, basename, type TranscriptMessage, type GitFile, type ModelInfo } from './services/localAgent';
-import { DiffView, CodePreview, langOf } from './LocalAgentView';
+import { CodePreview, langOf } from './LocalAgentView';
 import { AutomationPanel } from './AutomationPanel';
 import { ReviewPanel } from './ReviewPanel';
 
@@ -32,6 +32,9 @@ const IconRefresh = () => (
 );
 const IconChevDown = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="11" height="11" aria-hidden><polyline points="6 9 12 15 18 9" /></svg>
+);
+const IconRevertSm = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="13" height="13" aria-hidden><path d="M3 3v5h5" /><path d="M3 8a9 9 0 1 0 2.2-3.1L3 8" /></svg>
 );
 // 编辑器品牌 logo（simple-icons 官方 path）。
 const IconVscode = () => (
@@ -163,12 +166,27 @@ function statusChar(f: GitFile): string {
 }
 const STATUS_CLASS: Record<string, string> = { M: 'mod', A: 'add', D: 'del', R: 'ren', U: 'new', C: 'add' };
 
-const GitFileRow: React.FC<{ f: GitFile; cwd: string; mine: boolean; defaultOpen?: boolean }> = ({ f, cwd, mine, defaultOpen }) => {
+const GitFileRow: React.FC<{ f: GitFile; cwd: string; mine: boolean; defaultOpen?: boolean; onReverted?: () => void }> = ({ f, cwd, mine, defaultOpen, onReverted }) => {
   const { t: tr } = useI18n();
   const [open, setOpen] = useState(!!defaultOpen);
   const [state, setState] = useState<{ loading: boolean; diff?: string; content?: string; err?: string }>({ loading: false });
+  const [reverting, setReverting] = useState(false);
   const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : '';
   const sc = statusChar(f);
+
+  const doRevert = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (reverting) return;
+    const isNew = f.untracked || sc === 'U' || (f.x === 'A');
+    const msg = isNew ? tr('local.editor.revertNewConfirm', { name: basename(f.path) || f.path })
+                      : tr('local.editor.revertConfirm', { name: basename(f.path) || f.path });
+    if (!window.confirm(msg)) return;
+    setReverting(true);
+    const r = await localAgent.gitRevertFile(cwd, f.path, f.untracked);
+    setReverting(false);
+    if (r.ok) onReverted?.();
+    else window.alert(r.error || tr('local.editor.revertFailed'));
+  };
 
   useEffect(() => {
     if (!open || state.diff !== undefined || state.content !== undefined || state.loading) return;
@@ -194,6 +212,14 @@ const GitFileRow: React.FC<{ f: GitFile; cwd: string; mine: boolean; defaultOpen
           {f.adds > 0 && <span className="stat add">+{f.adds}</span>}
           {f.dels > 0 && <span className="stat del">−{f.dels}</span>}
         </>)}
+        <span
+          role="button" tabIndex={0}
+          className={`v2-editor-revert${reverting ? ' busy' : ''}`}
+          title={tr('local.editor.revert')}
+          aria-label={tr('local.editor.revert')}
+          onClick={doRevert}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') doRevert(e as any); }}
+        ><IconRevertSm /></span>
       </button>
       {open && (
         <div className="v2-editor-file-bd">
@@ -210,34 +236,6 @@ const GitFileRow: React.FC<{ f: GitFile; cwd: string; mine: boolean; defaultOpen
   );
 };
 
-/* 非 repo 兜底：本会话 transcript 聚合行（沿用旧的内联 DiffView）。 */
-const TxFileRow: React.FC<{ fc: FileChange; defaultOpen?: boolean }> = ({ fc, defaultOpen }) => {
-  const { t: tr } = useI18n();
-  const [open, setOpen] = useState(!!defaultOpen);
-  const dir = fc.path.includes('/') ? fc.path.slice(0, fc.path.lastIndexOf('/')) : '';
-  return (
-    <div className={`v2-editor-file${open ? ' open' : ''}`}>
-      <button className="v2-editor-file-hd" onClick={() => setOpen((o) => !o)}>
-        <span className={`chev${open ? ' open' : ''}`} aria-hidden><IconChev /></span>
-        <span className="fn" title={fc.path}>{fc.name}</span>
-        {dir && <span className="dir" title={fc.path}>{dir}</span>}
-        <span className="grow" />
-        {fc.ops.length > 1 && <span className="ops">{tr('local.editor.ops', { n: fc.ops.length })}</span>}
-        {fc.adds > 0 && <span className="stat add">+{fc.adds}</span>}
-        {fc.dels > 0 && <span className="stat del">−{fc.dels}</span>}
-      </button>
-      {open && (
-        <div className="v2-editor-file-bd">
-          {fc.ops.map((op, i) => (
-            op.kind === 'diff'
-              ? <DiffView key={i} hunks={op.hunks} fileName={fc.name} />
-              : <div key={i} className="v2-editor-write"><span className="tag">{tr('local.editor.write')}</span><CodePreview code={op.content} lang={langOf(fc.name)} /></div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
 
 const CodeEditorLayerInner: React.FC<{
   open: boolean;
@@ -256,14 +254,12 @@ const CodeEditorLayerInner: React.FC<{
   const [editorPick, setEditorPick] = useState<'vscode' | 'cursor'>(() => ((typeof localStorage !== 'undefined' && localStorage.getItem('chaya:editorPick')) as 'vscode' | 'cursor') || 'vscode');
   const [note, setNote] = useState('');
   const [git, setGit] = useState<{ loading: boolean; repo: boolean; gitMissing: boolean; files: GitFile[] }>({ loading: false, repo: false, gitMissing: false, files: [] });
-  const [mode, setMode] = useState<'git' | 'session' | 'review' | 'auto'>('git');   // 工作区事实 / 本会话改动 / 评审 / 自动化
-  const autoRef = useRef(true);   // 未手动切过 → 按 git 是否可用自动选口径
+  const [mode, setMode] = useState<'git' | 'review' | 'auto'>('git');   // 工作区事实 / 评审 / 自动化
 
   // 只看「已落库」的 messages，不混 liveMsgs —— liveMsgs 每个 token 都换新数组引用，一旦纳入
-  // 这两个 memo 就会在流式期每个字重算一遍 collectFileChanges/sessionTouchedAbs（遍历全部消息），
-  // 是输入卡顿的主因。改动列表改为「整轮结束(messages 落库)后」更新即可，无需逐字跟。
+  // 这个 memo 就会在流式期每个字重算一遍 sessionTouchedAbs（遍历全部消息），是输入卡顿的主因。
+  // 用途：在工作区文件上标「本会话」徽标。改为「整轮结束(messages 落库)后」更新即可，无需逐字跟。
   const mineSet = useMemo(() => sessionTouchedAbs(messages, cwd), [messages, cwd]);
-  const txChanges = useMemo(() => collectFileChanges(messages), [messages]);
 
   // 拉 git 工作区状态（文件夹事实）。手动刷新 / 打开 / cwd 变 / 本会话推进 都会调。
   const refresh = useCallback(() => {
@@ -271,23 +267,30 @@ const CodeEditorLayerInner: React.FC<{
     setGit((g) => ({ ...g, loading: true }));
     localAgent.gitStatus(cwd).then((r) => {
       setGit({ loading: false, repo: !!r.repo, gitMissing: !!r.gitMissing, files: r.files || [] });
-      // 未手动切过口径：git 可用→工作区，否则→本会话。
-      if (autoRef.current) setMode(r.repo ? 'git' : 'session');
     }).catch(() => setGit({ loading: false, repo: false, gitMissing: false, files: [] }));
   }, [cwd]);
 
-  const pickMode = useCallback((m: 'git' | 'session' | 'review' | 'auto') => { autoRef.current = false; setMode(m); }, []);
+  const pickMode = useCallback((m: 'git' | 'review' | 'auto') => setMode(m), []);
 
-  // 打开时：检测编辑器 + 拉 git；广播占用让 wiki 让位；Esc 关闭。
+  // 一键还原整个工作区（破坏性，二次确认）：已跟踪 reset --hard，未跟踪移回收站。
+  const [revertingAll, setRevertingAll] = useState(false);
+  const revertAll = useCallback(async () => {
+    if (!cwd || revertingAll) return;
+    if (!window.confirm(tr('local.editor.revertAllConfirm', { n: git.files.length }))) return;
+    setRevertingAll(true);
+    const r = await localAgent.gitRevertAll(cwd);
+    setRevertingAll(false);
+    if (r.ok) refresh();
+    else window.alert(r.error || tr('local.editor.revertFailed'));
+  }, [cwd, revertingAll, git.files.length, refresh, tr]);
+
+  // 打开时：检测编辑器 + 拉 git；Esc 关闭。（与笔记列改为「上下分屏」共存，不再互斥让位。）
   useEffect(() => {
     if (!open) return;
     void localAgent.detectEditors().then(setEditors);
-    window.dispatchEvent(new CustomEvent('chaya:inspector-open', { detail: { who: 'editor' } }));
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    const onOther = (e: Event) => { const who = (e as CustomEvent).detail?.who; if (who && who !== 'editor') onClose(); };
     window.addEventListener('keydown', onKey);
-    window.addEventListener('chaya:inspector-open', onOther as EventListener);
-    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('chaya:inspector-open', onOther as EventListener); };
+    return () => { window.removeEventListener('keydown', onKey); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, onClose, cwd]);
 
@@ -373,9 +376,8 @@ const CodeEditorLayerInner: React.FC<{
 
   if (!open) return null;
   const host: Element = (typeof document !== 'undefined'
-    && (document.getElementById('v2-inspector-slot') || document.querySelector('.chaya-v2'))) || document.body;
+    && (document.getElementById('v2-inspector-editor') || document.getElementById('v2-inspector-slot') || document.querySelector('.chaya-v2'))) || document.body;
 
-  const showGit = mode === 'git';
 
   return createPortal(
     <aside className="v2-wiki-drawer v2-editor-drawer" role="region" aria-label={tr('local.editor.title')} onMouseDown={(e) => e.stopPropagation()}>
@@ -409,9 +411,8 @@ const CodeEditorLayerInner: React.FC<{
 
       {/* 口径切换：工作区事实(git) / 本会话改动 / 自动化任务。 */}
       <div className="v2-editor-tabs" role="tablist">
-        <button role="tab" aria-selected={mode === 'git'} className={`v2-editor-tab${mode === 'git' ? ' on' : ''}`} onClick={() => pickMode('git')}>{tr('local.editor.tabGit')}</button>
-        <button role="tab" aria-selected={mode === 'session'} className={`v2-editor-tab${mode === 'session' ? ' on' : ''}`} onClick={() => pickMode('session')}>
-          {tr('local.editor.tabSession')}{mineSet.size > 0 && <span className="n">{mineSet.size}</span>}
+        <button role="tab" aria-selected={mode === 'git'} className={`v2-editor-tab${mode === 'git' ? ' on' : ''}`} onClick={() => pickMode('git')}>
+          {tr('local.editor.tabGit')}{git.repo && git.files.length > 0 && <span className="n">{git.files.length}</span>}
         </button>
         <button role="tab" aria-selected={mode === 'review'} className={`v2-editor-tab${mode === 'review' ? ' on' : ''}`} onClick={() => pickMode('review')}>{tr('review.tab')}</button>
         <button role="tab" aria-selected={mode === 'auto'} className={`v2-editor-tab${mode === 'auto' ? ' on' : ''}`} onClick={() => pickMode('auto')}>{tr('auto.tab')}</button>
@@ -425,34 +426,25 @@ const CodeEditorLayerInner: React.FC<{
         <div className="v2-editor-changes"><ReviewPanel cwd={cwd} provider={provider} modelOptions={modelOptions} activeProvider={activeProvider} onSendToChat={onSendToChat} /></div>
       ) : (
       <div className="v2-editor-changes">
-        {showGit ? (
-          !git.repo ? (
-            <div className="v2-editor-empty">
-              <p className="t">{!cwd ? tr('local.editor.modeChanges') : git.gitMissing ? tr('local.editor.gitMissing') : tr('local.editor.notRepo')}</p>
-              {!git.gitMissing && cwd && <p className="h">{tr('local.editor.emptyHint')}</p>}
-            </div>
-          ) : git.files.length === 0 ? (
-            <div className="v2-editor-empty"><p className="t">{tr('local.editor.clean')}</p></div>
-          ) : (
-            <>
-              <div className="v2-editor-count">{tr('local.editor.modeGit')} · {tr('local.editor.fileCount', { n: git.files.length })}</div>
-              {git.files.map((f, i) => (
-                <GitFileRow key={f.path} f={f} cwd={cwd!} mine={mineSet.has(stripSlash(f.abs))} defaultOpen={git.files.length <= 3 && i === 0} />
-              ))}
-            </>
-          )
+        {!git.repo ? (
+          <div className="v2-editor-empty">
+            <p className="t">{!cwd ? tr('local.editor.modeChanges') : git.gitMissing ? tr('local.editor.gitMissing') : tr('local.editor.notRepo')}</p>
+            {!git.gitMissing && cwd && <p className="h">{tr('local.editor.emptyHint')}</p>}
+          </div>
+        ) : git.files.length === 0 ? (
+          <div className="v2-editor-empty"><p className="t">{tr('local.editor.clean')}</p></div>
         ) : (
-          txChanges.length === 0 ? (
-            <div className="v2-editor-empty">
-              <p className="t">{tr('local.editor.empty')}</p>
-              <p className="h">{tr('local.editor.emptyHint')}</p>
+          <>
+            <div className="v2-editor-count">
+              <span>{tr('local.editor.modeGit')} · {tr('local.editor.fileCount', { n: git.files.length })}</span>
+              <button className={`v2-editor-revertall${revertingAll ? ' busy' : ''}`} onClick={revertAll} disabled={revertingAll} title={tr('local.editor.revertAll')}>
+                <IconRevertSm /> {tr('local.editor.revertAll')}
+              </button>
             </div>
-          ) : (
-            <>
-              <div className="v2-editor-count">{tr('local.editor.fileCount', { n: txChanges.length })}</div>
-              {txChanges.map((fc, i) => <TxFileRow key={fc.path} fc={fc} defaultOpen={i === 0} />)}
-            </>
-          )
+            {git.files.map((f, i) => (
+              <GitFileRow key={f.path} f={f} cwd={cwd!} mine={mineSet.has(stripSlash(f.abs))} defaultOpen={git.files.length <= 3 && i === 0} onReverted={refresh} />
+            ))}
+          </>
         )}
       </div>
       )}

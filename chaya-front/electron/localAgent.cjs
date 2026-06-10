@@ -626,6 +626,13 @@ async function codexDeleteSession(cwd, sessionId) {
  *   probe：起一个 streaming 会话，发条极简消息触发 init，拿到 slash_commands
  *   立刻 SIGKILL（在模型应答前就杀掉，几乎零开销；订阅用户更无所谓）。
  * ------------------------------------------------------------------ */
+/* 子进程输出缓冲守卫：常驻会话可能挂一整天，stderr/残行只增不减会慢慢吃内存。
+ * 行缓冲超上限 = 异常超大单行（或非行式输出），裁掉头部只留尾；stderr 只为
+ * 出错时的提示文案服务，留尾部足矣。 */
+const STREAM_LINEBUF_MAX = 1024 * 1024;  // 1MB
+const STDERR_TAIL_MAX = 256 * 1024;      // 256KB
+const capTail = (s, max) => (s.length > max ? s.slice(-max) : s);
+
 function probeSlashCommands(bin, cwd) {
   return new Promise((resolve) => {
     let child;
@@ -643,7 +650,7 @@ function probeSlashCommands(bin, cwd) {
     } catch { return resolve(null); }
     const timer = setTimeout(() => finish(null), 8000);
     child.stdout.on('data', (d) => {
-      buf += d.toString('utf8');
+      buf = capTail(buf + d.toString('utf8'), STREAM_LINEBUF_MAX);
       let nl;
       while ((nl = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
@@ -731,6 +738,118 @@ async function readCmdDesc(file) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Unified Skill Hub —— 扫描各家 CLI 在本机安装的技能/自定义命令，
+ * 渲染端自动导入成 Chaya 技能（prompt 模板），从而跨 5 个 provider 通用。
+ * 来源（都只扫用户级目录；项目级命令已由 listCommands 走 provider 原生通道）：
+ *   ~/.claude/skills/<name>/SKILL.md   — Claude Code Skill（frontmatter name/description）
+ *   ~/.claude/commands/**.md           — Claude 自定义命令（$ARGUMENTS 占位）
+ *   ~/.codex/prompts/*.md              — Codex 自定义 prompt
+ *   ~/.cursor/commands/*.md            — Cursor 自定义命令
+ *   ~/.gemini/commands/**.toml         — Gemini CLI 命令（prompt 字段，{{args}} 占位）
+ * 返回统一结构 {name, description, body, origin, path, mtime}；body 已把各家
+ * 参数占位归一成 Chaya 的 {{input}}。超大文件截断，防止把 localStorage 撑爆。
+ * ------------------------------------------------------------------ */
+const SKILL_BODY_MAX = 24 * 1024;
+
+function parseFrontmatter(text) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
+  if (!m) return { meta: {}, body: text };
+  const meta = {};
+  const lines = m[1].split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const kv = /^([A-Za-z_-]+):\s*(.*)$/.exec(lines[i]);
+    if (!kv) continue;
+    let val = kv[2].trim();
+    // YAML 块标量（>- / | 等）：取后续缩进行拼成一段。
+    if (/^[>|][+-]?$/.test(val)) {
+      const parts = [];
+      while (i + 1 < lines.length && (/^\s+\S/.test(lines[i + 1]) || !lines[i + 1].trim())) { i++; parts.push(lines[i].trim()); }
+      val = parts.join(' ').trim();
+    }
+    meta[kv[1].toLowerCase()] = val.replace(/^["']|["']$/g, '');
+  }
+  return { meta, body: text.slice(m[0].length) };
+}
+
+function clampBody(s) {
+  const t = String(s || '').trim();
+  return t.length > SKILL_BODY_MAX ? `${t.slice(0, SKILL_BODY_MAX)}\n…(truncated)` : t;
+}
+
+async function scanCliSkills() {
+  const out = [];
+  const home = os.homedir();
+  const push = async (file, origin, name, mk) => {
+    try {
+      const st = await fsp.stat(file);
+      if (!st.isFile() || st.size > 512 * 1024) return;
+      const text = await fsp.readFile(file, 'utf8');
+      const entry = mk(text);
+      if (!entry || !entry.body) return;
+      out.push({ name, description: '', ...entry, origin, path: file, mtime: st.mtimeMs });
+    } catch { /* unreadable → skip */ }
+  };
+
+  // Claude Skills：每个技能一个目录，正文就是 prompt。
+  try {
+    const root = path.join(home, '.claude', 'skills');
+    for (const e of await fsp.readdir(root, { withFileTypes: true })) {
+      // 符号链接目录也算（CLI 装的技能常以软链形式挂进来）。
+      if (!e.isDirectory() && !e.isSymbolicLink()) continue;
+      await push(path.join(root, e.name, 'SKILL.md'), 'claude', e.name, (text) => {
+        const { meta, body } = parseFrontmatter(text);
+        return { name: meta.name || e.name, description: meta.description || '', body: clampBody(body) };
+      });
+    }
+  } catch { /* no dir */ }
+
+  // Markdown 命令类（claude commands / codex prompts / cursor commands）。
+  const mdRoots = [
+    { dir: path.join(home, '.claude', 'commands'), origin: 'claude' },
+    { dir: path.join(home, '.codex', 'prompts'), origin: 'codex' },
+    { dir: path.join(home, '.cursor', 'commands'), origin: 'cursor' },
+  ];
+  const walkMd = async (dir, prefix, origin) => {
+    let entries;
+    try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { await walkMd(full, prefix ? `${prefix}:${e.name}` : e.name, origin); continue; }
+      if (!e.name.endsWith('.md')) continue;
+      const base = e.name.replace(/\.md$/, '');
+      await push(full, origin, prefix ? `${prefix}:${base}` : base, (text) => {
+        const { meta, body } = parseFrontmatter(text);
+        return { description: meta.description || '', body: clampBody(body.split('$ARGUMENTS').join('{{input}}')) };
+      });
+    }
+  };
+  for (const r of mdRoots) await walkMd(r.dir, '', r.origin);
+
+  // Gemini CLI：TOML，取 description / prompt（含多行 """…"""）。
+  const walkToml = async (dir, prefix) => {
+    let entries;
+    try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { await walkToml(full, prefix ? `${prefix}:${e.name}` : e.name); continue; }
+      if (!e.name.endsWith('.toml')) continue;
+      const base = e.name.replace(/\.toml$/, '');
+      await push(full, 'gemini', prefix ? `${prefix}:${base}` : base, (text) => {
+        const desc = /^description\s*=\s*"(.*)"\s*$/m.exec(text);
+        const multi = /prompt\s*=\s*"""([\s\S]*?)"""/.exec(text);
+        const single = /^prompt\s*=\s*"(.*)"\s*$/m.exec(text);
+        const prompt = multi ? multi[1] : single ? single[1].replace(/\\n/g, '\n') : '';
+        if (!prompt.trim()) return null;
+        return { description: desc ? desc[1] : '', body: clampBody(prompt.split('{{args}}').join('{{input}}')) };
+      });
+    }
+  };
+  await walkToml(path.join(home, '.gemini', 'commands'), '');
+
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
  * 实时驱动 Claude Code —— Agent SDK 常驻会话（streaming-input）。
  * 每个标签(cwd) 一个长驻 query：进程不退、消息推进去、init 只一次 →
  * 后续回合只剩 API 往返，追齐原生终端速度。事件按 cwd 路由回对应标签。
@@ -783,7 +902,40 @@ function clearPerms(cwd, message) {
 }
 
 /** 起一个常驻会话（懒创建，首条消息时调用）。失败返回 null 并已发 error 事件。 */
-function startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, lane }) {
+/* ------------------------------------------------------------------ *
+ * 流式 IPC 合批：SDK/CLI 每个 token 一条 text_delta，多会话并行时主进程
+ * webContents.send 频率数百 Hz，IPC 序列化本身成为瓶颈。这里把连续的
+ * text_delta 聚合 ~16ms 一发（渲染端有打字机缓冲，体感零差异）；任何
+ * 非 delta 事件到来先冲掉积压，保证事件顺序不变。
+ * ------------------------------------------------------------------ */
+const DELTA_BATCH_MS = 16;
+function makeBatchedEmit(emitNow) {
+  let buf = null;     // { parentId, text }
+  let timer = null;
+  const flushDelta = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (!buf) return true;
+    const { parentId, text } = buf; buf = null;
+    const ev = { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text } } };
+    if (parentId) ev.parent_tool_use_id = parentId;
+    return emitNow(ev);
+  };
+  return (ev) => {
+    const e = ev && ev.type === 'stream_event' ? ev.event : null;
+    if (e && e.type === 'content_block_delta' && e.delta && e.delta.type === 'text_delta' && typeof e.delta.text === 'string') {
+      const pid = (ev.parent_tool_use_id) || null;
+      if (buf && buf.parentId !== pid && !flushDelta()) return false;
+      if (!buf) buf = { parentId: pid, text: '' };
+      buf.text += e.delta.text;
+      if (!timer) timer = setTimeout(flushDelta, DELTA_BATCH_MS);
+      return true;
+    }
+    if (buf && !flushDelta()) return false;   // 非 delta：先保序冲掉积压
+    return emitNow(ev);
+  };
+}
+
+function startSession(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, lane }) {
   const key = runKey(cwd, lane);   // Map 键 / 事件路由键（SDK 仍用真实 cwd）
   if (lane) console.log('[localAgent] start derive session · key=%s · dir=%s', key, cwd);
   const def = PROVIDERS[provider || 'claude'];
@@ -796,12 +948,12 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, 
 
   // 发事件给渲染层（按 runKey 路由）；帧已销毁（渲染进程崩溃/重载）则中断会话并停发，
   // 避免对着死帧疯狂 send 刷屏报错、也让孤儿 SDK 进程及时收尾。
-  const emit = (ev) => {
+  const emit = makeBatchedEmit((ev) => {
     const s = sessions.get(key); if (s) s.touched = Date.now();   // 任意流量 = 活跃，重置闲置计时
     if (sender.isDestroyed()) { try { ac.abort(); } catch { /* */ } return false; }
     try { sender.send('localAgent:event', { cwd: key, ev }); return true; }
     catch { try { ac.abort(); } catch { /* */ } return false; }
-  };
+  });
 
   const canUseTool = (toolName, toolInput, ctx) => new Promise((resolve) => {
     const settle = (decision) => {
@@ -815,7 +967,7 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, 
     };
     if (ac.signal.aborted) { settle({ behavior: 'deny', message: '已取消' }); return; }
     const permId = `perm-${Math.random().toString(36).slice(2, 10)}`;
-    pendingPerms.set(permId, { cwd: key, settle });
+    pendingPerms.set(permId, { cwd: key, settle, at: Date.now() });
     const isQuestion = toolName === 'AskUserQuestion';
     emit({
       type: isQuestion ? 'question_request' : 'permission_request', permId, toolName, input: toolInput,
@@ -828,7 +980,7 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, 
   });
 
   const mcpServers = resolveMcp(cwd, mcp);
-  const session = { input, ac, query: null, model: model || null, mcp: Array.isArray(mcp) ? mcp.slice() : [], touched: Date.now() };
+  const session = { input, ac, query: null, model: model || null, reasoning: reasoning || null, mcp: Array.isArray(mcp) ? mcp.slice() : [], touched: Date.now() };
   sessions.set(key, session);
 
   (async () => {
@@ -854,6 +1006,7 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, 
           env: childEnv(),
           stderr: (data) => emit({ type: 'stderr', text: String(data) }),
           ...(model ? { model } : {}),
+          ...(reasoning ? { effort: reasoning } : {}),   // claude 思考强度：low/medium/high/xhigh/max（SDK Options.effort）
           ...(sessionId ? { resume: sessionId } : {}),
         },
       });
@@ -936,8 +1089,17 @@ async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode,
   if (provider === 'copilot') return copilotSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, mcp });
   const key = runKey(cwd, lane);
   let s = sessions.get(key);
-  if (!s) s = startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, lane });
+  if (!s) s = startSession(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, lane });
   if (!s) return { ok: false };
+  // claude effort 无运行时 setter：思考强度变了就用新强度重建会话（resume 同一 sessionId，对话不丢）。
+  const wantEffort = reasoning || null;
+  if (s.query && wantEffort !== s.reasoning) {
+    try { s.ac.abort(); } catch { /* */ }
+    sessions.delete(key);
+    s = startSession(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, lane });
+    if (!s) return { ok: false };
+  }
+  s.reasoning = wantEffort;
   const want = model || null;
   if (s.query && want !== s.model && typeof s.query.setModel === 'function') {
     try { await s.query.setModel(want || undefined); } catch { /* */ }
@@ -955,7 +1117,7 @@ function sessionWarm(sender, { cwd, provider, sessionId, permMode, model, reason
   if (provider === 'gemini') return geminiWarm(sender, { cwd, lane, sessionId, permMode, model, mcp });
   if (provider === 'copilot') return copilotWarm(sender, { cwd, lane, sessionId, permMode, model, mcp });
   if (sessions.has(runKey(cwd, lane))) return { ok: true };
-  const s = startSession(sender, { cwd, provider, sessionId, permMode, model, mcp, lane });
+  const s = startSession(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, lane });
   return { ok: !!s };
 }
 
@@ -1025,10 +1187,13 @@ async function sessionSetModel({ cwd, model, lane }) {
   return { ok: false };
 }
 
-/** 运行中切 Codex 思考强度。会话不存在则忽略（下次发送会按选中值起）。 */
+/** 运行中切思考强度。codex 下回合按新值重起；claude 只记下，下次 sessionSend 检测到变化会带新
+ *  effort 重建会话（无运行时 setEffort）。会话不存在则忽略（下次发送按选中值起）。 */
 async function sessionSetReasoning({ cwd, reasoning, lane }) {
   const cx = codexSessions.get(runKey(cwd, lane));
   if (cx) { cx.reasoning = reasoning || null; return { ok: true }; }
+  const s = sessions.get(runKey(cwd, lane));   // claude 常驻会话
+  if (s) { s.reasoning = reasoning || null; return { ok: true }; }
   return { ok: false };
 }
 
@@ -1153,7 +1318,16 @@ function reapIdleSessions() {
       copilotSessions.delete(key);
     }
   }
+  // 僵尸权限请求：渲染层崩溃/弹窗被无限期忽略 → 超 30 分钟拒绝并清掉，
+  // 否则 Map 记录和挂着的 canUseTool Promise 永久滞留。
+  for (const [permId, e] of pendingPerms) {
+    if (now - (e.at || 0) > PERM_MAX_AGE_MS) {
+      pendingPerms.delete(permId);
+      try { e.settle({ behavior: 'deny', message: '权限请求超时（无人应答）' }); } catch { /* */ }
+    }
+  }
 }
+const PERM_MAX_AGE_MS = 30 * 60 * 1000;
 
 /** 会话进行中切换权限模式（Tab 切档即时生效）。 */
 async function sessionSetPermMode({ cwd, permMode, lane }) {
@@ -1460,11 +1634,11 @@ function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model, reas
   const startedAt = Date.now();
   const args = codexSpawnArgs({ cwd, prompt, sessionId: resumeId, model: wantModel, reasoning: wantReasoning, permMode: wantPerm });
 
-  const emit = (ev) => {
+  const emit = makeBatchedEmit((ev) => {
     if (sender.isDestroyed()) { try { ac.abort(); } catch { /* */ } return false; }
     try { sender.send('localAgent:event', { cwd: key, ev }); return true; }
     catch { try { ac.abort(); } catch { /* */ } return false; }
-  };
+  });
 
   const offerSandboxRetry = () => {
     if (wantPerm === 'bypassPermissions' || wantPerm === 'force') return false;
@@ -1474,6 +1648,7 @@ function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model, reas
     const failedCommand = ctx.permissionFailure.command || 'codex exec';
     pendingPerms.set(permId, {
       cwd: key,
+      at: Date.now(),
       settle: (decision) => {
         if (decision && decision.behavior === 'allow') {
           codexSend(sender, { cwd, lane, sessionId: session.sessionId || resumeId, prompt, permMode: 'bypassPermissions', model: wantModel, reasoning: wantReasoning });
@@ -1520,7 +1695,7 @@ function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model, reas
     return emit(ev);
   };
   child.stdout.on('data', (d) => {
-    buf += d.toString('utf8');
+    buf = capTail(buf + d.toString('utf8'), STREAM_LINEBUF_MAX);
     let nl;
     while ((nl = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
@@ -1534,7 +1709,7 @@ function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model, reas
       if (ctx.sessionId) session.sessionId = ctx.sessionId;
     }
   });
-  child.stderr.on('data', (d) => { stderrBuf += d.toString('utf8'); });
+  child.stderr.on('data', (d) => { stderrBuf = capTail(stderrBuf + d.toString('utf8'), STDERR_TAIL_MAX); });
   child.on('error', (e) => { emit({ type: 'error', error: String(e && e.message || e) }); emit({ type: 'session_closed' }); });
   child.on('close', (code) => {
     session.child = null;
@@ -1608,11 +1783,11 @@ function cursorSend(sender, { cwd, sessionId, prompt, permMode, model, apiKey })
   if (prev && prev.child) { try { prev.ac && prev.ac.abort(); } catch { /* */ } try { prev.child.kill('SIGTERM'); } catch { /* */ } prev.child = null; }
 
   const ac = new AbortController();
-  const emit = (ev) => {
+  const emit = makeBatchedEmit((ev) => {
     if (sender.isDestroyed()) { try { ac.abort(); } catch { /* */ } return false; }
     try { sender.send('localAgent:event', { cwd, ev }); return true; }
     catch { try { ac.abort(); } catch { /* */ } return false; }
-  };
+  });
 
   // 续接 id：优先用本会话上回合捕获的 session_id，否则用打开历史会话传入的 sessionId。
   const resumeId = (prev && prev.sessionId) || sessionId || null;
@@ -1635,7 +1810,7 @@ function cursorSend(sender, { cwd, sessionId, prompt, permMode, model, apiKey })
   let stderrBuf = '';
   let buf = '';
   child.stdout.on('data', (d) => {
-    buf += d.toString('utf8');
+    buf = capTail(buf + d.toString('utf8'), STREAM_LINEBUF_MAX);
     let nl;
     while ((nl = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
@@ -1649,7 +1824,7 @@ function cursorSend(sender, { cwd, sessionId, prompt, permMode, model, apiKey })
       if (ctx.sessionId) session.sessionId = ctx.sessionId;   // 留作下回合 --resume
     }
   });
-  child.stderr.on('data', (d) => { stderrBuf += d.toString('utf8'); });
+  child.stderr.on('data', (d) => { stderrBuf = capTail(stderrBuf + d.toString('utf8'), STDERR_TAIL_MAX); });
   child.on('error', (e) => { emit({ type: 'error', error: String(e && e.message || e) }); emit({ type: 'session_closed' }); });
   child.on('close', (code) => {
     session.child = null;
@@ -1700,19 +1875,116 @@ const CLAUDE_MODELS = [
   { value: 'haiku', displayName: 'Claude Haiku' },
 ];
 
-/* 进程级模型缓存：任意会话拿到真实 supportedModels 就存这里，listModels 优先返回它。 */
+/* 进程级模型缓存：任意会话拿到真实 supportedModels 就存这里，listModels 优先返回它。
+ * 带 TTL：app 常开好几天时缓存会陈旧（CLI 升级带来新模型），过期就重新探测。 */
+const MODELS_TTL_MS = 60 * 60 * 1000;   // 1h
 const _modelsByProvider = {};
 function cacheModels(provider, models) {
-  if (provider && Array.isArray(models) && models.length) _modelsByProvider[provider] = models;
+  if (provider && Array.isArray(models) && models.length) _modelsByProvider[provider] = { at: Date.now(), models };
+}
+function cachedModels(provider) {
+  const c = _modelsByProvider[provider];
+  return (c && Date.now() - c.at < MODELS_TTL_MS) ? c.models : null;
+}
+
+/** 不开聊天会话也能拿 claude 真实可选模型：起一次性 SDK query 只调 supportedModels，拿到即收尾。
+ *  等价于终端 /model 列表——随本机 claude/SDK 升级自动带上新模型(opus/sonnet/haiku/fable…)，无需写死。 */
+let _claudeProbe = null;   // 同时并发只探一次
+async function probeClaudeModels() {
+  if (_claudeProbe) return _claudeProbe;
+  _claudeProbe = (async () => {
+    const bin = resolveBin('claude');
+    if (!bin) return [];
+    const { query } = await getSdk();
+    const input = makeInputQueue();
+    const ac = new AbortController();
+    const q = query({
+      prompt: input.iter,
+      options: {
+        cwd: os.tmpdir(),
+        permissionMode: 'default',
+        pathToClaudeCodeExecutable: bin,
+        abortController: ac,
+        env: childEnv(),
+        settingSources: [],      // 探测而已，不必加载 CLAUDE.md/权限
+        strictMcpConfig: true,   // 不连任何 MCP，冷启更快
+      },
+    });
+    try {
+      if (typeof q.supportedModels !== 'function') return [];
+      const ms = await q.supportedModels();
+      return Array.isArray(ms) ? ms : [];
+    } finally {
+      try { input.close(); } catch { /* */ }
+      try { ac.abort(); } catch { /* */ }
+    }
+  })().catch(() => []).finally(() => { _claudeProbe = null; });
+  return _claudeProbe;
+}
+
+/** 不开聊天会话也能拿 copilot 真实可选模型：起一次性 ACP 连接，initialize → session/new
+ *  拿到 availableModels 即关。copilot CLI 没有「列模型」命令，模型只在 session/new 响应里带回。 */
+let _copilotProbe = null;
+async function probeCopilotModels() {
+  if (_copilotProbe) return _copilotProbe;
+  _copilotProbe = (async () => {
+    const bin = resolveBin('copilot');
+    if (!bin) return [];
+    let cwd = os.tmpdir(); try { cwd = fs.realpathSync(cwd); } catch { /* */ }
+    const conn = new geminiAcp.AcpConn({
+      bin, args: ['--acp'], cwd, env: childEnv(),
+      onNotify: () => {}, onRequest: async () => ({}), onClose: () => {}, onError: () => {},
+    });
+    try {
+      await conn.request('initialize', { protocolVersion: geminiAcp.ACP_PROTOCOL_VERSION, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } } });
+      const ns = await conn.request('session/new', { cwd, mcpServers: resolveMcpAcp(cwd, []) });
+      return mapCopilotModels(ns);
+    } finally {
+      try { conn.kill(); } catch { /* */ }
+    }
+  })().catch(() => []).finally(() => { _copilotProbe = null; });
+  return _copilotProbe;
+}
+
+/** 不开聊天会话也能拿 gemini 真实可选模型：起一次性 ACP 连接 initialize → session/new，
+ *  读响应里的 models.availableModels（ACP 标准结构，新版 gemini CLI 会带）。拿不到才退写死列表。 */
+let _geminiProbe = null;
+async function probeGeminiModels() {
+  if (_geminiProbe) return _geminiProbe;
+  _geminiProbe = (async () => {
+    const bin = resolveBin('gemini');
+    if (!bin) return [];
+    let cwd = os.tmpdir(); try { cwd = fs.realpathSync(cwd); } catch { /* */ }
+    const conn = new geminiAcp.AcpConn({
+      bin, cwd, env: childEnv(),   // args 默认 --experimental-acp
+      onNotify: () => {}, onRequest: async () => ({}), onClose: () => {}, onError: () => {},
+    });
+    try {
+      await conn.request('initialize', { protocolVersion: geminiAcp.ACP_PROTOCOL_VERSION, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } } });
+      const ns = await conn.request('session/new', { cwd, mcpServers: resolveMcpAcp(cwd, []) });
+      return mapCopilotModels(ns);   // 同 ACP availableModels 结构
+    } finally {
+      try { conn.kill(); } catch { /* */ }
+    }
+  })().catch(() => []).finally(() => { _geminiProbe = null; });
+  return _geminiProbe;
 }
 
 /** 主动取某 provider 的可选模型（无需先开会话）：
  *  cursor/gemini 真实拉取；claude/codex/copilot 用真实缓存(若有)否则静态兜底。一律可被前端自由输入覆盖。 */
 async function listModels(provider, { apiKey } = {}) {
-  if (_modelsByProvider[provider]) return _modelsByProvider[provider];
+  { const c = cachedModels(provider); if (c) return c; }
   switch (provider) {
-    case 'gemini': return GEMINI_MODELS;
-    case 'claude': return CLAUDE_MODELS;
+    case 'gemini': {
+      const models = await probeGeminiModels();   // ACP session/new 探测，新版 CLI 带真实模型
+      if (models.length) { cacheModels('gemini', models); return models; }
+      return GEMINI_MODELS;                        // 旧版不带 → 退写死的别名
+    }
+    case 'claude': {
+      const models = await probeClaudeModels();   // 真实 /model 列表，随 SDK 升级自动更新
+      if (models.length) { cacheModels('claude', models); return models; }
+      return CLAUDE_MODELS;                        // 探测失败(未装/超旧)才退静态别名
+    }
     case 'cursor': {
       const bin = resolveBin('cursor-agent');
       if (!bin) return [];
@@ -1733,7 +2005,12 @@ async function listModels(provider, { apiKey } = {}) {
       cacheModels('codex', models);
       return models;
     }
-    default: return [];   // copilot：首次跑过会话后走缓存，之前留空让前端自由输入
+    case 'copilot': {
+      const models = await probeCopilotModels();   // ACP session/new 探测，随登录态/CLI 升级更新
+      if (models.length) { cacheModels('copilot', models); return models; }
+      return [];                                    // 探测失败(未装/未 login) 留空让前端自由输入
+    }
+    default: return [];
   }
 }
 
@@ -1749,7 +2026,7 @@ function geminiPermission(sess, params) {
   if (pm === 'acceptEdits' && tc.kind === 'edit') return Promise.resolve(sel(pick('allow_once', 'allow_always')));
   return new Promise((resolve) => {
     const permId = `perm-${Math.random().toString(36).slice(2, 10)}`;
-    pendingPerms.set(permId, { cwd: sess ? sess.key : '', settle: (decision) => {
+    pendingPerms.set(permId, { cwd: sess ? sess.key : '', at: Date.now(), settle: (decision) => {
       const allow = decision && decision.behavior === 'allow';
       resolve(sel(allow ? pick('allow_once', 'allow_always') : pick('reject_once', 'reject_always')));
     } });
@@ -1776,7 +2053,7 @@ async function geminiEnsure(sender, { cwd, lane, sessionId, permMode, model, mcp
   const bin = resolveBin('gemini');
   if (!bin) { sender.send('localAgent:event', { cwd: key, ev: { type: 'error', error: '未找到 gemini，请确认已安装 gemini CLI' } }); return null; }
   let realCwd = cwd; try { realCwd = fs.realpathSync(cwd); } catch { /* */ }
-  const emit = (ev) => { if (sender.isDestroyed()) return false; try { sender.send('localAgent:event', { cwd: key, ev }); return true; } catch { return false; } };
+  const emit = makeBatchedEmit((ev) => { if (sender.isDestroyed()) return false; try { sender.send('localAgent:event', { cwd: key, ev }); return true; } catch { return false; } });
   const mcpNames = Array.isArray(mcp) ? mcp.slice() : (s && s.mcpNames) || [];
   const mcpServers = resolveMcpAcp(cwd, mcpNames);
   s = { conn: null, sessionId: sessionId || null, model: (model !== undefined ? model : null), permMode: permMode || 'default', turnCtx: geminiAcp.makeTurnState(), key, emit, _init: null, mcpNames, touched: Date.now() };
@@ -1796,18 +2073,20 @@ async function geminiEnsure(sender, { cwd, lane, sessionId, permMode, model, mcp
     });
     s.conn = conn;
     await conn.request('initialize', { protocolVersion: geminiAcp.ACP_PROTOCOL_VERSION, clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } } });
+    let nsModels = [];
     if (s.sessionId) {
       // session/load 的历史回放(session/update)丢弃——历史已由 readSession 渲染，避免重复两遍。
       s.replaying = true;
       try { await conn.request('session/load', { cwd: realCwd, mcpServers, sessionId: s.sessionId }); }
-      catch { const ns = await conn.request('session/new', { cwd: realCwd, mcpServers }); s.sessionId = ns.sessionId; }
+      catch { const ns = await conn.request('session/new', { cwd: realCwd, mcpServers }); s.sessionId = ns.sessionId; nsModels = mapCopilotModels(ns); }
       finally { s.replaying = false; }
     } else {
       const ns = await conn.request('session/new', { cwd: realCwd, mcpServers });
-      s.sessionId = ns.sessionId;
+      s.sessionId = ns.sessionId; nsModels = mapCopilotModels(ns);
     }
-    cacheModels('gemini', GEMINI_MODELS);
-    emit({ type: 'models', models: GEMINI_MODELS });
+    const models = nsModels.length ? nsModels : GEMINI_MODELS;   // 新版 CLI 带真实模型，旧版退写死
+    cacheModels('gemini', models);
+    emit({ type: 'models', models });
   })();
   try { await s._init; } catch (e) { emit({ type: 'error', error: 'gemini ACP 初始化失败: ' + (e && e.message || e) }); try { s.conn && s.conn.kill(); } catch { /* */ } geminiSessions.delete(key); return null; }
   s._init = null;
@@ -1869,7 +2148,7 @@ async function copilotEnsure(sender, { cwd, lane, sessionId, permMode, model, mc
   const bin = resolveBin('copilot');
   if (!bin) { sender.send('localAgent:event', { cwd: key, ev: { type: 'error', error: '未找到 copilot —— 请 `npm i -g @github/copilot` 安装并 `copilot login`' } }); return null; }
   let realCwd = cwd; try { realCwd = fs.realpathSync(cwd); } catch { /* */ }
-  const emit = (ev) => { if (sender.isDestroyed()) return false; try { sender.send('localAgent:event', { cwd: key, ev }); return true; } catch { return false; } };
+  const emit = makeBatchedEmit((ev) => { if (sender.isDestroyed()) return false; try { sender.send('localAgent:event', { cwd: key, ev }); return true; } catch { return false; } });
   const mcpNames = Array.isArray(mcp) ? mcp.slice() : (s && s.mcpNames) || [];
   const mcpServers = resolveMcpAcp(cwd, mcpNames);
   s = { conn: null, sessionId: sessionId || null, model: (model !== undefined ? model : null), permMode: permMode || 'default', turnCtx: geminiAcp.makeTurnState(), key, emit, _init: null, models: [], mcpNames, touched: Date.now() };
@@ -2344,6 +2623,55 @@ async function gitDiffFile(dir, file, untracked) {
   return readContent();
 }
 
+/** 撤销工作区单个文件的改动（worktree revert）：
+ *  · 未跟踪/新增(HEAD 无此路径) → 工作区文件移到系统回收站(失败则删)，并从 index 移除；
+ *  · 已跟踪(HEAD 有) → `git checkout HEAD -- file` 还原 index+worktree 到上次提交。
+ *  破坏性操作，前端须二次确认。 */
+async function gitRevertFile(dir, file, untracked) {
+  if (!dir || !file) return { ok: false, error: 'bad args' };
+  const top = await runGit(dir, ['rev-parse', '--show-toplevel']);
+  if (!top.ok) return { ok: false, error: 'not a repo' };
+  const root = top.stdout.trim();
+  const abs = path.join(root, file);
+  const inHead = untracked ? { ok: false } : await runGit(root, ['cat-file', '-e', `HEAD:${file}`]);
+  if (inHead.ok) {
+    const r = await runGit(root, ['checkout', 'HEAD', '--', file]);
+    return r.ok ? { ok: true } : { ok: false, error: (r.stderr || 'checkout failed').trim() };
+  }
+  // 不在 HEAD（未跟踪或 staged 新增）→ 从 index 移除（若有）+ 工作区文件移回收站。
+  await runGit(root, ['rm', '--cached', '--force', '--', file]);
+  try { const { shell } = require('electron'); await shell.trashItem(abs); }
+  catch { try { await fsp.rm(abs, { force: true }); } catch (e) { return { ok: false, error: String(e && e.message || e) }; } }
+  return { ok: true };
+}
+
+/** 一键还原整个工作区：已跟踪改动 `reset --hard HEAD` 退回上次提交；未跟踪文件逐个移回收站。
+ *  破坏性，前端须二次确认。返回 { ok, trashed }（trashed=移回收站的未跟踪文件数）。 */
+async function gitRevertAll(dir) {
+  if (!dir) return { ok: false, error: 'no dir' };
+  const top = await runGit(dir, ['rev-parse', '--show-toplevel']);
+  if (!top.ok) return { ok: false, error: 'not a repo' };
+  const root = top.stdout.trim();
+  // 1) 已跟踪：有 HEAD 则硬重置回上次提交；无 HEAD（空仓库）则仅 unstage，让其落到未跟踪后清理。
+  const hasHead = await runGit(root, ['rev-parse', '--verify', 'HEAD']);
+  if (hasHead.ok) await runGit(root, ['reset', '--hard', 'HEAD']);
+  else await runGit(root, ['reset']);
+  // 2) 未跟踪（含上一步 unstage 出来的新增）：逐个移系统回收站（失败则删）。
+  let trashed = 0;
+  const st = await runGit(root, ['-c', 'core.quotepath=false', 'status', '--porcelain=v1', '--untracked-files=all']);
+  if (st.ok) {
+    let shell; try { shell = require('electron').shell; } catch { /* */ }
+    for (const line of st.stdout.split('\n')) {
+      if (line.slice(0, 2) !== '??') continue;
+      const p = line.slice(3);
+      const abs = path.join(root, p);
+      try { if (shell) await shell.trashItem(abs); else await fsp.rm(abs, { force: true, recursive: true }); trashed++; }
+      catch { /* 跳过单个失败 */ }
+    }
+  }
+  return { ok: true, trashed };
+}
+
 /* ------------------------------------------------------------------ *
  * Headless 执行器：无渲染窗格、无人值守地跑一条 prompt，监听到 result 即 resolve。
  * 给「自动化任务」用（automation.cjs）。复用 sessionSend 全套（假 sender 截事件）。
@@ -2415,6 +2743,77 @@ function runHeadless({ provider = 'claude', cwd, sessionId = null, prompt, permM
  * IPC 注册
  * ------------------------------------------------------------------ */
 let _reaperTimer = null;
+/* ============================================================
+ * CLI 登录 —— 给需要交互式 OAuth/设备码的 CLI 一个真 TTY（用系统 `script` 包 pty，
+ *   零原生依赖、不碰打包）。输出流式推渲染层的「登录终端」，键入回传 stdin；用户完成
+ *   浏览器授权后关终端 → 前端重探模型。claude 另有 `auth status` 可精确判断已登录。
+ * ============================================================ */
+const loginProcs = new Map();   // id -> node-pty IPty
+const LOGIN_SPEC = {
+  claude:  { bin: 'claude',  args: ['auth', 'login'] },   // 浏览器 OAuth
+  copilot: { bin: 'copilot', args: ['login'] },           // 设备码流（需 TTY 按 Enter）
+  gemini:  { bin: 'gemini',  args: [] },                   // 无 login 子命令 → 交互式首跑触发 OAuth
+};
+
+let _pty = null;   // 懒加载原生模块；未 rebuild/缺失则报错而非崩进程
+function getPty() {
+  if (_pty === null) { try { _pty = require('node-pty'); } catch (e) { _pty = e; } }
+  if (_pty instanceof Error) throw _pty;
+  return _pty;
+}
+
+/** 起一个登录 pty 会话（真 pty，CLI 当成在终端里跑）；输出/退出经 'localAgent:login' 按 id 路由回渲染层。 */
+function loginStart(sender, { provider, cols, rows }) {
+  const spec = LOGIN_SPEC[provider];
+  if (!spec) return { ok: false, error: `${provider} 不支持登录` };
+  const bin = resolveBin(spec.bin);
+  if (!bin) return { ok: false, error: `未找到 ${spec.bin}` };
+  let pty;
+  try { pty = getPty(); } catch (e) { return { ok: false, error: 'pty 模块加载失败（需 electron-rebuild node-pty）：' + (e && e.message || e) }; }
+  const id = `login-${Math.random().toString(36).slice(2, 10)}`;
+  let p;
+  try {
+    p = pty.spawn(bin, spec.args, {
+      name: 'xterm-256color',
+      cols: Math.max(20, cols || 80), rows: Math.max(6, rows || 24),
+      cwd: os.homedir(), env: { ...childEnv(), TERM: 'xterm-256color' },
+    });
+  } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  loginProcs.set(id, p);
+  const emit = (ev) => { if (!sender.isDestroyed()) { try { sender.send('localAgent:login', { id, ...ev }); } catch { /* */ } } };
+  p.onData((d) => emit({ type: 'data', data: String(d) }));
+  p.onExit(({ exitCode }) => { loginProcs.delete(id); emit({ type: 'exit', code: exitCode }); });
+  return { ok: true, id };
+}
+function loginInput({ id, data }) {
+  const p = loginProcs.get(id);
+  if (p) { try { p.write(data); return { ok: true }; } catch { /* */ } }
+  return { ok: false };
+}
+function loginResize({ id, cols, rows }) {
+  const p = loginProcs.get(id);
+  if (p) { try { p.resize(Math.max(20, cols || 80), Math.max(6, rows || 24)); return { ok: true }; } catch { /* */ } }
+  return { ok: false };
+}
+function loginKill({ id }) {
+  const p = loginProcs.get(id);
+  if (p) { try { p.kill(); } catch { /* */ } loginProcs.delete(id); }
+  return { ok: true };
+}
+/** 登录状态：claude 用 `auth status`（JSON loggedIn）；其余无 status 命令的 provider 返回 null（前端不靠它）。 */
+async function loginStatus({ provider }) {
+  if (provider !== 'claude') return { loggedIn: null };   // copilot/gemini 无可靠 status，前端按需手动登录
+  const bin = resolveBin('claude');
+  if (!bin) return { loggedIn: false };
+  return await new Promise((res) => {
+    execFile(bin, ['auth', 'status'], { env: childEnv(), timeout: 8000 }, (err, stdout) => {
+      if (err) return res({ loggedIn: false });
+      try { const j = JSON.parse(stdout); res({ loggedIn: !!j.loggedIn, email: j.email || null }); }
+      catch { res({ loggedIn: /["']?loggedIn["']?\s*:\s*true/i.test(stdout) }); }
+    });
+  });
+}
+
 function registerLocalAgent(ipcMain, dialog) {
   console.log('[localAgent] ready · multi-session lane routing (runKey=cwd#@#lane)');
   // 每 60s 扫一遍，收掉闲置 >15min 的常驻会话（防多会话/预热进程长期占内存）。
@@ -2455,6 +2854,7 @@ function registerLocalAgent(ipcMain, dialog) {
   ipcMain.handle('localAgent:readSession', (_e, { provider, cwd, sessionId }) => readSession(provider, cwd, sessionId));
   ipcMain.handle('localAgent:deleteSession', (_e, { provider, cwd, sessionId }) => deleteSession(provider, cwd, sessionId));
   ipcMain.handle('localAgent:listCommands', (_e, { provider, cwd }) => listCommands(provider, cwd));
+  ipcMain.handle('localAgent:scanCliSkills', () => scanCliSkills());
   ipcMain.handle('localAgent:send', (e, payload) => sessionSend(e.sender, payload));
   ipcMain.handle('localAgent:warm', (e, payload) => sessionWarm(e.sender, payload));
   ipcMain.handle('localAgent:permissionRespond', (_e, { permId, decision }) => permissionRespond(permId, decision));
@@ -2471,6 +2871,14 @@ function registerLocalAgent(ipcMain, dialog) {
   ipcMain.handle('localAgent:openInEditor', (_e, { editor, dir }) => openInEditor(editor, dir));
   ipcMain.handle('localAgent:gitStatus', (_e, { dir }) => gitStatus(dir));
   ipcMain.handle('localAgent:gitDiffFile', (_e, { dir, file, untracked }) => gitDiffFile(dir, file, untracked));
+  ipcMain.handle('localAgent:gitRevertFile', (_e, { dir, file, untracked }) => gitRevertFile(dir, file, untracked));
+  ipcMain.handle('localAgent:gitRevertAll', (_e, { dir }) => gitRevertAll(dir));
+  // CLI 登录 pty
+  ipcMain.handle('localAgent:loginStart', (e, { provider, cols, rows }) => loginStart(e.sender, { provider, cols, rows }));
+  ipcMain.handle('localAgent:loginInput', (_e, { id, data }) => loginInput({ id, data }));
+  ipcMain.handle('localAgent:loginResize', (_e, { id, cols, rows }) => loginResize({ id, cols, rows }));
+  ipcMain.handle('localAgent:loginKill', (_e, { id }) => loginKill({ id }));
+  ipcMain.handle('localAgent:loginStatus', (_e, { provider }) => loginStatus({ provider }));
 }
 
 module.exports = {
@@ -2480,5 +2888,5 @@ module.exports = {
   childEnv,          // automation.cjs：带补充 PATH 的环境
   killAllSessions,   // main.cjs 在渲染进程重载/崩溃/退出时调，回收孤儿 claude 子进程
   // 仅供本地冒烟测试，不在渲染进程使用。
-  _internals: { detect, findProjectDir, listSessions, readSession, listCommands, deleteSession, codexListAllSessions },
+  _internals: { detect, findProjectDir, listSessions, readSession, listCommands, deleteSession, codexListAllSessions, scanCliSkills },
 };

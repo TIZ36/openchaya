@@ -20,8 +20,9 @@ import {
   isLocalAgentAvailable, localAgent, addProject as addLocalProject, addCodexImportedSessions,
   basename, type CodexSessionSummary,
 } from './services/localAgent';
+import { loadSkills, upsertSkill, deleteSkill, normalizeSkillName, syncCliSkills, SKILLS_CHANGED_EVENT, type LocalSkill } from './services/skills';
 import {
-  IconUser, IconGear, IconModel, IconPlug, IconCloud, IconTerminal, IconAppearance,
+  IconUser, IconGear, IconModel, IconPlug, IconCloud, IconTerminal, IconAppearance, IconSkill,
 } from './icons';
 import { useI18n, LANGS, type Lang } from '../i18n';
 
@@ -30,9 +31,10 @@ interface Props {
   updateSettings: (p: Partial<ClientSettings>) => void;
   onLogout: () => void;
   onClose: () => void;
+  initialSection?: Tab;   // 打开时滚到指定分组（如从输入框「管理技能」直达 skills）
 }
 
-type Tab = 'account' | 'appearance' | 'prefs' | 'services' | 'models' | 'mcp' | 'localagent';
+type Tab = 'account' | 'appearance' | 'prefs' | 'services' | 'models' | 'mcp' | 'skills' | 'localagent';
 
 /** 三段分组，按"范围"而不是"对谁生效"分：
  *  · 个人 — 你的账号与本机偏好
@@ -56,6 +58,7 @@ const TAB_GROUPS: { group: string; items: { id: Tab; label: string; icon: React.
     items: [
       { id: 'models',  label: 'settings.tab.models', icon: <IconModel /> },
       { id: 'mcp',     label: 'settings.tab.mcp',    icon: <IconPlug /> },
+      { id: 'skills',  label: 'settings.tab.skills', icon: <IconSkill /> },
     ],
   },
   {
@@ -94,10 +97,10 @@ const THEMES: { id: ColorTheme; label: string; sub: string; mode: 'light' | 'dar
 // Flat, ordered section list (drives the single-page layout + scroll-spy).
 const SETTINGS_SECTIONS = TAB_GROUPS.flatMap((g) => g.items.map((it) => ({ ...it, group: g.group })));
 
-const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, onClose }) => {
+const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, onClose, initialSection }) => {
   const { t: tr } = useI18n();
   // `active` is the section the nav highlights — set on click AND by scroll-spy.
-  const [active, setActive] = useState<Tab>('account');
+  const [active, setActive] = useState<Tab>(initialSection || 'account');
   const paneRef = useRef<HTMLDivElement>(null);
   const secRefs = useRef<Partial<Record<Tab, HTMLElement | null>>>({});
   // Suppress scroll-spy briefly while a click-driven smooth scroll is animating,
@@ -136,6 +139,13 @@ const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, on
     secRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  // 带 initialSection 打开 → 直接滚到该分组（如输入框「管理技能」直达）。
+  useEffect(() => {
+    if (!initialSection) return;
+    lockRef.current = Date.now() + 700;
+    requestAnimationFrame(() => secRefs.current[initialSection]?.scrollIntoView({ block: 'start' }));
+  }, [initialSection]);
+
   const paneFor = (id: Tab): React.ReactNode => {
     switch (id) {
       case 'account':    return <AccountPane />;
@@ -144,6 +154,7 @@ const SettingsModal: React.FC<Props> = ({ settings, updateSettings, onLogout, on
       case 'services':   return <ServicesPane settings={settings} updateSettings={updateSettings} />;
       case 'models':     return <ModelsPane settings={settings} updateSettings={updateSettings} />;
       case 'mcp':        return <McpPane />;
+      case 'skills':     return <SkillsPane />;
       case 'localagent': return <LocalAgentPane settings={settings} updateSettings={updateSettings} />;
     }
   };
@@ -1206,6 +1217,92 @@ const CredentialModal: React.FC<{
 };
 
 /* ============ MCP pane (v2 native) ============ */
+
+/* Chaya 技能：provider 无关的 prompt 模板。/技能名 在 composer 发送前展开，对 5 个 CLI 都生效。 */
+const SkillsPane: React.FC = () => {
+  const { t: tr } = useI18n();
+  const [list, setList] = useState<LocalSkill[]>(() => loadSkills());
+  const [editing, setEditing] = useState<null | { id?: string; name: string; description: string; body: string }>(null);
+
+  // 打开技能面板时顺手同步一次 CLI 安装的技能（unified skill hub），并跟随外部变化刷新列表。
+  useEffect(() => {
+    void syncCliSkills();
+    const onChanged = () => setList(loadSkills());
+    window.addEventListener(SKILLS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(SKILLS_CHANGED_EVENT, onChanged);
+  }, []);
+
+  const onAdd = () => setEditing({ name: '', description: '', body: '{{input}}' });
+  const onEdit = (s: LocalSkill) => setEditing({ id: s.id, name: s.name, description: s.description, body: s.body });
+  const onDelete = (s: LocalSkill) => {
+    if (!window.confirm(tr('settings.skills.deleteConfirm', { name: s.name }))) return;
+    setList(deleteSkill(s.id));
+  };
+  const onSave = () => {
+    if (!editing) return;
+    const name = normalizeSkillName(editing.name);
+    if (!name) { window.alert(tr('settings.skills.needName')); return; }
+    if (!editing.body.trim()) { window.alert(tr('settings.skills.needBody')); return; }
+    setList(upsertSkill({ id: editing.id, name, description: editing.description, body: editing.body }));
+    setEditing(null);
+  };
+
+  return (
+    <>
+      <Section
+        hint={tr('settings.skills.hint')}
+        trailing={<button className="v2-set-btn primary" onClick={onAdd}>＋ {tr('settings.skills.add')}</button>}
+      >
+        {list.length === 0 && <div className="v2-mcp-empty">{tr('settings.skills.empty')}</div>}
+        {list.length > 0 && (
+          <div className="v2-skill-list">
+            {list.map((s) => (
+              <div key={s.id} className="v2-skill-row">
+                <div className="v2-skill-row-l">
+                  <div className="nm">
+                    <code>/{s.name}</code>
+                    {s.source === 'cli' && s.origin && (
+                      <span className="v2-skill-cli" title={tr('settings.skills.cliTip', { origin: s.origin })}>{s.origin}</span>
+                    )}
+                  </div>
+                  {s.description && <div className="ds">{s.description}</div>}
+                </div>
+                <div className="v2-skill-row-r">
+                  <button className="v2-set-btn" onClick={() => onEdit(s)}>{tr('settings.skills.edit')}</button>
+                  <button className="v2-set-danger" onClick={() => onDelete(s)}>{tr('settings.skills.delete')}</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      {editing && (
+        <Section title={editing.id ? tr('settings.skills.editTitle') : tr('settings.skills.newTitle')}>
+          <div className="v2-skill-form">
+            <label className="lab">{tr('settings.skills.name')}</label>
+            <div className="v2-skill-name"><span>/</span>
+              <input className="v2-set-input" value={editing.name} placeholder="refactor"
+                onChange={(e) => setEditing((p) => p && { ...p, name: e.target.value })} />
+            </div>
+            <label className="lab">{tr('settings.skills.desc')}</label>
+            <input className="v2-set-input" value={editing.description} placeholder={tr('settings.skills.descPlaceholder')}
+              onChange={(e) => setEditing((p) => p && { ...p, description: e.target.value })} />
+            <label className="lab">{tr('settings.skills.body')}</label>
+            <textarea className="v2-set-input v2-skill-body" rows={7} value={editing.body}
+              placeholder={tr('settings.skills.bodyPlaceholder')}
+              onChange={(e) => setEditing((p) => p && { ...p, body: e.target.value })} />
+            <div className="v2-skill-tip">{tr('settings.skills.bodyTip')}</div>
+            <div className="v2-skill-actions">
+              <button className="v2-set-btn" onClick={() => setEditing(null)}>{tr('common.cancel')}</button>
+              <button className="v2-set-btn primary" onClick={onSave}>{tr('settings.skills.save')}</button>
+            </div>
+          </div>
+        </Section>
+      )}
+    </>
+  );
+};
 
 const McpPane: React.FC = () => {
   const { t: tr } = useI18n();

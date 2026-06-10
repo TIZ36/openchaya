@@ -292,6 +292,57 @@ const IconBack = () => (
   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M15 5l-7 7 7 7" /></svg>
 );
 
+/** 块文本是可编辑 textarea，没法对子串内联渲染成链接 → 用 Cmd/Ctrl + 点击：按光标位置找出
+ *  所在的 http(s) URL token，用系统默认浏览器打开（window.open → main 的 setWindowOpenHandler
+ *  → shell.openExternal）。命中返回 true。 */
+const NOTE_URL_RE = /https?:\/\/[^\s<>"'`]+/g;
+function openUrlAtCaret(el: HTMLTextAreaElement): boolean {
+  const pos = el.selectionStart ?? 0;
+  const text = el.value;
+  NOTE_URL_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = NOTE_URL_RE.exec(text))) {
+    const start = m.index;
+    const end = start + m[0].length;
+    if (pos >= start && pos <= end) {
+      const url = m[0].replace(/[.,;:!?)\]]+$/, '');   // 去掉尾随标点
+      try { window.open(url, '_blank', 'noopener'); } catch { /* */ }
+      return true;
+    }
+  }
+  return false;
+}
+
+/** 外链图标（URL hover 时浮现在链接右侧，点了用默认浏览器打开）。 */
+const IconExtLink = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" width="11" height="11" aria-hidden>
+    <path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+  </svg>
+);
+function noteHasUrl(text: string): boolean { NOTE_URL_RE.lastIndex = 0; return NOTE_URL_RE.test(text); }
+/** 把纯文本切成「文字 + 链接」节点：链接加下划线、hover 显外链图标，点击打开默认浏览器。 */
+function linkifyNote(text: string): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  NOTE_URL_RE.lastIndex = 0;
+  let last = 0; let k = 0; let m: RegExpExecArray | null;
+  while ((m = NOTE_URL_RE.exec(text))) {
+    const start = m.index;
+    const end = start + m[0].length;
+    if (start > last) out.push(text.slice(last, start));
+    const url = m[0].replace(/[.,;:!?)\]]+$/, '');
+    const trail = m[0].slice(url.length);
+    out.push(
+      <a key={`u${k++}`} className="note-url" href={url}
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); try { window.open(url, '_blank', 'noopener'); } catch { /* */ } }}
+      >{url}<span className="note-url-go" aria-hidden><IconExtLink /></span></a>,
+    );
+    if (trail) out.push(trail);
+    last = end;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
 /** 抽屉内联文档视图：读/编辑/保存/引用。笔记写盘；云端文档 patch。无遮罩/portal —— 直接铺在
  *  右侧抽屉里(替代旧的居中浮窗)，看完点返回回到列表。 */
 /* ---- Notion 式块编辑器：blocks 数组模型，序列化为 markdown
@@ -562,6 +613,7 @@ const WikiDocView: React.FC<{ item: WikiItem; onBack: () => void; onInsertRef: (
                   <textarea ref={(el) => { refs.current.set(b.id, el); }} className="blk-code-body" rows={2} spellCheck={false} value={b.text}
                     placeholder={tr('local.wiki.block.codePh')}
                     onChange={(e) => patch(i, { text: e.target.value } as Partial<Block>)}
+                    onClick={(e) => { if ((e.metaKey || e.ctrlKey) && openUrlAtCaret(e.currentTarget)) e.preventDefault(); }}
                     onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); void save(); } }} />
                 </div>
               ) : (
@@ -570,17 +622,28 @@ const WikiDocView: React.FC<{ item: WikiItem; onBack: () => void; onInsertRef: (
                     <button className="blk-check" onClick={() => patch(i, { done: !b.done } as Partial<Block>)} title={tr('local.wiki.todo.toggle')} aria-label={tr('local.wiki.todo.toggle')}>{b.done ? <IconCheck /> : null}</button>
                   )}
                   {b.type === 'bullet' && <span className="blk-bul" aria-hidden>{'•'}</span>}
-                  <textarea ref={(el) => { refs.current.set(b.id, el); }} className="blk-body" rows={1} spellCheck={false}
-                    value={blkText(b)}
-                    placeholder={(focusId === b.id || blocks.length === 1) && !blkText(b) ? tr('local.wiki.blockPlaceholder') : ''}
-                    onFocus={() => setFocusId(b.id)}
-                    onBlur={() => setFocusId((f) => (f === b.id ? null : f))}
-                    onChange={(e) => {
-                      const v = e.target.value; patch(i, { text: v } as Partial<Block>); setDirty(true);
-                      if (b.type === 'text' && v.startsWith('/')) { const r = e.currentTarget.getBoundingClientRect(); setMenu({ i, mode: 'slash', x: r.left, y: r.bottom + 4, q: v.slice(1), active: 0 }); }
-                      else setMenu((m) => (m && m.mode === 'slash' && m.i === i) ? null : m);
-                    }}
-                    onKeyDown={(e) => onKey(e, i)} />
+                  {/* 始终包一层 .blk-textwrap（textarea 位置固定，编辑中输入/删除 URL 不丢焦点）；
+                      含 URL 时再叠一层可读 backdrop（下划线 + hover 外链图标），textarea 文字转透明只留光标。 */}
+                  {(() => {
+                    const urlMode = noteHasUrl(blkText(b));
+                    return (
+                      <div className="blk-textwrap">
+                        {urlMode && <div key="back" className="blk-body blk-back" aria-hidden>{linkifyNote(blkText(b))}</div>}
+                        <textarea key="ta" ref={(el) => { refs.current.set(b.id, el); }} className={`blk-body${urlMode ? ' blk-fore' : ''}`} rows={1} spellCheck={false}
+                          value={blkText(b)}
+                          placeholder={(focusId === b.id || blocks.length === 1) && !blkText(b) ? tr('local.wiki.blockPlaceholder') : ''}
+                          onFocus={() => setFocusId(b.id)}
+                          onBlur={() => setFocusId((f) => (f === b.id ? null : f))}
+                          onClick={(e) => { if ((e.metaKey || e.ctrlKey) && openUrlAtCaret(e.currentTarget)) e.preventDefault(); }}
+                          onChange={(e) => {
+                            const v = e.target.value; patch(i, { text: v } as Partial<Block>); setDirty(true);
+                            if (b.type === 'text' && v.startsWith('/')) { const r = e.currentTarget.getBoundingClientRect(); setMenu({ i, mode: 'slash', x: r.left, y: r.bottom + 4, q: v.slice(1), active: 0 }); }
+                            else setMenu((m) => (m && m.mode === 'slash' && m.i === i) ? null : m);
+                          }}
+                          onKeyDown={(e) => onKey(e, i)} />
+                      </div>
+                    );
+                  })()}
                   {b.type === 'todo' && (
                     <button className={`blk-pri pri-${b.pri}`} onClick={() => patch(i, { pri: b.pri === 'today' ? 'normal' : 'today' } as Partial<Block>)} title={tr('local.wiki.todo.priTip')}>{b.pri === 'today' ? tr('local.wiki.todo.today') : tr('local.wiki.todo.normal')}</button>
                   )}
@@ -630,14 +693,10 @@ export const WikiNotes: React.FC<{
     if (!open) return;
     wiki.reload();
     requestAnimationFrame(() => inputRef.current?.focus());
-    // 与代码编辑器列共用 grid 第二列 → 互斥：开 wiki 时广播占用、收到别人占用即让位。
-    window.dispatchEvent(new CustomEvent('chaya:inspector-open', { detail: { who: 'wiki' } }));
-    const onOther = (e: Event) => { const who = (e as CustomEvent).detail?.who; if (who && who !== 'wiki') setOpen(false); };
-    window.addEventListener('chaya:inspector-open', onOther as EventListener);
-    // 抽屉是 portal 到 body 的，外点交给遮罩处理；这里只管 Esc：先退文档视图,再关抽屉。
+    // 与代码改动列改为「上下分屏」共存，不再互斥让位。只管 Esc：先退文档视图，再关抽屉。
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { if (peekRef.current) setPeek(null); else setOpen(false); } };
     window.addEventListener('keydown', onKey);
-    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('chaya:inspector-open', onOther as EventListener); };
+    return () => { window.removeEventListener('keydown', onKey); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   // wiki 开关已移到顶栏右上角（与代码列同区）：只有激活窗格响应。detail.open 显式设值，否则翻转。
@@ -704,9 +763,9 @@ export const WikiNotes: React.FC<{
     onInsert(await resolveWikiRef(it));
   }, [onInsert]);
   if (!wiki.available) return null;
-  // grid 第三列槽：挂进 .v2-app 内部，成为真正的弹性列（main 自动让位）。退化到根 / body。
+  // 检视列下半槽（与代码改动上半分屏）。退化到整列 / 根 / body。
   const host: Element = (typeof document !== 'undefined'
-    && (document.getElementById('v2-inspector-slot') || document.querySelector('.chaya-v2'))) || document.body;
+    && (document.getElementById('v2-inspector-note') || document.getElementById('v2-inspector-slot') || document.querySelector('.chaya-v2'))) || document.body;
   return (
     <div className="v2-note" ref={wrapRef}>
       {/* 触发按钮已移到顶栏右上角（ClientShell），这里只保留 portal 出来的右侧抽屉。 */}

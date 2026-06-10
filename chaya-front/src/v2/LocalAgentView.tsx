@@ -7,13 +7,14 @@
  *
  * 对话用时间线渲染（状态点 + 工具卡片：Edit 代码块 / Bash IN/OUT），配色走 Chaya token。
  */
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { basename, PERM_META, permModesFor, defaultPermMode, permLabel, permHint, type TranscriptMessage, type SlashCommand, type SessionSummary, type PermissionRequest, type QuestionRequest, type TabGroup as TabGroupT, type McpAvailable, type ModelInfo, type Attachment, type ProviderId } from './services/localAgent';
+import { basename, PERM_META, permModesFor, defaultPermMode, permLabel, permHint, LOGIN_PROVIDERS, type TranscriptMessage, type SlashCommand, type SessionSummary, type PermissionRequest, type QuestionRequest, type TabGroup as TabGroupT, type McpAvailable, type ModelInfo, type Attachment, type ProviderId } from './services/localAgent';
+import { LoginTerminal } from './LoginTerminal';
 import type { LocalAgentState, LayoutNode, DropSide, Tab, QueuedMsg } from './useLocalAgent';
-import { TAB_COLORS, isForeignLeaf, realDir } from './useLocalAgent';
+import { TAB_COLORS, isForeignLeaf, realDir, useLivePreview } from './useLocalAgent';
 
 // 异类窗格渲染器：由 ClientShell 注入（wiki → 知识库；chat:<sid> → 聊天会话）。分屏树叶子
 // 若是异类 id（见 isForeignLeaf），就走这个渲染器，从而把 CLI 之外的页装进同一分屏。
@@ -21,7 +22,7 @@ export type ForeignPaneRender = (id: string) => React.ReactNode;
 export const ForeignPaneContext = React.createContext<ForeignPaneRender | null>(null);
 // 切换本地 provider（由 ClientShell 注入，底层写 settings.localAgentProvider）。
 // 供 composer 里的常规选择框用——徽标盲循环之外的显式入口。
-import { IconSend, IconAgentCode, IconPlus, IconChevron, IconTrash, IconModel } from './icons';
+import { IconSend, IconAgentCode, IconPlus, IconChevron, IconTrash, IconModel, IconSkill } from './icons';
 import { CodeBlock, PreBlock, mdRehypePlugins } from './codeBlock';
 import { useI18n, t } from '../i18n';
 import { useWikiNotes, SelectionToolbar, WikiNotes, WikiPicker, buildWikiItems, resolveWikiRef, type WikiItem } from './NotesLayer';
@@ -36,6 +37,11 @@ const MD_RICH = { ...MD_COMMON, code: CodeBlock, pre: PreBlock } as React.Compon
 // 流式态：代码走原生 <pre>，不上 Shiki —— 否则每个 rAF tick 都对增长中的代码重新高亮，
 // CPU/内存暴涨直接把渲染进程拖崩（黑屏）。定稿后再用 MD_RICH 高亮一次。
 const MD_PLAIN = { ...MD_COMMON } as React.ComponentProps<typeof ReactMarkdown>['components'];
+
+/** claude 思考强度固定枚举（对应 SDK Options.effort / CLI --effort）。模型未自带级别时的兜底。 */
+const CLAUDE_EFFORTS: Array<{ effort: string }> = [
+  { effort: 'low' }, { effort: 'medium' }, { effort: 'high' }, { effort: 'xhigh' }, { effort: 'max' },
+];
 
 /** 从模型 id / displayName 猜测厂商。SDK 的 supportedModels 不带 vendor 字段，
  *  这里用一组保守的正则覆盖主流模型族。命中顺序很重要：先匹配特征更强的别名
@@ -91,7 +97,9 @@ function groupModelsByVendor(models: ModelInfo[]): [string, ModelInfo[]][] {
 // frame. Past this size that per-frame reparse spikes memory/CPU enough to risk
 // taking the renderer down — so a huge live buffer renders as plain text (cheap),
 // and the finalized message reparses to full markdown exactly once.
-const LIVE_MD_MAX = 18_000;
+// 6K（原 18K）：多会话并行流式时每帧 reparse 成本相乘，阈值收紧到肉眼几乎
+// 注意不到降级、但并发下帧预算稳得住的水平。
+const LIVE_MD_MAX = 6_000;
 export const MD: React.FC<{ text: string; live?: boolean }> = React.memo(({ text, live }) => {
   if (live && text.length > LIVE_MD_MAX) {
     return <div className="v2-md v2-md-livelong"><pre>{text}</pre></div>;
@@ -620,24 +628,35 @@ const NO_ATTS: Attachment[] = [];
 const NO_QUEUE: QueuedMsg[] = [];
 
 /* ---- Timeline (会话记录) 独立 memo ----
- * 关键性能边界：时间线只吃「会话内容」相关的 props（turns / livePreview / running
- * …），不吃输入框的 draft。于是在输入框打字时，父级 Pane 虽因 draft 重渲，这块
- * memo 因 props 引用不变而整体 bail —— 长会话 / 分屏下每次按键不再 O(N) 重建并
- * 逐一对比所有轮次（这正是输入卡顿的根因）。turns 在父级用 useMemo 缓存，打字时
- * 引用稳定，故 bail 成立。 */
+ * 关键性能边界：时间线只吃「会话内容」相关的 props（turns / running …），不吃输入框
+ * 的 draft。于是在输入框打字时，父级 Pane 虽因 draft 重渲，这块 memo 因 props 引用
+ * 不变而整体 bail —— 长会话 / 分屏下每次按键不再 O(N) 重建并逐一对比所有轮次。
+ * livePreview（打字机每帧变）不再走 props：这里用 useLivePreview(cwd) 直接订阅
+ * 外部 store —— 出字只重渲本组件，父级 Pane 乃至 ClientShell 整树零感知。
+ * 跟随滚动（近底 → 跟字）也因此搬进来：父级不再因每帧出字而跑滚动 effect。 */
 type PaneTimelineProps = {
+  cwd: string;
   turns: Turn[];
   loadingSession: boolean;
-  hasConversation: boolean;
-  livePreview: string;
+  hasConversation: boolean;   // 不含 livePreview（那个在本组件内部补上）
   running: boolean;
   busy: boolean;          // perm || question —— 用于 gate 底部「执行中」轮
   status: string;
   provider: string;
   sessionId: string | null;
+  scrollerRef: React.RefObject<HTMLDivElement | null>;
 };
-const PaneTimeline: React.FC<PaneTimelineProps> = React.memo(({ turns, loadingSession, hasConversation, livePreview, running, busy, status, provider, sessionId }) => {
+const PaneTimeline: React.FC<PaneTimelineProps> = React.memo(({ cwd, turns, loadingSession, hasConversation: hasConvBase, running, busy, status, provider, sessionId, scrollerRef }) => {
   const { t: tr } = useI18n();
+  const livePreview = useLivePreview(cwd);
+  const hasConversation = hasConvBase || !!livePreview;
+  // 流式跟随：用户近底则跟字滚，已上翻看历史则不打扰（硬滚/换会话仍由父级处理）。
+  useEffect(() => {
+    if (!livePreview) return;
+    const el = scrollerRef.current; if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distFromBottom <= 200) el.scrollTop = el.scrollHeight;
+  }, [livePreview, scrollerRef]);
   return (
     <div className={`v2-la-tl${loadingSession ? ' v2-la-tl--loading' : ''}`}>
       {loadingSession && <ProviderWaterfill id={provider} />}
@@ -646,7 +665,7 @@ const PaneTimeline: React.FC<PaneTimelineProps> = React.memo(({ turns, loadingSe
       )}
       {!loadingSession && turns.map((t, i) => (
         t.role === 'user'
-          ? <UserTurn key={t.key ?? `t${i}`} text={t.text} />
+          ? <UserTurn key={t.key ?? `t${i}`} text={t.text} skill={t.skill} />
           : <AgentTurn
               key={t.key ?? `t${i}`}
               blocks={t.blocks}
@@ -834,6 +853,25 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const [fileOver, setFileOver] = useState(false);   // 拖文件进窗格的高亮态
   const [cfgOpen, setCfgOpen] = useState(false);
   const [cfgTab, setCfgTab] = useState<'model' | 'mcp'>('model');
+  const [loginOpen, setLoginOpen] = useState(false);
+  const canLogin = LOGIN_PROVIDERS.includes(la.provider);
+  const [skillMenuOpen, setSkillMenuOpen] = useState(false);
+  const pickSkill = (name: string) => { la.setSkill(cwd, name); setSkillMenuOpen(false); requestAnimationFrame(() => taRef.current?.focus()); };
+  // 技能选择器内置过滤：打开即聚焦输入框，敲字过滤、↑↓ 选择、⏎ 确认、esc 关闭。
+  const [skillQuery, setSkillQuery] = useState('');
+  const [skillIdx, setSkillIdx] = useState(0);
+  const openSkillMenu = () => { setSkillQuery(''); setSkillIdx(0); setSkillMenuOpen((o) => !o); };
+  const skillItems = useMemo(() => {
+    const q = skillQuery.trim().toLowerCase();
+    if (!q) return la.skills;
+    return la.skills.filter((s) => s.name.toLowerCase().includes(q) || (s.description || '').toLowerCase().includes(q));
+  }, [la.skills, skillQuery]);
+  const onSkillKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setSkillIdx((i) => Math.min(i + 1, Math.max(0, skillItems.length - 1))); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setSkillIdx((i) => Math.max(i - 1, 0)); }
+    else if (e.key === 'Enter') { e.preventDefault(); const s = skillItems[skillIdx]; if (s) pickSkill(s.name); }
+    else if (e.key === 'Escape') { e.preventDefault(); setSkillMenuOpen(false); requestAnimationFrame(() => taRef.current?.focus()); }
+  };
   const [mcpList, setMcpList] = useState<McpAvailable[] | null>(null);
   // 笔记/文档全部走 wiki（知识库）：选区「记一条」追加默认速记；composer 联动引用。
   const wiki = useWikiNotes(cwd === la.activeCwd);
@@ -846,13 +884,41 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const draft = tab?.draft ?? '';
   const messages = tab?.messages ?? NO_MSGS;
   const liveMsgs = tab?.liveMsgs ?? NO_MSGS;
-  const livePreview = tab?.livePreview ?? '';
   const running = tab?.running ?? false;
   const status = tab?.status ?? '';
   const loadingSession = tab?.loading ?? false;
   const perm = tab?.perm ?? null;
   const question = tab?.question ?? null;
   const sessionId = tab?.sessionId ?? null;
+  const histMore = tab?.histMore ?? 0;
+
+  /* ---- 历史懒加载：长会话只载尾部 20 条，滚到顶部（或点提示条）再取上一批。
+     前插会撑高 scrollHeight → useLayoutEffect 在 paint 前按差值回调 scrollTop，
+     视口里的内容纹丝不动（无跳屏）。loadingOlderRef 防滚动事件抖动期间重复触发。 ---- */
+  const loadingOlderRef = useRef(false);
+  const histAnchorRef = useRef<{ h: number; top: number } | null>(null);
+  const loadOlder = useCallback(() => {
+    const el = streamRef.current;
+    if (!el || loadingOlderRef.current) return;
+    loadingOlderRef.current = true;
+    histAnchorRef.current = { h: el.scrollHeight, top: el.scrollTop };
+    la.loadOlder(cwd);
+  }, [la, cwd]);
+  useEffect(() => {
+    const el = streamRef.current;
+    if (!el || histMore <= 0) return;
+    const onScroll = () => { if (el.scrollTop < 60) loadOlder(); };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [histMore, loadOlder]);
+  useLayoutEffect(() => {
+    if (!histAnchorRef.current) return;
+    const a = histAnchorRef.current;
+    histAnchorRef.current = null;
+    loadingOlderRef.current = false;
+    const el = streamRef.current;
+    if (el) el.scrollTop = el.scrollHeight - a.h + a.top;
+  }, [messages.length]);
 
   // 折成「轮次」：分两段记忆——historyTurns 只随历史消息变（每回合一次），liveTurns 只随
   // 流式消息变（工具事件级，体量小）；livePreview（每帧都变）走渲染层「尾巴」，不进 memo。
@@ -864,15 +930,21 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const historyTurns = useMemo(() => groupTurns(historyBlocks, false), [historyBlocks]);
   const liveTurns = useMemo(() => groupTurns(liveBlocks, false), [liveBlocks]);
   const turns = useMemo(() => (liveTurns.length ? [...historyTurns, ...liveTurns] : historyTurns), [historyTurns, liveTurns]);
-  const hasConversation = turns.length > 0 || !!livePreview || running;
+  // livePreview 已拆到 PaneTimeline 内部订阅（见其注释），这里不再因每帧出字而重算。
+  const hasConversation = turns.length > 0 || running;
 
   // 斜杠命令弹层：draft 以 / 开头且还在敲命令 token（无空白）时打开。
   const slashQuery = (!slashDismissed && draft.startsWith('/') && !/\s/.test(draft)) ? draft.slice(1) : null;
+  // Chaya 技能（provider 无关）并入斜杠菜单，排在 CLI 原生命令前——所有 provider 都能 / 触发。
+  const allCommands = useMemo<SlashCommand[]>(() => [
+    ...la.skills.map((s) => ({ name: `/${s.name}`, description: s.description, scope: 'chaya' as const, origin: s.source === 'cli' ? s.origin : undefined })),
+    ...la.commands,
+  ], [la.skills, la.commands]);
   const slashItems = useMemo(() => {
     if (slashQuery === null) return [] as SlashCommand[];
     const q = slashQuery.toLowerCase();
-    return la.commands.filter((c) => c.name.slice(1).toLowerCase().includes(q)).slice(0, 8);
-  }, [slashQuery, la.commands]);
+    return allCommands.filter((c) => c.name.slice(1).toLowerCase().includes(q)).slice(0, 8);
+  }, [slashQuery, allCommands]);
   const slashOpen = slashQuery !== null;
   useEffect(() => { setSlashIdx(0); }, [slashQuery]);
   const pickSlash = (c: SlashCommand) => { la.setDraft(cwd, `${c.name} `); setSlashDismissed(true); requestAnimationFrame(() => taRef.current?.focus()); };
@@ -967,7 +1039,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
       for (const id of settleTimersRef.current) window.clearTimeout(id);
       settleTimersRef.current = [];
     };
-  }, [scrollKey, cwd, messages.length, liveMsgs.length, livePreview, status, loadingSession]);
+  }, [scrollKey, cwd, messages.length, liveMsgs.length, status, loadingSession]);
   // 载入完成且当前激活时聚焦输入框——直接续聊。
   useEffect(() => {
     if (!loadingSession && cwd === la.activeCwd && la.current?.live) requestAnimationFrame(() => taRef.current?.focus());
@@ -1035,11 +1107,13 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
     [la.modelOptions, tab?.model],
   );
   const reasoningOptions = useMemo(() => {
-    if (la.provider !== 'codex') return [];
+    if (la.provider !== 'codex' && la.provider !== 'claude') return [];
     const seen = new Set<string>();
-    const source = selectedModel?.supportedReasoningLevels?.length
+    let source = selectedModel?.supportedReasoningLevels?.length
       ? selectedModel.supportedReasoningLevels
       : la.modelOptions.flatMap((m) => m.supportedReasoningLevels || []);
+    // claude 的 effort 是固定枚举（low/medium/high/xhigh/max）；模型未带级别时给静态兜底。
+    if (la.provider === 'claude' && source.length === 0) source = CLAUDE_EFFORTS;
     return source.filter((x) => {
       const effort = String(x?.effort || '').trim();
       if (!effort || seen.has(effort)) return false;
@@ -1119,17 +1193,24 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
       )}
 
       <section className="v2-la-pane-stream" ref={streamRef}>
+        {/* 更早的历史还藏着：上滑到顶自动取下一批，点它也行（内容不满一屏时滚动事件不来）。 */}
+        {histMore > 0 && !loadingSession && (
+          <button className="v2-la-hist-more" onClick={loadOlder}>
+            ↑ {tr('local.hist.more', { n: histMore })}
+          </button>
+        )}
         {/* 时间线抽成独立 memo：打字（draft 变）时它整块 bail，不再随每次按键重建全部轮次。 */}
         <PaneTimeline
+          cwd={cwd}
           turns={turns}
           loadingSession={loadingSession}
           hasConversation={hasConversation}
-          livePreview={livePreview}
           running={running}
           busy={!!perm || !!question}
           status={status}
           provider={la.provider}
           sessionId={sessionId}
+          scrollerRef={streamRef}
         />
       </section>
 
@@ -1175,6 +1256,8 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
         <div className={`v2-composer${inGrid ? ' v2-la-mini' : ''}${running ? ' v2-comp-working' : ''}`} data-mode="chat" data-prov={la.provider}>
           {capToast && <div className="v2-la-captoast">{capToast}</div>}
           <div className="v2-box">
+            {/* CLI 跑动时的边缘旋转流光：遮罩在容器、旋转在子层(纯合成器动画不掉帧)。 */}
+            {running && <div className="v2-comp-ring" aria-hidden />}
             {/* @ 联动：选 wiki 笔记/文档 → 插入路径引用(本地) 或 内容(云端)。浮在框上方。 */}
             {mentionOpen && (
               <div className="v2-la-mention">
@@ -1182,12 +1265,54 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                 <WikiPicker items={mentionItems} loading={wiki.loading} activeIdx={mentionIdx} onPick={(it) => void pickMention(it)} emptyHint={tr('local.wiki.empty')} />
               </div>
             )}
+            {/* 技能选择器：composer 技能按钮点开，跨 provider 一致地挑 Chaya 技能（选中插入 /名字）。 */}
+            {skillMenuOpen && (
+              <>
+                <div className="v2-la-skillpop-scrim" onMouseDown={() => setSkillMenuOpen(false)} />
+                <div className="v2-la-slash v2-la-skillpop" role="menu">
+                  <div className="v2-la-slash-hd">{tr('local.skill.pick')}</div>
+                  {/* 过滤框：弹出即聚焦，敲字过滤、↑↓/⏎ 键盘选择。 */}
+                  <input
+                    className="v2-la-skillfilter"
+                    autoFocus
+                    value={skillQuery}
+                    placeholder={tr('local.skill.filterPlaceholder')}
+                    onChange={(e) => { setSkillQuery(e.target.value); setSkillIdx(0); }}
+                    onKeyDown={onSkillKeyDown}
+                  />
+                  {la.skills.length === 0 && (
+                    <div className="v2-la-slash-empty">{tr('settings.skills.empty')}</div>
+                  )}
+                  {la.skills.length > 0 && skillItems.length === 0 && (
+                    <div className="v2-la-slash-empty">{tr('local.slash.noMatch')}</div>
+                  )}
+                  {skillItems.map((s, i) => (
+                    <button
+                      key={s.id}
+                      className={`v2-la-slash-item${i === skillIdx ? ' active' : ''}`}
+                      onMouseEnter={() => setSkillIdx(i)}
+                      onMouseDown={(e) => { e.preventDefault(); pickSkill(s.name); }}
+                    >
+                      <span className="nm">/{s.name}</span>
+                      {s.description && <span className="ds">{s.description}</span>}
+                      <span className="sc chaya">{s.source === 'cli' && s.origin ? s.origin : tr('local.scope.skill')}</span>
+                    </button>
+                  ))}
+                  <button
+                    className="v2-la-slash-manage"
+                    onMouseDown={(e) => { e.preventDefault(); setSkillMenuOpen(false); window.dispatchEvent(new CustomEvent('chaya:openSettings', { detail: { section: 'skills' } })); }}
+                  >
+                    <IconSkill /> {tr('local.slash.manageSkills')}
+                  </button>
+                </div>
+              </>
+            )}
             {slashOpen && (
               <div className="v2-la-slash">
                 <div className="v2-la-slash-hd">{tr('local.slash.header')}</div>
                 {slashItems.length === 0 && (
                   <div className="v2-la-slash-empty">
-                    {la.commands.length === 0
+                    {allCommands.length === 0
                       ? tr('local.slash.noCommands')
                       : tr('local.slash.noMatch')}
                   </div>
@@ -1201,9 +1326,15 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                   >
                     <span className="nm">{c.name}</span>
                     {c.description && <span className="ds">{c.description}</span>}
-                    <span className="sc">{c.scope === 'project' ? tr('local.scope.project') : c.scope === 'user' ? tr('local.scope.user') : tr('local.scope.builtin')}</span>
+                    <span className={`sc${c.scope === 'chaya' ? ' chaya' : ''}`}>{c.scope === 'chaya' ? (c.origin || tr('local.scope.skill')) : c.scope === 'project' ? tr('local.scope.project') : c.scope === 'user' ? tr('local.scope.user') : tr('local.scope.builtin')}</span>
                   </button>
                 ))}
+                <button
+                  className="v2-la-slash-manage"
+                  onMouseDown={(e) => { e.preventDefault(); window.dispatchEvent(new CustomEvent('chaya:openSettings', { detail: { section: 'skills' } })); }}
+                >
+                  <IconSkill /> {tr('local.slash.manageSkills')}
+                </button>
               </div>
             )}
             {/* 排队条：AI 处理中用户继续发的指令，本轮结束后自动打包成一轮发出；× 可撤回。 */}
@@ -1217,6 +1348,17 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                     <button className="x" title={tr('local.queue.remove')} onClick={() => la.dequeue(cwd, q.id)}>✕</button>
                   </div>
                 ))}
+              </div>
+            )}
+            {/* 技能 pill：选中后挂在 composer 顶部；发送时用它包裹输入并展开。× 取消。 */}
+            {tab.skill && (
+              <div className="v2-la-skilltag-row">
+                <span className="v2-la-skilltag">
+                  <IconSkill />
+                  <span className="nm">/{tab.skill}</span>
+                  <button className="x" title={tr('local.att.remove')} onClick={() => la.setSkill(cwd, undefined)}>✕</button>
+                </span>
+                <span className="v2-la-skilltag-hint">{tr('local.skill.tagHint')}</span>
               </div>
             )}
             {/* 参考附件条：图片显缩略图、其它文件显图标 + 名；× 移除。随下条消息发出。 */}
@@ -1258,6 +1400,13 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                     title={tr('local.att.addHint')}
                   ><IconPaperclip />{attachments.length > 0 && <span className="n">{attachments.length}</span>}</button>
                 )}
+                {current?.live && (
+                  <button
+                    className={`v2-la-skillbtn${skillMenuOpen ? ' on' : ''}`}
+                    onClick={openSkillMenu}
+                    title={tr('local.skill.pick')}
+                  ><IconSkill /><span className="lb">{tr('local.skill.btn')}</span></button>
+                )}
               </div>
               <div className="v2-grow" />
               {/* 权限档 + 模型 紧挨发送按钮左侧（高频切换手更近）；权限在模型左。 */}
@@ -1270,9 +1419,9 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                 <span className="v2-la-mode-lb">{permLabel(la.provider, effPerm)}</span>
               </button>
               {current?.live && (
-                <button className="v2-la-cfg" onClick={openCfg} title={tr('local.cfg.modelMcp')}>
+                <button className={`v2-la-cfg${la.modelsLoading && la.modelOptions.length === 0 ? ' loading' : ''}`} onClick={openCfg} title={tr('local.cfg.modelMcp')}>
                   <span className="tri" aria-hidden><IconModel /></span>
-                  <span className="m">{selectedModel?.displayName || (tab.model || tr('local.cfg.defaultModel'))}</span>
+                  <span className="m">{selectedModel?.displayName || (tab.model || (la.modelsLoading && la.modelOptions.length === 0 ? tr('local.cfg.modelsLoading') : tr('local.cfg.defaultModel')))}</span>
                   {tab.reasoning && <span className="mcpn">{tab.reasoning}</span>}
                   {(tab.mcp?.length ?? 0) > 0 && <span className="mcpn">MCP {tab.mcp!.length}</span>}
                 </button>
@@ -1288,7 +1437,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                   <button className="v2-send stop" title={tr('local.composer.interrupt')} onClick={() => la.interrupt(cwd)}>■</button>
                 </>
               ) : (
-                <button className="v2-send" title={tr('local.composer.send')} onClick={() => la.send(cwd)} disabled={(!draft.trim() && attachments.length === 0) || !current?.live}>
+                <button className="v2-send" title={tr('local.composer.send')} onClick={() => la.send(cwd)} disabled={(!draft.trim() && attachments.length === 0 && !tab.skill) || !current?.live}>
                   <IconSend />
                 </button>
               )}
@@ -1310,8 +1459,15 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
             </div>
             <div className="v2-la-cfgbody" role="tabpanel" key={cfgTab}>
               {cfgTab === 'model' ? (
-                la.modelOptions.length === 0 ? (
-                  <div className="v2-la-slash-empty">{tr('local.cfg.modelsAfterSend')}</div>
+                <>
+                {canLogin && (
+                  <button className="v2-la-login-row" onClick={() => setLoginOpen(true)}>
+                    <ProviderLogo id={la.provider} />
+                    <span>{tr('local.cfg.login', { provider: PROVIDER_LABELS[la.provider] || la.provider })}</span>
+                  </button>
+                )}
+                {la.modelOptions.length === 0 ? (
+                  <div className="v2-la-slash-empty">{la.modelsLoading ? tr('local.cfg.modelsLoading') : tr('local.cfg.modelsAfterSend')}</div>
                 ) : (
                   <>
                     <button className={`v2-la-model-item${!tab.model ? ' on' : ''}`} onClick={() => { la.setModel(cwd, ''); setCfgOpen(false); }}>
@@ -1328,7 +1484,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                         ))}
                       </div>
                     ))}
-                    {la.provider === 'codex' && reasoningOptions.length > 0 && (
+                    {(la.provider === 'codex' || la.provider === 'claude') && reasoningOptions.length > 0 && (
                       <div className="v2-la-model-group">
                         <div className="v2-la-model-vendor">{tr('local.cfg.reasoning')}</div>
                         <button className={`v2-la-model-item${!tab.reasoning ? ' on' : ''}`} onClick={() => la.setReasoning(cwd, '')}>
@@ -1345,7 +1501,8 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                     )}
                     <div className="v2-la-cfg-foot">{tr('local.cfg.modelFoot')}</div>
                   </>
-                )
+                )}
+                </>
               ) : (
                 <>
                   <div className="v2-la-cfg-hd">
@@ -1376,6 +1533,13 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
           </div>
         </div>
       )}
+      {loginOpen && (
+        <LoginTerminal
+          provider={la.provider}
+          onClose={() => setLoginOpen(false)}
+          onDone={() => { void la.refreshModels(); }}
+        />
+      )}
     </div>
   );
 };
@@ -1397,6 +1561,7 @@ const paneEqual = (a: PaneProps, b: PaneProps): boolean => {
     la.projects === lb.projects &&
     la.groups === lb.groups &&
     la.modelOptions === lb.modelOptions &&
+    la.skills === lb.skills &&
     la.commands === lb.commands
   );
 };
@@ -1539,7 +1704,7 @@ LocalAgentConversation.displayName = 'LocalAgentConversation';
  * 时间线区块：把消息折叠成块，并把 tool_use 与结果配对。
  * ================================================================== */
 type Block =
-  | { k: 'user'; text: string; uid?: string }
+  | { k: 'user'; text: string; skill?: string; uid?: string }
   | { k: 'text'; text: string; uid?: string }
   | { k: 'think'; text: string; uid?: string }
   | { k: 'tool'; name: string; input: any; id?: string; result?: string; isError?: boolean; pending: boolean; children?: Block[]; uid?: string };
@@ -1552,9 +1717,13 @@ function buildBlocks(msgs: TranscriptMessage[]): Block[] {
     const parent = m.parentId || null;
     const sink = parent && byId.get(parent) ? (byId.get(parent)!.children ??= []) : top;
     const uid = m.uuid || undefined;   // 源消息 uuid → 用作轮次的稳定 key（增量补齐历史时不重挂可见轮）
+    let pendingSkill: string | undefined;   // 'skill' part 紧跟其后的 user text 一起渲染成「pill + 原话」
     for (const p of m.parts) {
-      if (p.kind === 'text') {
-        sink.push(m.role === 'user' ? { k: 'user', text: p.text, uid } : { k: 'text', text: p.text, uid });
+      if (p.kind === 'skill') {
+        pendingSkill = p.name;
+      } else if (p.kind === 'text') {
+        sink.push(m.role === 'user' ? { k: 'user', text: p.text, skill: pendingSkill, uid } : { k: 'text', text: p.text, uid });
+        pendingSkill = undefined;
       } else if (p.kind === 'thinking') {
         sink.push({ k: 'think', text: p.text, uid });
       } else if (p.kind === 'tool_use') {
@@ -1574,7 +1743,7 @@ function buildBlocks(msgs: TranscriptMessage[]): Block[] {
 /** 折成轮次：user → 一轮右侧气泡；连续 agent 块 → 一轮左侧带头像。 */
 type AgentBlock = Exclude<Block, { k: 'user' }>;
 type Turn =
-  | { role: 'user'; text: string; key?: string }
+  | { role: 'user'; text: string; skill?: string; key?: string }
   | { role: 'agent'; blocks: AgentBlock[]; streaming?: boolean; key?: string };
 
 function groupTurns(blocks: Block[], streamingTail: boolean): Turn[] {
@@ -1591,7 +1760,7 @@ function groupTurns(blocks: Block[], streamingTail: boolean): Turn[] {
     return n === 0 ? uid : `${uid}#${n}`;
   };
   for (const b of blocks) {
-    if (b.k === 'user') { turns.push({ role: 'user', text: b.text, key: uniqKey(b.uid) }); continue; }
+    if (b.k === 'user') { turns.push({ role: 'user', text: b.text, skill: b.skill, key: uniqKey(b.uid) }); continue; }
     const last = turns[turns.length - 1];
     if (last && last.role === 'agent') last.blocks.push(b);
     else turns.push({ role: 'agent', blocks: [b], key: uniqKey(b.uid) });
@@ -1604,9 +1773,12 @@ function groupTurns(blocks: Block[], streamingTail: boolean): Turn[] {
 }
 
 /* 用户轮：右侧、柔色气泡——和主聊天的 user 气泡同一语言，一眼分得清。 */
-const UserTurn: React.FC<{ text: string }> = React.memo(({ text }) => (
+const UserTurn: React.FC<{ text: string; skill?: string }> = React.memo(({ text, skill }) => (
   <div className="v2-la-turn user">
-    <div className="v2-la-ubub"><p>{text}</p></div>
+    <div className="v2-la-ubub">
+      {skill && <span className="v2-la-ubub-skill"><IconSkill />/{skill}</span>}
+      {text && <p>{text}</p>}
+    </div>
   </div>
 ));
 UserTurn.displayName = 'UserTurn';

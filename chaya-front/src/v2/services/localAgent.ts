@@ -68,7 +68,8 @@ export function permHint(provider: ProviderId, mode: PermMode): string {
 export interface SlashCommand {
   name: string;            // 形如 /commit、/git:push、/compact
   description: string;
-  scope: 'project' | 'user' | 'builtin';
+  scope: 'project' | 'user' | 'builtin' | 'chaya';   // chaya = Chaya 自定义技能（provider 无关）
+  origin?: string;         // scope=chaya 且来自 CLI 自动导入时 = claude/codex/cursor/gemini
 }
 
 /** agent 请求权限/批准时弹给用户（来自 SDK canUseTool）。 */
@@ -116,6 +117,7 @@ export interface CodexSessionSummary extends SessionSummary {
 export type MsgPart =
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
+  | { kind: 'skill'; name: string }   // Chaya 技能标记：发送前展开，气泡里渲染成 pill
   | { kind: 'tool_use'; name: string; input?: any; id?: string }
   | { kind: 'tool_result'; text: string; isError?: boolean; toolUseId?: string };
 
@@ -189,6 +191,16 @@ export interface GitFile {
 export interface GitStatusResult { ok: boolean; repo?: boolean; gitMissing?: boolean; root?: string; files?: GitFile[]; error?: string }
 export interface GitDiffResult { ok: boolean; diff?: string; untracked?: boolean; content?: string; error?: string }
 
+/** 主进程扫到的一条 CLI 安装技能（claude skill / 各家自定义命令），body 已归一 {{input}} 占位。 */
+export interface CliSkillEntry {
+  name: string;
+  description: string;
+  body: string;
+  origin: 'claude' | 'codex' | 'cursor' | 'gemini';
+  path: string;
+  mtime: number;
+}
+
 interface LocalAgentBridge {
   detect(only?: ProviderId): Promise<DetectedProvider[]>;
   pickFolder(): Promise<string | null>;
@@ -199,6 +211,7 @@ interface LocalAgentBridge {
   readSession(provider: ProviderId, cwd: string, sessionId: string): Promise<{ messages: TranscriptMessage[] }>;
   deleteSession(provider: ProviderId, cwd: string, sessionId: string): Promise<{ ok: boolean; trashed?: boolean; error?: string }>;
   listCommands(provider: ProviderId, cwd: string): Promise<SlashCommand[]>;
+  scanCliSkills(): Promise<CliSkillEntry[]>;
   send(payload: SendPayload): Promise<{ ok: boolean }>;
   warm(payload: WarmPayload): Promise<{ ok: boolean }>;
   permissionRespond(permId: string, decision: PermissionDecision): Promise<{ ok: boolean }>;
@@ -215,8 +228,21 @@ interface LocalAgentBridge {
   openInEditor(editor: 'vscode' | 'cursor', dir: string): Promise<{ ok: boolean; error?: string }>;
   gitStatus(dir: string): Promise<GitStatusResult>;
   gitDiffFile(dir: string, file: string, untracked: boolean): Promise<GitDiffResult>;
+  gitRevertFile(dir: string, file: string, untracked: boolean): Promise<{ ok: boolean; error?: string }>;
+  gitRevertAll(dir: string): Promise<{ ok: boolean; trashed?: number; error?: string }>;
+  loginStart(provider: ProviderId, cols?: number, rows?: number): Promise<{ ok: boolean; id?: string; error?: string }>;
+  loginInput(id: string, data: string): Promise<{ ok: boolean }>;
+  loginResize(id: string, cols: number, rows: number): Promise<{ ok: boolean }>;
+  loginKill(id: string): Promise<{ ok: boolean }>;
+  loginStatus(provider: ProviderId): Promise<{ loggedIn: boolean | null; email?: string | null }>;
+  onLogin(cb: (data: LoginEvent) => void): () => void;
   onEvent(cb: (data: LocalAgentEvent) => void): () => void;
 }
+
+/** 登录 pty 的输出/退出事件（按 id 路由）。 */
+export interface LoginEvent { id: string; type: 'data' | 'exit'; data?: string; code?: number; error?: string }
+/** 支持触发 CLI 登录的 provider（其余靠 API Key/无需登录）。 */
+export const LOGIN_PROVIDERS: ProviderId[] = ['claude', 'copilot', 'gemini'];
 
 function bridge(): LocalAgentBridge | null {
   const w = window as any;
@@ -244,6 +270,7 @@ export const localAgent = {
     bridge()?.deleteSession(provider, cwd, sessionId) ?? Promise.resolve({ ok: false }),
   listCommands: (provider: ProviderId, cwd: string) =>
     bridge()?.listCommands(provider, cwd) ?? Promise.resolve([] as SlashCommand[]),
+  scanCliSkills: () => bridge()?.scanCliSkills() ?? Promise.resolve([] as CliSkillEntry[]),
   send: (payload: SendPayload) => bridge()?.send(payload) ?? Promise.resolve({ ok: false }),
   warm: (payload: WarmPayload) => bridge()?.warm(payload) ?? Promise.resolve({ ok: false }),
   permissionRespond: (permId: string, decision: PermissionDecision) =>
@@ -261,6 +288,14 @@ export const localAgent = {
   openInEditor: (editor: 'vscode' | 'cursor', dir: string) => bridge()?.openInEditor(editor, dir) ?? Promise.resolve({ ok: false, error: 'no bridge' }),
   gitStatus: (dir: string) => bridge()?.gitStatus(dir) ?? Promise.resolve({ ok: false, repo: false, files: [] } as GitStatusResult),
   gitDiffFile: (dir: string, file: string, untracked: boolean) => bridge()?.gitDiffFile(dir, file, untracked) ?? Promise.resolve({ ok: false } as GitDiffResult),
+  gitRevertFile: (dir: string, file: string, untracked: boolean) => bridge()?.gitRevertFile(dir, file, untracked) ?? Promise.resolve({ ok: false, error: 'no bridge' }),
+  gitRevertAll: (dir: string) => bridge()?.gitRevertAll(dir) ?? Promise.resolve({ ok: false, error: 'no bridge' }),
+  loginStart: (provider: ProviderId, cols?: number, rows?: number) => bridge()?.loginStart(provider, cols, rows) ?? Promise.resolve({ ok: false, error: 'no bridge' }),
+  loginInput: (id: string, data: string) => bridge()?.loginInput(id, data) ?? Promise.resolve({ ok: false }),
+  loginResize: (id: string, cols: number, rows: number) => bridge()?.loginResize(id, cols, rows) ?? Promise.resolve({ ok: false }),
+  loginKill: (id: string) => bridge()?.loginKill(id) ?? Promise.resolve({ ok: false }),
+  loginStatus: (provider: ProviderId) => bridge()?.loginStatus(provider) ?? Promise.resolve({ loggedIn: null }),
+  onLogin: (cb: (data: LoginEvent) => void) => bridge()?.onLogin(cb) ?? (() => {}),
   onEvent: (cb: (data: LocalAgentEvent) => void) => bridge()?.onEvent(cb) ?? (() => {}),
 };
 

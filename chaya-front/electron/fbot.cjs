@@ -181,7 +181,8 @@ function recordSubmission(formKey, values, ctx) {
   };
   list.push(item);
   if (list.length > 500) list.splice(0, list.length - 500);   // 只留最近 500 条
-  try { fs.writeFileSync(submissionsPath(), JSON.stringify(list, null, 2), 'utf8'); } catch { /* */ }
+  // 异步写：fbot 长连接和 IPC 都在主进程事件循环上，同步写大 JSON 会卡菜单/卡片响应。
+  fsp.writeFile(submissionsPath(), JSON.stringify(list, null, 2), 'utf8').catch(() => {});
   emit({ type: 'submission', item });
   return item;
 }

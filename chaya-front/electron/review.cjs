@@ -181,8 +181,23 @@ function updateRun(run, patch) {
 const newId = (p) => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 /* ---------------- 运行 ---------------- */
+/* 并发护栏：同一 目录×引擎 只允许一条评审在跑（交叉 AI 用不同 provider，互不挡）。
+ * 否则连点「评审」会堆出多条无人值守的 headless 子进程。 */
+const runningKeys = new Set();
+
 async function runReview({ cwd, provider = 'claude', model, guidance, fresh = false, resumeFrom } = {}) {
   if (!cwd) return { ok: false, error: 'no dir' };
+  const runKey = `${cwd}::${provider}`;
+  if (runningKeys.has(runKey)) return { ok: false, error: 'already running' };
+  runningKeys.add(runKey);
+  try {
+    return await runReviewInner({ cwd, provider, model, guidance, fresh, resumeFrom });
+  } finally {
+    runningKeys.delete(runKey);
+  }
+}
+
+async function runReviewInner({ cwd, provider, model, guidance, fresh, resumeFrom }) {
   const wt = await gatherWorktree(cwd);
   if (!wt.repo) return { ok: false, error: 'not a git repo' };
   if (!wt.files.length) return { ok: false, error: 'clean' };
