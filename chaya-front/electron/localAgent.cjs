@@ -857,6 +857,13 @@ async function scanCliSkills() {
  * ------------------------------------------------------------------ */
 const sessions = new Map();      // runKey -> { input, ac, query }
 const pendingPerms = new Map();  // permId -> { cwd: runKey, settle }
+// 正在跑回合的 runKey 集合 —— 渲染进程重载/重连后据此对账，把还在跑的会话状态点亮回来。
+// send 时置入；收到本回合终止事件(result 主回合/error/session_closed)时移除（见 makeBatchedEmit）。
+const busyKeys = new Set();
+function isTerminalEvent(ev) {
+  if (!ev) return false;
+  return ev.type === 'session_closed' || ev.type === 'error' || (ev.type === 'result' && !ev.parent_tool_use_id);
+}
 const PERM_MODES = ['default', 'plan', 'acceptEdits', 'bypassPermissions'];
 
 /* runKey：会话路由键。主会话 = cwd 本身；衍生(derive)等并行「车道」= cwd + lane。
@@ -909,7 +916,7 @@ function clearPerms(cwd, message) {
  * 非 delta 事件到来先冲掉积压，保证事件顺序不变。
  * ------------------------------------------------------------------ */
 const DELTA_BATCH_MS = 16;
-function makeBatchedEmit(emitNow) {
+function makeBatchedEmit(emitNow, key) {
   let buf = null;     // { parentId, text }
   let timer = null;
   const flushDelta = () => {
@@ -921,6 +928,7 @@ function makeBatchedEmit(emitNow) {
     return emitNow(ev);
   };
   return (ev) => {
+    if (key && isTerminalEvent(ev)) busyKeys.delete(key);   // 本回合结束 → 清 busy（重连对账据此判定）
     const e = ev && ev.type === 'stream_event' ? ev.event : null;
     if (e && e.type === 'content_block_delta' && e.delta && e.delta.type === 'text_delta' && typeof e.delta.text === 'string') {
       const pid = (ev.parent_tool_use_id) || null;
@@ -953,7 +961,7 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, reaso
     if (sender.isDestroyed()) { try { ac.abort(); } catch { /* */ } return false; }
     try { sender.send('localAgent:event', { cwd: key, ev }); return true; }
     catch { try { ac.abort(); } catch { /* */ } return false; }
-  });
+  }, key);
 
   const canUseTool = (toolName, toolInput, ctx) => new Promise((resolve) => {
     const settle = (decision) => {
@@ -1081,8 +1089,9 @@ function buildClaudeContent(prompt, attachments) {
  *  模型在发送这一刻才应用：冷启已用 options.model 起；暖会话且模型变了才 setModel
  *  （setModel 会注入「Set model to …」回显，渲染层会过滤掉，不当对话显示）。
  *  attachments：拖入/选取的文件 + 粘贴的图片（见上方注入逻辑）。 */
-async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode, model, reasoning, mcp, apiKey, attachments, lane }) {
-  if (provider === 'cursor' && !lane) return cursorSend(sender, { cwd, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, apiKey });
+async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode, model, reasoning, mcp, apiKey, attachments, lane, steer }) {
+  if (!steer) busyKeys.add(runKey(cwd, lane));   // 回合开始 → 标记 busy（steer 是已在跑的回合插话，不重复标记）
+  if (provider === 'cursor') return cursorSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, apiKey });
   if (provider === 'codex') return codexSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, reasoning });
   // gemini 无 streaming-input/视觉 → 附件按 @路径 文本引用（与 cursor 同）；支持 lane。
   if (provider === 'gemini') return geminiSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, mcp });
@@ -1091,9 +1100,16 @@ async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode,
   let s = sessions.get(key);
   if (!s) s = startSession(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, lane });
   if (!s) return { ok: false };
+  // steering（运行中插话）：只往输入流推消息，绝不动会话配置——effort 重建/切模型都
+  // 会打断正在跑的回合（abort 重建 = 直接杀掉进行中的 CLI）。配置变更等下一轮正常 send 再生效。
+  if (steer) {
+    s.input.push({ type: 'user', message: { role: 'user', content: buildClaudeContent(prompt, attachments) }, parent_tool_use_id: null });
+    return { ok: true };
+  }
   // claude effort 无运行时 setter：思考强度变了就用新强度重建会话（resume 同一 sessionId，对话不丢）。
   const wantEffort = reasoning || null;
   if (s.query && wantEffort !== s.reasoning) {
+    console.log('[localAgent] effort %s → %s · rebuild claude session · %s', s.reasoning, wantEffort, key);
     try { s.ac.abort(); } catch { /* */ }
     sessions.delete(key);
     s = startSession(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, lane });
@@ -1112,7 +1128,7 @@ async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode,
 /** 预热：打开/聚焦会话时就起常驻进程（提前付冷启 + resume 读盘），
  *  等用户真正发送时已是暖的——首 token 从 ~10s 降到 ~2s。已有则不重起。 */
 function sessionWarm(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, apiKey, lane }) {
-  if (provider === 'cursor' && !lane) return cursorWarm(sender, { cwd, sessionId, permMode, model, apiKey });
+  if (provider === 'cursor') return cursorWarm(sender, { cwd, lane, sessionId, permMode, model, apiKey });
   if (provider === 'codex') return codexWarm(sender, { cwd, lane, sessionId, permMode, model, reasoning });
   if (provider === 'gemini') return geminiWarm(sender, { cwd, lane, sessionId, permMode, model, mcp });
   if (provider === 'copilot') return copilotWarm(sender, { cwd, lane, sessionId, permMode, model, mcp });
@@ -1174,7 +1190,7 @@ async function sessionReconnectMcp({ cwd, name, lane }) {
 
 /** 运行中切模型（/model 等价）。会话不存在则忽略（下次发送会以选中的 model 起）。 */
 async function sessionSetModel({ cwd, model, lane }) {
-  if (!lane) { const cu = cursorSessions.get(cwd); if (cu) { cu.model = model || null; return { ok: true }; } }
+  { const cu = cursorSessions.get(runKey(cwd, lane)); if (cu) { cu.model = model || null; return { ok: true }; } }
   { const cx = codexSessions.get(runKey(cwd, lane)); if (cx) { cx.model = model || null; return { ok: true }; } }
   { const g = geminiSessions.get(runKey(cwd, lane)); if (g) { g.model = model || null; return { ok: true }; } }
   { const cp = copilotSessions.get(runKey(cwd, lane)); if (cp) { cp.model = model || null; if (cp.conn && model && model !== 'auto') { try { await cp.conn.request('session/set_model', { sessionId: cp.sessionId, modelId: model }); } catch { /* */ } } return { ok: true }; } }
@@ -1199,10 +1215,8 @@ async function sessionSetReasoning({ cwd, reasoning, lane }) {
 
 /** 中断当前回合，但保留常驻会话（可继续发）。 */
 async function sessionInterrupt({ cwd, lane }) {
-  if (!lane) {   // lane 是 claude 专用的并行车道；带 lane 时跳过 cursor 分支
-    const cu = cursorSessions.get(cwd);
-    if (cu) { try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ } return { ok: true }; }
-  }
+  busyKeys.delete(runKey(cwd, lane));   // 中断 → 回合结束
+  { const cu = cursorSessions.get(runKey(cwd, lane)); if (cu) { try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ } return { ok: true }; } }
   { const cx = codexSessions.get(runKey(cwd, lane)); if (cx) { try { if (cx.child) cx.child.kill('SIGTERM'); } catch { /* */ } return { ok: true }; } }
   { const g = geminiSessions.get(runKey(cwd, lane)); if (g && g.conn) { try { g.conn.notify('session/cancel', { sessionId: g.sessionId }); } catch { /* */ } return { ok: true }; } }
   { const cp = copilotSessions.get(runKey(cwd, lane)); if (cp && cp.conn) { try { cp.conn.notify('session/cancel', { sessionId: cp.sessionId }); } catch { /* */ } return { ok: true }; } }
@@ -1224,10 +1238,13 @@ function killSessionByKey(key, reason) {
 
 /** 关闭某标签/车道的常驻会话，回收进程（切会话/新建/关标签/换 provider/关衍生卡片时调）。 */
 function sessionClose({ cwd, lane }) {
-  if (!lane) {
-    const cu = cursorSessions.get(cwd);
+  // 诊断：每次关会话都留痕——排查「会话被谁关掉」时直接对账（含跨 provider 同 key 误关）。
+  console.log('[localAgent] sessionClose · %s', runKey(cwd, lane));
+  busyKeys.delete(runKey(cwd, lane));
+  {
+    const cu = cursorSessions.get(runKey(cwd, lane));
     if (cu) {
-      cursorSessions.delete(cwd);
+      cursorSessions.delete(runKey(cwd, lane));
       try { if (cu.ac) cu.ac.abort(); } catch { /* */ }
       try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ }
       return { ok: true };
@@ -1253,6 +1270,7 @@ function sessionClose({ cwd, lane }) {
 /** 全部回收：渲染进程重载/崩溃/退出时调——否则旧会话的 claude 子进程会变孤儿常驻
  *  （实测一天下来累积了 9 条、共 ~500MB、最久 20h+）。幂等。 */
 function killAllSessions() {
+  busyKeys.clear();
   const n = sessions.size + cursorSessions.size + codexSessions.size + geminiSessions.size + copilotSessions.size;
   for (const key of [...sessions.keys()]) killSessionByKey(key, '已重置');
   for (const [cwd, cu] of [...cursorSessions]) {
@@ -1331,7 +1349,7 @@ const PERM_MAX_AGE_MS = 30 * 60 * 1000;
 
 /** 会话进行中切换权限模式（Tab 切档即时生效）。 */
 async function sessionSetPermMode({ cwd, permMode, lane }) {
-  if (!lane) { const cu = cursorSessions.get(cwd); if (cu) { cu.permMode = permMode || 'force'; return { ok: true }; } }
+  { const cu = cursorSessions.get(runKey(cwd, lane)); if (cu) { cu.permMode = permMode || 'force'; return { ok: true }; } }
   { const cx = codexSessions.get(runKey(cwd, lane)); if (cx) { cx.permMode = permMode || 'default'; return { ok: true }; } }
   { const g = geminiSessions.get(runKey(cwd, lane)); if (g) { g.permMode = permMode || 'default'; return { ok: true }; } }
   { const cp = copilotSessions.get(runKey(cwd, lane)); if (cp) { cp.permMode = permMode || 'default'; return { ok: true }; } }
@@ -1638,7 +1656,7 @@ function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model, reas
     if (sender.isDestroyed()) { try { ac.abort(); } catch { /* */ } return false; }
     try { sender.send('localAgent:event', { cwd: key, ev }); return true; }
     catch { try { ac.abort(); } catch { /* */ } return false; }
-  });
+  }, key);
 
   const offerSandboxRetry = () => {
     if (wantPerm === 'bypassPermissions' || wantPerm === 'force') return false;
@@ -1772,22 +1790,25 @@ function fetchCursorModels(bin, apiKey, emit) {
   _cursorModelsInflight.then((models) => { if (models && models.length) emit({ type: 'models', models }); });
 }
 
-/** 发一个 cursor 回合：spawn 进程、流式解析、按 cwd 路由事件回渲染层。 */
-function cursorSend(sender, { cwd, sessionId, prompt, permMode, model, apiKey }) {
+/** 发一个 cursor 回合：spawn 进程、流式解析、按 paneKey(runKey) 路由事件回渲染层。
+ *  cursor 无常驻多车道进程，但用 runKey(cwd,lane) 作 map 键 + 事件路由键，让同一目录下
+ *  多个 cursor 标签（或与 claude 并行）各自独立、不串扰。spawn 仍用真实 cwd。 */
+function cursorSend(sender, { cwd, lane, sessionId, prompt, permMode, model, apiKey }) {
+  const rkey = runKey(cwd, lane);
   const bin = resolveBin('cursor-agent');
-  if (!bin) { sender.send('localAgent:event', { cwd, ev: { type: 'error', error: '未找到 cursor-agent，请确认已安装' } }); return { ok: false }; }
-  const prev = cursorSessions.get(cwd);
+  if (!bin) { sender.send('localAgent:event', { cwd: rkey, ev: { type: 'error', error: '未找到 cursor-agent，请确认已安装' } }); return { ok: false }; }
+  const prev = cursorSessions.get(rkey);
   const key = apiKey || (prev && prev.apiKey) || null;
-  if (!key) { sender.send('localAgent:event', { cwd, ev: { type: 'error', error: '需要 Cursor API Key —— 请在设置里录入' } }); return { ok: false }; }
+  if (!key) { sender.send('localAgent:event', { cwd: rkey, ev: { type: 'error', error: '需要 Cursor API Key —— 请在设置里录入' } }); return { ok: false }; }
   // 防孤儿：上回合若有未退的子进程（异常路径，渲染层 running 已防双发），先收掉再起新的，避免事件串扰。
   if (prev && prev.child) { try { prev.ac && prev.ac.abort(); } catch { /* */ } try { prev.child.kill('SIGTERM'); } catch { /* */ } prev.child = null; }
 
   const ac = new AbortController();
   const emit = makeBatchedEmit((ev) => {
     if (sender.isDestroyed()) { try { ac.abort(); } catch { /* */ } return false; }
-    try { sender.send('localAgent:event', { cwd, ev }); return true; }
+    try { sender.send('localAgent:event', { cwd: rkey, ev }); return true; }
     catch { try { ac.abort(); } catch { /* */ } return false; }
-  });
+  }, rkey);
 
   // 续接 id：优先用本会话上回合捕获的 session_id，否则用打开历史会话传入的 sessionId。
   const resumeId = (prev && prev.sessionId) || sessionId || null;
@@ -1802,7 +1823,7 @@ function cursorSend(sender, { cwd, sessionId, prompt, permMode, model, apiKey })
   }
 
   const session = { child, ac, sessionId: resumeId, model: model || null, permMode: permMode || 'force', apiKey: key };
-  cursorSessions.set(cwd, session);
+  cursorSessions.set(rkey, session);
   ac.signal.addEventListener('abort', () => { try { child.kill('SIGTERM'); } catch { /* */ } });
 
   const ctx = cursorDriver.makeTurnState();
@@ -1843,14 +1864,15 @@ function cursorSend(sender, { cwd, sessionId, prompt, permMode, model, apiKey })
 }
 
 /** cursor 预热：起不动常驻进程，只登记会话状态（让发送前的 setModel/permMode 生效）+ 拉模型列表。 */
-function cursorWarm(sender, { cwd, sessionId, permMode, model, apiKey }) {
+function cursorWarm(sender, { cwd, lane, sessionId, permMode, model, apiKey }) {
+  const rkey = runKey(cwd, lane);
   const bin = resolveBin('cursor-agent');
   if (!bin) return { ok: false };
-  const prev = cursorSessions.get(cwd);
+  const prev = cursorSessions.get(rkey);
   const key = apiKey || (prev && prev.apiKey) || null;
-  if (!prev) cursorSessions.set(cwd, { child: null, ac: null, sessionId: sessionId || null, model: model || null, permMode: permMode || 'force', apiKey: key });
+  if (!prev) cursorSessions.set(rkey, { child: null, ac: null, sessionId: sessionId || null, model: model || null, permMode: permMode || 'force', apiKey: key });
   else { if (apiKey) prev.apiKey = key; if (model !== undefined) prev.model = model || null; if (permMode) prev.permMode = permMode; }
-  if (key) fetchCursorModels(bin, key, (ev) => { try { sender.send('localAgent:event', { cwd, ev }); } catch { /* */ } });
+  if (key) fetchCursorModels(bin, key, (ev) => { try { sender.send('localAgent:event', { cwd: rkey, ev }); } catch { /* */ } });
   return { ok: true };
 }
 
@@ -2053,7 +2075,7 @@ async function geminiEnsure(sender, { cwd, lane, sessionId, permMode, model, mcp
   const bin = resolveBin('gemini');
   if (!bin) { sender.send('localAgent:event', { cwd: key, ev: { type: 'error', error: '未找到 gemini，请确认已安装 gemini CLI' } }); return null; }
   let realCwd = cwd; try { realCwd = fs.realpathSync(cwd); } catch { /* */ }
-  const emit = makeBatchedEmit((ev) => { if (sender.isDestroyed()) return false; try { sender.send('localAgent:event', { cwd: key, ev }); return true; } catch { return false; } });
+  const emit = makeBatchedEmit((ev) => { if (sender.isDestroyed()) return false; try { sender.send('localAgent:event', { cwd: key, ev }); return true; } catch { return false; } }, key);
   const mcpNames = Array.isArray(mcp) ? mcp.slice() : (s && s.mcpNames) || [];
   const mcpServers = resolveMcpAcp(cwd, mcpNames);
   s = { conn: null, sessionId: sessionId || null, model: (model !== undefined ? model : null), permMode: permMode || 'default', turnCtx: geminiAcp.makeTurnState(), key, emit, _init: null, mcpNames, touched: Date.now() };
@@ -2148,7 +2170,7 @@ async function copilotEnsure(sender, { cwd, lane, sessionId, permMode, model, mc
   const bin = resolveBin('copilot');
   if (!bin) { sender.send('localAgent:event', { cwd: key, ev: { type: 'error', error: '未找到 copilot —— 请 `npm i -g @github/copilot` 安装并 `copilot login`' } }); return null; }
   let realCwd = cwd; try { realCwd = fs.realpathSync(cwd); } catch { /* */ }
-  const emit = makeBatchedEmit((ev) => { if (sender.isDestroyed()) return false; try { sender.send('localAgent:event', { cwd: key, ev }); return true; } catch { return false; } });
+  const emit = makeBatchedEmit((ev) => { if (sender.isDestroyed()) return false; try { sender.send('localAgent:event', { cwd: key, ev }); return true; } catch { return false; } }, key);
   const mcpNames = Array.isArray(mcp) ? mcp.slice() : (s && s.mcpNames) || [];
   const mcpServers = resolveMcpAcp(cwd, mcpNames);
   s = { conn: null, sessionId: sessionId || null, model: (model !== undefined ? model : null), permMode: permMode || 'default', turnCtx: geminiAcp.makeTurnState(), key, emit, _init: null, models: [], mcpNames, touched: Date.now() };
@@ -2855,6 +2877,7 @@ function registerLocalAgent(ipcMain, dialog) {
   ipcMain.handle('localAgent:deleteSession', (_e, { provider, cwd, sessionId }) => deleteSession(provider, cwd, sessionId));
   ipcMain.handle('localAgent:listCommands', (_e, { provider, cwd }) => listCommands(provider, cwd));
   ipcMain.handle('localAgent:scanCliSkills', () => scanCliSkills());
+  ipcMain.handle('localAgent:busyKeys', () => [...busyKeys]);   // 重连对账：当前在跑回合的 runKey 列表
   ipcMain.handle('localAgent:send', (e, payload) => sessionSend(e.sender, payload));
   ipcMain.handle('localAgent:warm', (e, payload) => sessionWarm(e.sender, payload));
   ipcMain.handle('localAgent:permissionRespond', (_e, { permId, decision }) => permissionRespond(permId, decision));

@@ -173,6 +173,7 @@ interface SendPayload {
   apiKey?: string | null;   // cursor headless 必需（从后端凭据拉到、由 useLocalAgent 注入）
   attachments?: Attachment[];
   lane?: string;            // 并行车道（如 'derive'）：同一 cwd 起独立常驻会话，事件按 cwd+lane 路由
+  steer?: boolean;          // 运行中插话（claude steering）：主进程只推消息，不动会话配置（防 effort 重建杀回合）
 }
 type WarmPayload = Omit<SendPayload, 'prompt'>;
 
@@ -212,6 +213,7 @@ interface LocalAgentBridge {
   deleteSession(provider: ProviderId, cwd: string, sessionId: string): Promise<{ ok: boolean; trashed?: boolean; error?: string }>;
   listCommands(provider: ProviderId, cwd: string): Promise<SlashCommand[]>;
   scanCliSkills(): Promise<CliSkillEntry[]>;
+  busyKeys(): Promise<string[]>;
   send(payload: SendPayload): Promise<{ ok: boolean }>;
   warm(payload: WarmPayload): Promise<{ ok: boolean }>;
   permissionRespond(permId: string, decision: PermissionDecision): Promise<{ ok: boolean }>;
@@ -271,6 +273,7 @@ export const localAgent = {
   listCommands: (provider: ProviderId, cwd: string) =>
     bridge()?.listCommands(provider, cwd) ?? Promise.resolve([] as SlashCommand[]),
   scanCliSkills: () => bridge()?.scanCliSkills() ?? Promise.resolve([] as CliSkillEntry[]),
+  busyKeys: () => bridge()?.busyKeys() ?? Promise.resolve([] as string[]),
   send: (payload: SendPayload) => bridge()?.send(payload) ?? Promise.resolve({ ok: false }),
   warm: (payload: WarmPayload) => bridge()?.warm(payload) ?? Promise.resolve({ ok: false }),
   permissionRespond: (permId: string, decision: PermissionDecision) =>
@@ -395,7 +398,7 @@ export interface TabGroup {
  * 打开的标签 —— 持久化（localStorage），下次启动自动续传这些会话。
  * 只存身份（cwd / sessionId / title / groupId），不存对话内容（重开时按 sessionId 读盘续传）。
  * ------------------------------------------------------------------ */
-export interface PersistedTab { cwd: string; sessionId: string | null; title: string; groupId?: string | null; permMode?: PermMode; }
+export interface PersistedTab { cwd: string; sessionId: string | null; title: string; groupId?: string | null; permMode?: PermMode; provider?: ProviderId; }
 const TABS_KEY = 'chaya.localAgent.openTabs';
 
 export function loadTabsState(): { tabs: PersistedTab[]; activeCwd: string | null; groups: TabGroup[]; layout: unknown } {

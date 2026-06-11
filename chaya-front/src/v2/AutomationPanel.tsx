@@ -14,7 +14,7 @@ import { localAgent, type SessionSummary, type ProviderId } from './services/loc
 import { ProviderLogo, PROVIDER_LABELS } from './LocalAgentView';
 import { ChainGraphView } from './ChainGraphView';
 
-const PROVIDERS = ['claude', 'cursor', 'codex', 'gemini'];
+const PROVIDERS = ['claude', 'cursor', 'codex', 'gemini', 'copilot'];
 
 /* 线性 SVG 图标（不用 emoji）。 */
 const S = (p: React.ReactNode, fill = false, w = 13) => (

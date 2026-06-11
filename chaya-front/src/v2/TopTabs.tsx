@@ -16,6 +16,8 @@ import { useI18n } from '../i18n';
 interface Props {
   la: LocalAgentState;
   tabs: TopTab[];
+  /** 当前大功能：tab 栏只显示该功能的 tab（chat/local/kb/gallery），不跨功能混排。 */
+  activeNav: 'chat' | 'local' | 'kb' | 'gallery' | 'fbot';
   activeId: string | null;
   onActivate: (tab: TopTab) => void;
   onClose: (tab: TopTab) => void;
@@ -28,15 +30,17 @@ interface Props {
 
 interface MenuState { x: number; y: number; tab: TopTab }
 
-export const TopTabs: React.FC<Props> = React.memo(({ la, tabs, activeId, onActivate, onClose, onTogglePin, pinnedLocalCwds, onLocalTogglePin }) => {
+export const TopTabs: React.FC<Props> = React.memo(({ la, tabs, activeNav, activeId, onActivate, onClose, onTogglePin, pinnedLocalCwds, onLocalTogglePin }) => {
   const { t: tr } = useI18n();
-  const nonLocal = tabs.filter((t) => t.kind !== 'local');
+  // tab 同质化：切到某大功能后，顶栏只显示该功能的 tab（不跨功能混排）。
+  //   chat→chat chip · local→内联 CLI tab · kb→kb chip · gallery→gallery chip · fbot→无 tab。
+  const nonLocal = tabs.filter((t) => t.kind !== 'local' && t.kind === activeNav);
   // Pinned tabs live in the left rail (see ClientShell .v2-rail-pins). Show the
   // ACTIVE pinned one here too — as a dimmed/gray tab — so an opened pin still
   // gets a tab on the right; it drops back out of the bar when you switch away.
   const visible = nonLocal.filter((t) => !t.pinned || t.id === activeId);
-  // CLI tabs 全被固定走光后，内联段就没东西可显 —— 用于决定是否还渲染该段。
-  const hasLocal = la.tabs.some((t) => !pinnedLocalCwds?.has(t.cwd));
+  // 仅 code(local) 视图渲染内联 CLI tab 段；其余功能不显示 CLI tab。
+  const hasLocal = activeNav === 'local' && la.tabs.some((t) => !pinnedLocalCwds?.has(t.cwd));
   const [menu, setMenu] = useState<MenuState | null>(null);
   // 点击 local tab 时同时通知壳层切换 activeNav 到 'local'（不然主区还停在 chat/gallery 上）。
   const onLocalActivate = (cwd: string) => {

@@ -55,7 +55,7 @@ import { getLLMConfigs, type LLMConfigFromDB } from '../services/llmApi';
 import { updateSessionLLMConfig, getSessionMessages } from '../services/chat';
 import { updateRoleProfile } from '../services/roleApi';
 import { mcpApi, type MCPServer } from '../services/integrationsApi';
-import { LocalAgentTree, LocalAgentConversation, ForeignPaneContext, ProviderSwitcher } from './LocalAgentView';
+import { LocalAgentTree, LocalAgentConversation, ForeignPaneContext, ProviderRail } from './LocalAgentView';
 import { useLocalAgent, realDir } from './useLocalAgent';
 import { CodeEditorLayer } from './CodeEditorLayer';
 import { InspectorColumn } from './InspectorColumn';
@@ -267,7 +267,7 @@ const ShellInner: React.FC = () => {
   //   关键性能点：la.tabs 的引用在每个 stream chunk 都会变（liveMsgs 增长），
   //   但「这条 tab 在 topbar 上长什么样」只受 cwd / title / groupId / 项目名 影响。
   //   用结构指纹作为 dep，effect 只在真正结构变化时跑一次。
-  const localTabsFingerprint = la.tabs.map((t) => `${t.cwd}|${t.title}|${t.groupId ?? ''}`).join('§');
+  const localTabsFingerprint = la.tabs.map((t) => `${t.cwd}|${t.title}|${t.groupId ?? ''}|${t.provider}`).join('§');
   const projectsFingerprint = la.projects.map((p) => `${p.path}|${p.name ?? ''}`).join('§');
   useEffect(() => {
     la.tabs.forEach((t) => {
@@ -278,7 +278,7 @@ const ShellInner: React.FC = () => {
         kind: 'local',
         label,
         cwd: t.cwd,
-        provider: la.provider,
+        provider: t.provider,
       });
     });
     const live = new Set(la.tabs.map((t) => localTabId(t.cwd)));
@@ -286,7 +286,7 @@ const ShellInner: React.FC = () => {
       .filter((tt) => tt.kind === 'local' && !live.has(tt.id))
       .forEach((tt) => { topTabs.remove(tt.id); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [localTabsFingerprint, projectsFingerprint, la.provider]);
+  }, [localTabsFingerprint, projectsFingerprint]);
 
   // ----- attn / unread 信号：与上面同理，只看会触发信号变化的字段。
   //   messages.length 仅在 stream 落库时变化（liveMsgs 不算），所以指纹包含 length
@@ -503,14 +503,6 @@ const ShellInner: React.FC = () => {
   const setLocalAgentProvider = useCallback((id: ProviderId) => {
     setSettings((p) => (p.localAgentProvider === id ? p : { ...p, localAgentProvider: id }));
   }, []);
-  // composer 里选 provider = 「在这目录下用新 provider 开新 session」：
-  // ① 立刻用目标 provider 开一条新 lane（newSession 显式带 provider，warm 即用它，
-  //    不依赖全局 provider 落定的时序）；② 同步把全局 provider 切过去，让卡头/tab/
-  //    选择框 UI 一致反映当前 provider。
-  const switchProviderNewSession = useCallback((cwd: string, id: ProviderId) => {
-    la.newSession(cwd, undefined, id);
-    setLocalAgentProvider(id);
-  }, [la, setLocalAgentProvider]);
   const handleLogout = useCallback(() => {
     api.clearToken();
     window.location.reload();
@@ -1260,6 +1252,7 @@ const ShellInner: React.FC = () => {
         <TopTabs
           la={la}
           tabs={authed ? topTabs.tabs : topTabs.tabs.filter((t) => t.kind === 'local')}
+          activeNav={activeNav}
           activeId={topTabs.activeId}
           onActivate={activateTopTab}
           onClose={closeTopTab}
@@ -1267,27 +1260,25 @@ const ShellInner: React.FC = () => {
           pinnedLocalCwds={pinnedLocalCwds}
           onLocalTogglePin={(cwd) => topTabs.togglePin(localTabId(cwd))}
         />
-        {/* code 视图右上角：wiki 笔记 + 「代码改动」两个右侧检视列开关（同区、互斥）。 */}
-        {activeNav === 'local' && (
-          <button
-            className={`v2-pin v2-titlebar-collapse${wikiOpen ? ' active' : ''}`}
-            title={tr('local.wiki.openTitle')}
-            aria-label={tr('local.wiki.pill')}
-            onClick={() => window.dispatchEvent(new CustomEvent('chaya:wiki-toggle'))}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="17" height="17" aria-hidden><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>
-          </button>
-        )}
-        {activeNav === 'local' && (
-          <button
-            className={`v2-pin v2-titlebar-collapse${editorOpen ? ' active' : ''}`}
-            title={tr('local.editor.openTitle')}
-            aria-label={tr('local.editor.title')}
-            onClick={() => setEditorOpen((o) => !o)}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="17" height="17" aria-hidden><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>
-          </button>
-        )}
+        {/* code 视图的 wiki 笔记 / 代码改动开关已移到右侧 provider 书签栏底部（反向书签，见 ProviderRail footer）。 */}
+        {/* 全局运行指示：任何视图都常驻显示「有几个本地 CLI 任务在跑」，点击跳回 code 并聚焦一个在跑的会话。
+            解决「切到 chat/wiki 后看不到 code 里还在跑」。 */}
+        {isLocalAgentAvailable() && (() => {
+          const rbp = la.runningByProvider || {};
+          const total = Object.values(rbp).reduce((a, b) => a + (b || 0), 0);
+          if (!total) return null;
+          return (
+            <button
+              className="v2-run-pill"
+              title={tr('local.run.pill', { n: total })}
+              aria-label={tr('local.run.pill', { n: total })}
+              onClick={() => { const r = la.tabs.find((t) => t.running); enterLocal(); if (r) la.setActiveTab(r.cwd); }}
+            >
+              <span className="v2-run-dot" aria-hidden />
+              <span className="v2-run-n">{total}</span>
+            </button>
+          );
+        })()}
         {/* 知识库下侧栏本就收起，此按钮改为「展开/收起 KB 停靠列表栏」（复用同一个右上角按钮）。 */}
         {activeNav === 'kb' ? (
           <button
@@ -1378,12 +1369,6 @@ const ShellInner: React.FC = () => {
                   <button className="v2-side-action" onClick={() => { void la.addProject(); }}>
                     <IconPlus /><span>{tr('shell.cliNewProject')}</span>
                   </button>
-                  <ProviderSwitcher
-                    compact
-                    provider={(settings.localAgentProvider ?? 'claude') as ProviderId}
-                    providers={la.providers}
-                    onPick={(id) => { if (la.activeCwd) switchProviderNewSession(la.activeCwd, id); else setLocalAgentProvider(id); }}
-                  />
                 </div>
                 <LocalAgentTree la={la} onEnter={enterLocal} />
               </>
@@ -1428,6 +1413,45 @@ const ShellInner: React.FC = () => {
             </button>
           )}
         </aside>
+
+        {/* ===== provider 书签栏：依附主卡左上角（侧栏与主卡之间），仅 code/local 视图。
+             工作目录多 provider 共享，切书签 = 在当前活动目录换执行器（开新 session）。 ===== */}
+        {activeNav === 'local' && isLocalAgentAvailable() && (
+          <ProviderRail
+            provider={la.activeProvider}
+            providers={la.providers}
+            runningByProvider={la.runningByProvider}
+            attnByProvider={la.attnByProvider}
+            doneByProvider={la.doneByProvider}
+            onPick={(id) => { setLocalAgentProvider(id); la.switchActiveProvider(id); }}
+            footer={<>
+              <button
+                type="button"
+                className={`v2-prov-bm insp${wikiOpen ? ' active' : ''}`}
+                title={tr('local.wiki.openTitle')}
+                aria-label={tr('local.wiki.pill')}
+                aria-pressed={wikiOpen}
+                onClick={() => window.dispatchEvent(new CustomEvent('chaya:wiki-toggle'))}
+              >
+                <span className="v2-prov-bm-glyph">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="16" height="16" aria-hidden><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>
+                </span>
+              </button>
+              <button
+                type="button"
+                className={`v2-prov-bm insp${editorOpen ? ' active' : ''}`}
+                title={tr('local.editor.openTitle')}
+                aria-label={tr('local.editor.title')}
+                aria-pressed={editorOpen}
+                onClick={() => setEditorOpen((o) => !o)}
+              >
+                <span className="v2-prov-bm-glyph">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="16" height="16" aria-hidden><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>
+                </span>
+              </button>
+            </>}
+          />
+        )}
 
         {/* ===== main ===== 顶栏(tab/导航)已上移到全宽 .v2-titlebar；主卡只剩内容。 */}
         <main className="v2-main">

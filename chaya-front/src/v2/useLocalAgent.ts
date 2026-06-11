@@ -25,6 +25,9 @@ import { useI18n } from '../i18n';
 
 export type SessionsState = Record<string, SessionSummary[] | 'loading'>;
 
+const SESSION_PINS_KEY = 'chaya.localAgent.pinnedSessions';
+const SESSION_TITLES_KEY = 'chaya.localAgent.sessionTitles';
+
 /* ------------------------------------------------------------------ *
  * livePreview 外部 store —— 打字机每帧更新的 live 文本【不进 React 全局 state】。
  * 之前它挂在 Tab 上：pump 每帧 patchTab → setTabs 换引用 → 挂在 ClientShell 根部的
@@ -68,6 +71,7 @@ export interface Tab {
   color: string;           // 偏好色（自动分配）：用于窗格头部/头像/边框
   groupId?: string | null; // 所属标签分组（类 Chrome 标签组），null = 未分组
   permMode: PermMode;      // 每个会话独立的权限模式（切一个不影响其他）
+  provider: ProviderId;    // 每个会话自带的执行器（不同 provider 可并行跑、各自计数）
   model?: string;          // 每个会话选用的模型（空 = provider 默认）
   reasoning?: string;      // Codex 思考强度（空 = Codex 默认）
   skill?: string;          // 选中的 Chaya 技能名（composer pill；发送时用它包裹 draft 后展开）
@@ -90,8 +94,8 @@ export const TAB_COLORS = ['#c2562f', '#4f46e5', '#3a8a6e', '#b05a7a', '#b8862f'
 let _colorSeq = 0;
 function nextColor(): string { return TAB_COLORS[_colorSeq++ % TAB_COLORS.length]; }
 
-function emptyTab(cwd: string, sessionId: string | null, title: string, color?: string, permMode: PermMode = 'default'): Tab {
-  return { cwd, sessionId, title, color: color || nextColor(), messages: [], liveMsgs: [], status: '', running: false, loading: false, draft: '', permMode };
+function emptyTab(cwd: string, sessionId: string | null, title: string, color?: string, permMode: PermMode = 'default', provider: ProviderId = 'claude'): Tab {
+  return { cwd, sessionId, title, color: color || nextColor(), messages: [], liveMsgs: [], status: '', running: false, loading: false, draft: '', permMode, provider };
 }
 
 function normalizePermissionShortcut(text: string): 'allow' | 'deny' | null {
@@ -263,6 +267,35 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   // 同步 ref：回调里读「某目录是否已加载」而不进 deps（避免回环）。
   const sessionsByPathRef = useRef(sessionsByPath);
   sessionsByPathRef.current = sessionsByPath;
+  // 稳定排序：记住每个目录的会话显示顺序(sessionId[])，重新拉取时保持原序、新会话置顶 —— 用某会话
+  // 不会让它跳位（修「点击/使用后重排序」）。
+  const sessionOrderRef = useRef<Record<string, string[]>>({});
+  // 会话 pin：sessionId → pinnedAt(ms)。pin 的排在工作目录顶部，后 pin 的更靠上。纯本地持久化。
+  const [pinnedSessions, setPinnedSessions] = useState<Record<string, number>>(() => {
+    try { return JSON.parse(localStorage.getItem(SESSION_PINS_KEY) || '{}') || {}; } catch { return {}; }
+  });
+  const toggleSessionPin = useCallback((sid: string) => {
+    setPinnedSessions((prev) => {
+      const next = { ...prev };
+      if (next[sid]) delete next[sid]; else next[sid] = Date.now();
+      try { localStorage.setItem(SESSION_PINS_KEY, JSON.stringify(next)); } catch { /* quota */ }
+      return next;
+    });
+  }, []);
+  // 会话自定义显示名（覆盖后端自动标题）：sessionId → title。空 = 清除覆盖、回到自动标题。纯本地持久化。
+  const [sessionTitles, setSessionTitles] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem(SESSION_TITLES_KEY) || '{}') || {}; } catch { return {}; }
+  });
+  const renameSession = useCallback((sid: string, title: string) => {
+    if (!sid) return;
+    setSessionTitles((prev) => {
+      const next = { ...prev };
+      const t = (title || '').trim();
+      if (t) next[sid] = t; else delete next[sid];
+      try { localStorage.setItem(SESSION_TITLES_KEY, JSON.stringify(next)); } catch { /* quota */ }
+      return next;
+    });
+  }, []);
 
   // 启动即从持久化恢复 —— 放进 useState 初始值，首帧就正确。
   // 不再用 effect 恢复：那会与 reconciliation 副作用（prune/auto-group/layout-cleanup）
@@ -273,10 +306,14 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     const modelMem = loadModelBySession();
     const reasoningMem = loadReasoningBySession();
     const mcpMem = loadMcpBySession();
-    // 恢复的标签属于当前 provider：把不属于该 provider 档位集的权限模式归一到该 provider 的默认
-    //（如 cursor 不认 default/acceptEdits → 落到 force；避免显示/行为串档）。
-    const okPerm = permModesFor(provider);
-    const t: Tab[] = s.map((x) => ({ ...emptyTab(x.cwd, x.sessionId, x.title), groupId: (x.groupId && gidSet.has(x.groupId)) ? x.groupId : null, permMode: (x.permMode && okPerm.includes(x.permMode)) ? x.permMode : defaultPermMode(provider), model: (x.sessionId && modelMem[x.sessionId]) || undefined, reasoning: (x.sessionId && reasoningMem[x.sessionId]) || undefined, mcp: (x.sessionId && mcpMem[x.sessionId]) || undefined, pendingLoad: !!x.sessionId }));
+    // 恢复的标签各自带 provider（老数据无 provider 字段 → 回退到当前默认 provider）：
+    // 把不属于该 tab provider 档位集的权限模式归一到其默认（如 cursor 不认 default/acceptEdits
+    // → 落到 force；避免显示/行为串档）。
+    const t: Tab[] = s.map((x) => {
+      const rp = (x.provider as ProviderId) || provider;
+      const okPerm = permModesFor(rp);
+      return { ...emptyTab(x.cwd, x.sessionId, x.title, undefined, defaultPermMode(rp), rp), groupId: (x.groupId && gidSet.has(x.groupId)) ? x.groupId : null, permMode: (x.permMode && okPerm.includes(x.permMode)) ? x.permMode : defaultPermMode(rp), provider: rp, model: (x.sessionId && modelMem[x.sessionId]) || undefined, reasoning: (x.sessionId && reasoningMem[x.sessionId]) || undefined, mcp: (x.sessionId && mcpMem[x.sessionId]) || undefined, pendingLoad: !!x.sessionId };
+    });
     const valid = new Set(t.map((x) => x.cwd));
     let lay: LayoutNode | null = null;
     if (l) { const pruned = pruneLayout(l as LayoutNode, valid); if (pruned && pruned.kind === 'split') lay = pruned; }
@@ -311,9 +348,47 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     return cursorKeyRef.current;
   }, []);
 
-  const current = providers.find((p) => p.id === provider);
   const activeTab = tabs.find((t) => t.cwd === activeCwd) || null;
+  // 上下文 provider：跟随当前激活标签自带的执行器（无标签时回退到设置默认）。
+  // 全局 UI（模型/斜杠/会话树/就绪态）都看 activeProvider；per-tab 操作各看 tab.provider。
+  const activeProvider: ProviderId = activeTab?.provider ?? provider;
+  const current = providers.find((p) => p.id === activeProvider);
   const activeProject = projects.find((p) => p.path === realDir(activeCwd || '')) || null;
+  // 每个 provider 当前有几条会话在跑（rail 各自计数；架构上多 provider 可并行）。
+  const runningByProvider = useMemo(() => {
+    const m: Partial<Record<ProviderId, number>> = {};
+    for (const t of tabs) if (t.running) m[t.provider] = (m[t.provider] || 0) + 1;
+    return m;
+  }, [tabs]);
+  // 每个 provider 有几条会话在等用户介入（权限审批 / AskUserQuestion）→ rail 跳跃提示。
+  const attnByProvider = useMemo(() => {
+    const m: Partial<Record<ProviderId, number>> = {};
+    for (const t of tabs) if (t.perm || t.question) m[t.provider] = (m[t.provider] || 0) + 1;
+    return m;
+  }, [tabs]);
+  // 「完成」标：某 provider 的运行数从 >0 落到 0 且当前不在该 provider → 书签显打勾，访问即清。
+  const [doneByProvider, setDoneByProvider] = useState<Partial<Record<ProviderId, boolean>>>({});
+  const prevRunRef = useRef<Partial<Record<ProviderId, number>>>({});
+  useEffect(() => {
+    const prev = prevRunRef.current;
+    const keys = new Set<string>([...Object.keys(prev), ...Object.keys(runningByProvider)]);
+    setDoneByProvider((d) => {
+      let next = d;
+      for (const k of keys) {
+        const p = k as ProviderId;
+        const was = prev[p] ?? 0;
+        const now = runningByProvider[p] ?? 0;
+        if (was > 0 && now === 0 && p !== activeProvider && !next[p]) next = { ...next, [p]: true };
+        else if (now > 0 && next[p]) next = { ...next, [p]: false };   // 又开始跑 → 清完成标
+      }
+      return next;
+    });
+    prevRunRef.current = { ...runningByProvider };
+  }, [runningByProvider, activeProvider]);
+  // 访问某 provider（成为 activeProvider）即清它的「完成」标。
+  useEffect(() => {
+    setDoneByProvider((d) => (d[activeProvider] ? { ...d, [activeProvider]: false } : d));
+  }, [activeProvider]);
 
   /** 按 cwd 局部更新某标签。 */
   const patchTab = useCallback((cwd: string, patch: Partial<Tab> | ((t: Tab) => Partial<Tab>)) => {
@@ -375,6 +450,23 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (rafRef.current == null) { lastFrameRef.current = 0; rafRef.current = requestAnimationFrame(pump); }
   }, [pump]);
 
+  /* ---- 重连对账：进入 / 渲染进程重载后，向主进程查「仍在跑回合的会话(busyKeys)」，
+   *      把对应标签的 running 点亮回来。渲染重载会丢内存里的 running，但后端进程还活着，
+   *      busyKeys 是权威。只点亮、不强制熄灭（熄灭交给 result/session_closed 事件）。 ---- */
+  useEffect(() => {
+    if (!active) return;
+    let alive = true;
+    void localAgent.busyKeys().then((keys) => {
+      if (!alive || !Array.isArray(keys) || !keys.length) return;
+      const busy = new Set(keys);
+      setTabs((ts) => {
+        if (!ts.some((t) => busy.has(t.cwd) && !t.running)) return ts;
+        return ts.map((t) => (busy.has(t.cwd) && !t.running ? { ...t, running: true, status: t.status || tr('local.status.processing') } : t));
+      });
+    });
+    return () => { alive = false; };
+  }, [active, tr]);
+
   const feedSmooth = useCallback((cwd: string, delta: string) => {
     let sm = smoothRef.current.get(cwd);
     if (!sm) { sm = { raw: '', shown: 0, disp: 0, rate: 0, evalAt: 0, finalize: null }; smoothRef.current.set(cwd, sm); }
@@ -398,7 +490,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (!active || detectedRef.current) return;
     detectedRef.current = true;
     setDetecting(true);
-    localAgent.detect(provider).then((cur) => {
+    localAgent.detect(activeProvider).then((cur) => {
       setProviders((prev) => mergeProviders(prev, cur));
       setDetecting(false);
       const w = window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void };
@@ -412,14 +504,14 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   useEffect(() => {
     if (!active) return;
     let alive = true;
-    localAgent.listCommands(provider, realDir(activeCwd || '')).then((c) => { if (alive) setCommands(c); });
+    localAgent.listCommands(activeProvider, realDir(activeCwd || '')).then((c) => { if (alive) setCommands(c); });
     return () => { alive = false; };
-  }, [active, activeCwd, provider]);
+  }, [active, activeCwd, activeProvider]);
 
   /* ---- cursor：进入即预拉 API Key（让随后的 warm/send 同步拿到，少一跳） ---- */
   useEffect(() => {
-    if (active && provider === 'cursor') void fetchCursorKey();
-  }, [active, provider, fetchCursorKey]);
+    if (active && activeProvider === 'cursor') void fetchCursorKey();
+  }, [active, activeProvider, fetchCursorKey]);
 
   /* ---- 模型列表：进入 / 切 provider 即主动探测（不必先发消息）。探测较慢（claude 起一次性
    *      SDK query；copilot/gemini 起 ACP 连接），期间给按钮 loading 态。会话启动后的
@@ -429,50 +521,46 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (!current?.live) return Promise.resolve();
     const tok = ++modelsReqRef.current;
     setModelsLoading(true);
-    const apiKey = provider === 'cursor' ? cursorKeyRef.current : undefined;
-    return localAgent.listModels(provider, apiKey)
+    const apiKey = activeProvider === 'cursor' ? cursorKeyRef.current : undefined;
+    return localAgent.listModels(activeProvider, apiKey)
       .then((ms) => { if (tok === modelsReqRef.current && Array.isArray(ms) && ms.length) setModelOptions(ms); })
       .finally(() => { if (tok === modelsReqRef.current) setModelsLoading(false); });
-  }, [provider, current?.live]);
+  }, [activeProvider, current?.live]);
   useEffect(() => {
     if (!active || !current?.live) return;
     setModelOptions([]);
     void refreshModels();
   }, [active, refreshModels]);
 
-  /* ---- provider 切换：会话历史按 provider 区分，整体重置（项目目录跨 provider 保留） ---- */
-  const prevProviderRef = useRef(provider);
+  /* ---- 上下文 provider 切换（切到不同执行器的标签 / 改默认）：仅刷新「会话浏览树」
+   *      使其显示新 provider 的可续接会话；绝不关已开标签的常驻进程、不清空标签 —— 不同
+   *      provider 的会话各自并行跑、各自计数（多 provider 并发的关键）。 ---- */
+  const prevProviderRef = useRef(activeProvider);
   useEffect(() => {
-    if (prevProviderRef.current === provider) return;
-    prevProviderRef.current = provider;
+    if (prevProviderRef.current === activeProvider) return;
+    prevProviderRef.current = activeProvider;
     cursorKeyRef.current = null;   // 换 provider → 失效缓存的 cursor key（再进 cursor 重拉）
-    smoothRef.current.clear();
-    if (rafRef.current != null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-    for (const t of tabs) void localAgent.sessionClose(realDir(t.cwd), paneLane(t.cwd));   // 关掉所有常驻进程
-    for (const [d, l] of specLaneRef.current) void localAgent.sessionClose(d, l);          // 关掉预热的待衍生会话
+    // 预热的「待衍生」会话是按旧 provider 起的，关掉它们（不影响已开的真实标签）。
+    for (const [d, l] of specLaneRef.current) void localAgent.sessionClose(d, l);
     specLaneRef.current.clear();
+    // 清空会话浏览树 → 下方 active-load 副作用按新 activeProvider 重新懒加载当前项目目录。
+    // 项目目录 + 展开记忆跨 provider 保留；已开标签 / 分屏布局保留不动。
     setSessionsByPath({});
-    // 注意：不清 expanded —— 项目目录跨 provider 保留，展开记忆也应保留。会话列表清空后
-    // 走「懒加载」：下方 active-load 副作用只按新 provider 拉「当前激活项目」一个目录，
-    // 其它展开项目点到了再拉（不再一把把所有展开目录都重拉）。
-    setTabs([]);
-    setActiveCwd(null);
-    setLayout(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider]);
+  }, [activeProvider]);
 
   // 每个会话独立切档：只改这个标签的 permMode，不动其他会话。按 provider 的档位集循环
   // （claude: default/plan/acceptEdits/bypass；cursor: plan/ask/force）。
   const cyclePermMode = useCallback((cwd: string) => {
-    const list = permModesFor(provider);
     setTabs((ts) => ts.map((t) => {
       if (t.cwd !== cwd) return t;
+      const list = permModesFor(t.provider);   // 按该标签自带 provider 的档位集循环
       const i = list.indexOf(t.permMode);
-      const next = i < 0 ? defaultPermMode(provider) : list[(i + 1) % list.length];   // 当前档不属于该 provider → 回默认档
+      const next = i < 0 ? defaultPermMode(t.provider) : list[(i + 1) % list.length];   // 当前档不属于该 provider → 回默认档
       void localAgent.setPermMode(realDir(cwd), next, paneLane(cwd));   // 进行中的常驻会话即时切档
       return { ...t, permMode: next };
     }));
-  }, [provider]);
+  }, []);
 
   // 选模型（/model 等价）：实时切——常驻会话即刻 setModel 生效；它注入的「Set model to …」
   // 回显被渲染层过滤掉，不进对话。空 = provider 默认。按会话记忆。
@@ -516,16 +604,28 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   const loadSessionsFor = useCallback(async (path: string) => {
     const dir = realDir(path);
     setSessionsByPath((m) => ({ ...m, [dir]: 'loading' }));
-    let ss = await localAgent.listSessions(provider, dir);
-    if (provider === 'codex') {
+    let ss = await localAgent.listSessions(activeProvider, dir);
+    if (activeProvider === 'codex') {
       const imported = loadCodexImportedSessions()[dir];
       if (imported && imported.length) {
         const allow = new Set(imported);
         ss = ss.filter((s) => allow.has(s.sessionId));
       }
     }
+    // 稳定排序：保留上次显示顺序，仅把「新出现」的会话置顶（其余不动）。后端按 updatedAt 倒序返回，
+    // 直接用会让「刚用过的会话跳到顶」—— 这里固定下来，避免点击/使用导致重排序。
+    const ids = ss.map((s) => s.sessionId);
+    const prev = sessionOrderRef.current[dir] || [];
+    const prevSet = new Set(prev);
+    const idSet = new Set(ids);
+    const fresh = ids.filter((id) => !prevSet.has(id));        // 新会话 → 顶部
+    const kept = prev.filter((id) => idSet.has(id));           // 旧会话 → 保持原序
+    const order = [...fresh, ...kept];
+    sessionOrderRef.current[dir] = order;
+    const pos = new Map(order.map((id, idx) => [id, idx]));
+    ss = [...ss].sort((a, b) => (pos.get(a.sessionId) ?? 0) - (pos.get(b.sessionId) ?? 0));
     setSessionsByPath((m) => ({ ...m, [dir]: ss }));
-  }, [provider, codexImportsTick]);
+  }, [activeProvider, codexImportsTick]);
 
   const toggleProject = useCallback((p: LocalProject) => {
     const dir = realDir(p.path);
@@ -550,7 +650,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       if (sessionsByPath[dir] === undefined) void loadSessionsFor(p.path);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, provider, projects, sessionsByPath, codexImportsTick, loadSessionsFor]);
+  }, [active, activeProvider, projects, sessionsByPath, codexImportsTick, loadSessionsFor]);
 
   const expandProject = useCallback((cwd: string) => {
     const p = projects.find((x) => x.path === realDir(cwd));
@@ -589,22 +689,25 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   /* 新增一个会话窗格：紧挨触发它的标签插入、继承其分组；不 sessionClose 旧会话
    * （这是同项目多会话并行的关键——旧实现是替换+关进程，只能一个）。
    * paneKey 已存在（裸 dir 首会话复用）→ 替换该标签并保留偏好色。 */
-  const addPaneTab = useCallback((paneKey: string, sessionId: string | null, title: string, sourceCwd?: string): void => {
-    const defPerm = defaultPermMode(provider);
+  const addPaneTab = useCallback((paneKey: string, sessionId: string | null, title: string, sourceCwd?: string, prov: ProviderId = provider): void => {
+    const defPerm = defaultPermMode(prov);
     dropSmooth(paneKey);
     pendingByCwd.current.delete(paneKey);
     setTabs((ts) => {
       const i = ts.findIndex((t) => t.cwd === paneKey);
       if (i >= 0) {
         const next = [...ts];
-        next[i] = emptyTab(paneKey, sessionId, title, ts[i].color, defPerm);
+        next[i] = emptyTab(paneKey, sessionId, title, ts[i].color, defPerm, prov);
         return next;
       }
       const src = sourceCwd ?? activeCwd ?? undefined;
       const srcIdx = src ? ts.findIndex((t) => t.cwd === src) : -1;
       const srcTab = srcIdx >= 0 ? ts[srcIdx] : undefined;
-      const fresh: Tab = { ...emptyTab(paneKey, sessionId, title, undefined, defPerm), groupId: srcTab?.groupId ?? null };
-      const arr = srcIdx >= 0 ? [...ts.slice(0, srcIdx + 1), fresh, ...ts.slice(srcIdx + 1)] : [...ts, fresh];
+      const fresh: Tab = { ...emptyTab(paneKey, sessionId, title, undefined, defPerm, prov), groupId: srcTab?.groupId ?? null };
+      // 打开/新建会话 → 标签置最左（未分组）；分组成员仍紧挨源标签插入以正确并入分组。
+      const arr = fresh.groupId
+        ? (srcIdx >= 0 ? [...ts.slice(0, srcIdx + 1), fresh, ...ts.slice(srcIdx + 1)] : [...ts, fresh])
+        : [fresh, ...ts];
       return clusterTabs(arr);
     });
     setActiveCwd(paneKey);
@@ -643,11 +746,23 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   const openSession = useCallback(async (projPath: string, sid: string, title: string, sourceCwd?: string) => {
     const dir = realDir(projPath);
     const existing = tabs.find((t) => realDir(t.cwd) === dir && t.sessionId === sid);
-    if (existing) { setActiveCwd(existing.cwd); return; }
+    if (existing) {
+      // 已开 → 聚焦它，并把它的标签挪到最左（未分组时）。
+      setActiveCwd(existing.cwd);
+      setTabs((ts) => {
+        const i = ts.findIndex((t) => t.cwd === existing.cwd);
+        if (i <= 0 || ts[i].groupId) return ts;
+        return clusterTabs([ts[i], ...ts.filter((t) => t.cwd !== existing.cwd)]);
+      });
+      return;
+    }
+    // 从浏览树打开的会话属于「当前浏览的 provider」（activeProvider）。
+    const prov = activeProvider;
+    const det = providers.find((p) => p.id === prov);
     const paneKey = paneKeyForDir(dir);
-    addPaneTab(paneKey, sid, title, sourceCwd);
+    addPaneTab(paneKey, sid, title, sourceCwd, prov);
     const remembered = permMemRef.current[sid];
-    const pm = (remembered && permModesFor(provider).includes(remembered)) ? remembered : defaultPermMode(provider);
+    const pm = (remembered && permModesFor(prov).includes(remembered)) ? remembered : defaultPermMode(prov);
     const md = modelMemRef.current[sid] || undefined;
     const rs = reasoningMemRef.current[sid] || undefined;
     const mc = mcpMemRef.current[sid] || undefined;
@@ -655,10 +770,10 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     patchTab(paneKey, { loading: true, permMode: pm, model: md, reasoning: rs, mcp: mc });
     // 预热：立刻起常驻进程（含 resume 读盘）；冷启在「载入会话…」期间付掉，发送时已暖。
     // cursor 无常驻进程，warm 只登记状态 + 拉模型；apiKey 注入（已预拉则同步可得）。
-    if (current?.live) void localAgent.warm({ provider, cwd: dir, lane: paneLane(paneKey), sessionId: sid, permMode: pm, model: md, reasoning: rs, mcp: mc, apiKey: provider === 'cursor' ? cursorKeyRef.current : undefined });
-    const { messages: msgs } = await localAgent.readSession(provider, dir, sid);
+    if (det?.live) void localAgent.warm({ provider: prov, cwd: dir, lane: paneLane(paneKey), sessionId: sid, permMode: pm, model: md, reasoning: rs, mcp: mc, apiKey: prov === 'cursor' ? cursorKeyRef.current : undefined });
+    const { messages: msgs } = await localAgent.readSession(prov, dir, sid);
     setHistory(paneKey, sid, msgs);
-  }, [provider, current, tabs, paneKeyForDir, addPaneTab, patchTab, setHistory]);
+  }, [activeProvider, providers, tabs, paneKeyForDir, addPaneTab, patchTab, setHistory]);
 
   // 新建会话：同样开成独立新窗格，紧挨触发它的标签。
   // providerOverride：从 composer 切 provider 时显式带入目标 provider —— 直接用它预热，
@@ -667,24 +782,94 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     const prov = providerOverride || provider;
     const dir = realDir(projPath);
     const paneKey = paneKeyForDir(dir);
-    addPaneTab(paneKey, null, tr('local.newSession'), sourceCwd);
+    addPaneTab(paneKey, null, tr('local.newSession'), sourceCwd, prov);
     // 预热新会话：先把进程起好，首条消息即暖。warm/send 本就按 call 传 provider，
     // 所以新 lane 可立刻用目标 provider 起，无需等全局 provider 落定。
     const det = providers.find((p) => p.id === prov);
     if (det?.live) void localAgent.warm({ provider: prov, cwd: dir, lane: paneLane(paneKey), sessionId: null, permMode: defaultPermMode(prov), apiKey: prov === 'cursor' ? cursorKeyRef.current : undefined });
   }, [provider, providers, paneKeyForDir, addPaneTab, tr]);
 
+  // 记住每个 provider 上次活跃的 session(cwd)：切回该 provider 时自动恢复那个会话。
+  const lastCwdByProvider = useRef<Partial<Record<ProviderId, string>>>({});
+  useEffect(() => {
+    if (!activeCwd) return;
+    const t = tabs.find((x) => x.cwd === activeCwd);
+    if (t) lastCwdByProvider.current[t.provider] = activeCwd;
+  }, [activeCwd, tabs]);
+
+  /* 书签栏切执行器：
+   *  ① 目标 provider 已有打开的 session → 恢复它上次活跃的那个（Feature: 切回自动进入）。
+   *  ② 该 provider 还没有 session：当前 pane 是空会话 → 原地换执行器（复用该标签，不留孤儿
+   *     空标签）；否则在当前项目目录开一个新会话。
+   *  tab 栏本就按 activeProvider 过滤，所以切 provider = 换一组标签 + 聚焦其上次会话，不再刷屏。 */
+  const switchActiveProvider = useCallback((id: ProviderId) => {
+    const cwd = activeCwd;
+    const tab = cwd ? tabs.find((t) => t.cwd === cwd) : null;
+    if (tab && tab.provider === id) return;
+    // ① 恢复该 provider 上次活跃 session（记忆失效则退回该 provider 任意一个标签）。
+    const remembered = lastCwdByProvider.current[id];
+    const target = (remembered && tabs.some((t) => t.cwd === remembered && t.provider === id))
+      ? remembered
+      : tabs.find((t) => t.provider === id)?.cwd;
+    if (target) { setActiveCwd(target); return; }
+    if (!cwd || !tab) return;   // 无活动 pane 且该 provider 无 session → 仅设默认(在 ClientShell)
+    // ② 该 provider 无 session：空 pane 原地换；否则新开。
+    const empty = !tab.sessionId && tab.messages.length === 0 && tab.liveMsgs.length === 0 && !tab.running;
+    if (empty) {
+      void localAgent.sessionClose(realDir(cwd), paneLane(cwd));   // 收掉该 pane 旧 provider 的预热/常驻进程
+      patchTab(cwd, { provider: id, permMode: defaultPermMode(id), model: undefined, reasoning: undefined, status: '' });
+      lastCwdByProvider.current[id] = cwd;
+      const det = providers.find((p) => p.id === id);
+      if (det?.live) void localAgent.warm({ provider: id, cwd: realDir(cwd), lane: paneLane(cwd), sessionId: null, permMode: defaultPermMode(id), apiKey: id === 'cursor' ? cursorKeyRef.current : undefined });
+      return;
+    }
+    newSession(cwd, undefined, id);
+  }, [activeCwd, tabs, patchTab, providers, newSession]);
+
   const closeTab = useCallback((cwd: string) => {
     dropSmooth(cwd);
     histRef.current.delete(cwd);
-    void localAgent.sessionClose(realDir(cwd), paneLane(cwd));   // 关标签 → 回收常驻进程
+    steeredRef.current.delete(cwd);
+    void localAgent.sessionClose(realDir(cwd), paneLane(cwd));   // 关标签 → 回收常驻进程（运行中=打断）
     pendingByCwd.current.delete(cwd);
     setTabs((ts) => {
+      const closing = ts.find((t) => t.cwd === cwd);
       const next = ts.filter((t) => t.cwd !== cwd);
-      setActiveCwd((c) => (c === cwd ? (next.length ? next[next.length - 1].cwd : null) : c));
+      setActiveCwd((c) => {
+        if (c !== cwd) return c;
+        // 优先落到「同 provider 的相邻标签」，避免关一个就跳到别的 provider，把整个视图切走。
+        const same = next.filter((t) => t.provider === closing?.provider);
+        return same.length ? same[same.length - 1].cwd : (next.length ? next[next.length - 1].cwd : null);
+      });
       return next;
     });
   }, [dropSmooth]);
+
+  /* 右键「关闭其他」：关掉同 provider 的其余标签（tab 栏本就按 provider 过滤，「其他」=可见的同组）。 */
+  const closeOtherTabs = useCallback((keepCwd: string) => {
+    const keep = tabs.find((t) => t.cwd === keepCwd);
+    if (!keep) return;
+    const victims = tabs.filter((t) => t.cwd !== keepCwd && t.provider === keep.provider);
+    if (!victims.length) return;
+    const victimSet = new Set(victims.map((v) => v.cwd));
+    for (const v of victims) {
+      dropSmooth(v.cwd); histRef.current.delete(v.cwd); steeredRef.current.delete(v.cwd);
+      void localAgent.sessionClose(realDir(v.cwd), paneLane(v.cwd));
+      pendingByCwd.current.delete(v.cwd);
+    }
+    setTabs((ts) => clusterTabs(ts.filter((t) => !victimSet.has(t.cwd))));
+    setActiveCwd(keepCwd);
+  }, [tabs, dropSmooth]);
+
+  /* 激活的 session 标签挪到最左（仅未分组的——分组内保持分组顺序，不打乱）。 */
+  const promoteTab = useCallback((cwd: string) => {
+    setTabs((ts) => {
+      const i = ts.findIndex((t) => t.cwd === cwd);
+      if (i <= 0 || ts[i].groupId) return ts;
+      const t = ts[i];
+      return clusterTabs([t, ...ts.filter((x) => x.cwd !== cwd)]);
+    });
+  }, []);
 
   /* ---- 持久化：所有打开的标签 + 激活标签 + 分组 + 分屏树。
          恢复已挪到 useState 初始值（见上方 boot），这里只负责写。
@@ -694,13 +879,13 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   const firstSaveRef = useRef(true);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
-  const tabsPersistFp = tabs.map((t) => `${t.cwd}|${t.sessionId ?? ''}|${t.title}|${t.groupId ?? ''}|${t.permMode ?? ''}`).join('§');
+  const tabsPersistFp = tabs.map((t) => `${t.cwd}|${t.sessionId ?? ''}|${t.title}|${t.groupId ?? ''}|${t.permMode ?? ''}|${t.provider}`).join('§');
   useEffect(() => {
     if (firstSaveRef.current) { firstSaveRef.current = false; return; }
     const ts = tabsRef.current;
     const liveGroupIds = new Set(ts.map((t) => t.groupId).filter(Boolean));
     saveTabsState(
-      ts.map((t) => ({ cwd: t.cwd, sessionId: t.sessionId, title: t.title, groupId: t.groupId ?? null, permMode: t.permMode })),
+      ts.map((t) => ({ cwd: t.cwd, sessionId: t.sessionId, title: t.title, groupId: t.groupId ?? null, permMode: t.permMode, provider: t.provider })),
       activeCwd,
       groups.filter((g) => liveGroupIds.has(g.id)),
       layout,
@@ -715,8 +900,8 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (!tab || !tab.pendingLoad || !tab.sessionId || tab.loading) return;
     patchTab(activeCwd, { loading: true, pendingLoad: false });
     const sid = tab.sessionId;
-    localAgent.readSession(provider, realDir(activeCwd), sid).then(({ messages: msgs }) => setHistory(activeCwd, sid, msgs));
-  }, [active, activeCwd, tabs, provider, patchTab, setHistory]);
+    localAgent.readSession(tab.provider, realDir(activeCwd), sid).then(({ messages: msgs }) => setHistory(activeCwd, sid, msgs));
+  }, [active, activeCwd, tabs, patchTab, setHistory]);
 
   const setActiveTab = useCallback((cwd: string) => setActiveCwd(cwd), []);
 
@@ -828,10 +1013,12 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (modelMemRef.current[sid]) { delete modelMemRef.current[sid]; saveModelBySession(modelMemRef.current); }
     if (reasoningMemRef.current[sid]) { delete reasoningMemRef.current[sid]; saveReasoningBySession(reasoningMemRef.current); }
     if (mcpMemRef.current[sid]) { delete mcpMemRef.current[sid]; saveMcpBySession(mcpMemRef.current); }
-    const res = await localAgent.deleteSession(provider, realDir(cwd), sid);
+    // 删的是浏览树里（activeProvider）的会话；若某开着的标签绑着它，按该标签自带 provider 删更准。
+    const prov = bound[0]?.provider ?? activeProvider;
+    const res = await localAgent.deleteSession(prov, realDir(cwd), sid);
     if (!res.ok) void loadSessionsFor(cwd);
     return res;
-  }, [provider, loadSessionsFor, closeTab]);
+  }, [activeProvider, loadSessionsFor, closeTab]);
 
   function handleEvent(cwd: string, ev: any) {
     const t = ev?.type;
@@ -844,7 +1031,12 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     }
     if (t === 'system' && ev.subtype === 'init') {
       if (parentId) return;
-      if (ev.session_id) pendingByCwd.current.set(cwd, ev.session_id);
+      if (ev.session_id) {
+        const wasNew = !pendingByCwd.current.get(cwd);
+        pendingByCwd.current.set(cwd, ev.session_id);
+        // 新会话拿到真实 id → 早一步刷左栏，立刻显示该对话（不必等整回合结束）。
+        if (wasNew) setTimeout(() => void loadSessionsFor(cwd), 300);
+      }
       // init 带 MCP 连接状态 → 存到该标签供 MCP 控件显示。
       const mcpStatus = Array.isArray(ev.mcp_servers) ? ev.mcp_servers : undefined;
       // 预热（用户还没发送）时 init 也会来——此时 running=false，别显示「处理中」。
@@ -864,6 +1056,15 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       // 过滤 CLI 注入的本地命令回显（如 setModel 的「<local-command-stdout>Set model to …</local-command-stdout>」），
       // 它不是对话内容，别当气泡显示。
       if (isLocalCommandNoise(parts)) return;
+      // steering 回显去重：运行中插话已乐观渲染过气泡；SDK 把它作为 user 事件吐回来时跳过。
+      if (t === 'user' && !parentId && parts.length > 0 && parts.every((p) => p.kind === 'text')) {
+        const pend = steeredRef.current.get(cwd);
+        if (pend?.length) {
+          const txt = parts.map((p) => (p as { kind: 'text'; text: string }).text).join('\n').trim();
+          const i = pend.indexOf(txt);
+          if (i >= 0) { pend.splice(i, 1); return; }
+        }
+      }
       const merge = () => {
         if (!parentId) lpSet(cwd, '');   // 最终块顶上，live 尾巴退场
         patchTab(cwd, (tab) => ({
@@ -913,6 +1114,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     const sm = smoothRef.current.get(cwd);
     if (sm) { smoothRef.current.delete(cwd); if (sm.finalize) sm.finalize(); }
     lpSet(cwd, '');
+    steeredRef.current.delete(cwd);   // 回合结束，未回显的 steering 标记作废
     const pending = pendingByCwd.current.get(cwd) || null;
     patchTab(cwd, (tab) => {
       if (!tab.running && tab.liveMsgs.length === 0) return {}; // 已收尾，避免重复
@@ -927,6 +1129,8 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       };
     });
     void loadSessionsFor(cwd);   // 新会话拿到真实 id / 已更新 → 刷新左栏
+    // 标题是后端在回合后异步生成的：补一刷快速拿到自动重命名，不必等下次手动 load。
+    setTimeout(() => void loadSessionsFor(cwd), 1800);
     expandProject(cwd);
   }
 
@@ -948,10 +1152,12 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   const dispatchTurn = useCallback(async (cwd: string, sendText: string, displayText: string, attachments: Attachment[], clearComposer: boolean, skillName?: string) => {
     const tab = tabs.find((t) => t.cwd === cwd);
     if (!cwd || !tab) return;
-    if (!current?.installed || !current?.live) { patchTab(cwd, { status: `⚠ ${tr('local.status.unavailable', { provider: current?.label || provider })}` }); return; }
+    const prov = tab.provider;
+    const det = providers.find((p) => p.id === prov);
+    if (!det?.installed || !det?.live) { patchTab(cwd, { status: `⚠ ${tr('local.status.unavailable', { provider: det?.label || prov })}` }); return; }
     const sid = tab.sessionId;   // 仅首条用于 resume；常驻会话已存在时后端忽略
     // cursor headless 必需 API Key——优先用缓存，没有则现拉（拉不到则主进程会回 error 提示去设置录入）。
-    const apiKey = provider === 'cursor' ? (cursorKeyRef.current || await fetchCursorKey()) : undefined;
+    const apiKey = prov === 'cursor' ? (cursorKeyRef.current || await fetchCursorKey()) : undefined;
     dropSmooth(cwd);
     // 气泡里把附件名缀在用户文本后，让发出去的这一轮一眼看出带了哪些参考。
     const attNote = attachments.length ? `${displayText ? '\n' : ''}📎 ${attachments.map((a) => a.name).join('、')}` : '';
@@ -964,9 +1170,33 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       messages: [...t.messages, { role: 'user', parts, ts: null, uuid: null }],
       liveMsgs: [], running: true, status: tr('local.status.processingShort'), perm: null, question: null,
     }));
-    const res = await localAgent.send({ provider, cwd: realDir(cwd), lane: paneLane(cwd), sessionId: sid, prompt: sendText, permMode: tab.permMode, model: tab.model, reasoning: tab.reasoning, mcp: tab.mcp, apiKey, attachments });
+    const res = await localAgent.send({ provider: prov, cwd: realDir(cwd), lane: paneLane(cwd), sessionId: sid, prompt: sendText, permMode: tab.permMode, model: tab.model, reasoning: tab.reasoning, mcp: tab.mcp, apiKey, attachments });
     if (!res.ok) patchTab(cwd, (t) => ({ running: false, status: t.status.startsWith('⚠') ? t.status : `⚠ ${tr('local.status.startFailed')}` }));
-  }, [tabs, current, provider, patchTab, dropSmooth, fetchCursorKey, tr]);
+  }, [tabs, providers, patchTab, dropSmooth, fetchCursorKey, tr]);
+
+  /** claude steering：agent 处理中把新消息直接推进常驻会话的输入流（SDK 在下一个工具
+   *  间隙读到并调整方向）。气泡乐观渲染进 liveMsgs（时间线顺序正确：已流出的内容在上、
+   *  插话在下、后续流式接着吐）。SDK 可能把推入的消息回显成 user 事件——steeredRef 记
+   *  下待回显文本，handleEvent 命中即跳过，避免气泡重复。 */
+  const steeredRef = useRef<Map<string, string[]>>(new Map());
+  const steerSend = useCallback(async (cwd: string, sendText: string, displayText: string, attachments: Attachment[], skillName?: string) => {
+    const tab = tabs.find((t) => t.cwd === cwd);
+    if (!tab) return;
+    const attNote = attachments.length ? `${displayText ? '\n' : ''}📎 ${attachments.map((a) => a.name).join('、')}` : '';
+    const parts: MsgPart[] = skillName
+      ? [{ kind: 'skill', name: skillName }, { kind: 'text', text: displayText + attNote }]
+      : [{ kind: 'text', text: displayText + attNote }];
+    const pend = steeredRef.current.get(cwd) || [];
+    pend.push(sendText.trim());
+    steeredRef.current.set(cwd, pend);
+    patchTab(cwd, (t) => ({
+      draft: '', attachments: [], skill: undefined,
+      liveMsgs: [...t.liveMsgs, { role: 'user', parts, ts: null, uuid: null }],
+    }));
+    // steer:true → 主进程只推消息，绝不动会话配置（effort 重建/切模型会杀掉跑着的回合）。
+    const res = await localAgent.send({ provider: tab.provider, cwd: realDir(cwd), lane: paneLane(cwd), sessionId: tab.sessionId, prompt: sendText, permMode: tab.permMode, model: tab.model, reasoning: tab.reasoning, mcp: tab.mcp, attachments, steer: true });
+    if (!res.ok) patchTab(cwd, (t) => ({ status: t.status.startsWith('⚠') ? t.status : `⚠ ${tr('local.status.startFailed')}` }));
+  }, [tabs, patchTab, tr]);
 
   const queueSeqRef = useRef(0);
   const mkQueueId = () => `q-${Date.now()}-${queueSeqRef.current++}`;
@@ -991,25 +1221,38 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     //  · composer 选中的技能(tab.skill) → 用它包裹 draft（{{input}}=draft）；气泡显示 pill + 原话。
     //  · 否则识别文本里的 `/技能名 参数` → 展开；未命中则原样下发（claude /compact 等原生命令照常）。
     let sendText = raw;
+    let displayText = raw;   // 气泡里显示的用户原话（技能态下只显示参数，不带 /name）
     let skillName: string | undefined;
     const picked = tab.skill ? skillsRef.current.find((s) => s.name === tab.skill) : null;
     if (picked) {
       sendText = picked.body.includes('{{input}}') ? picked.body.split('{{input}}').join(raw) : (raw ? `${picked.body}\n\n${raw}` : picked.body);
-      skillName = picked.name;
+      skillName = picked.name;   // displayText 保持 raw（pill 选中态下输入框本就只有参数）
     } else {
       const ex = expandSkill(raw, skillsRef.current);
-      if (ex != null) { sendText = ex; skillName = /^\s*\/([a-zA-Z0-9_-]+)/.exec(raw)?.[1]; }
+      if (ex != null) {
+        sendText = ex;
+        const mm = /^\s*\/([a-zA-Z0-9_-]+)[ \t]*([\s\S]*)$/.exec(raw);
+        skillName = mm?.[1];
+        displayText = (mm?.[2] || '').trim();   // 手打 /name 命中技能 → 气泡去掉 /name 前缀，只留参数
+      }
     }
-    // AI 处理中（含等权限/选择）→ 不阻塞输入，入队；本轮收尾后由 flush 副作用打包发出（队列发展开后的 sendText）。
+    // AI 处理中（含等权限/选择）：
+    //  · claude（常驻 SDK 会话）→ 原生 steering：直接推进输入流，CLI 在下一个工具调用
+    //    间隙读到并调整方向（与终端里运行中直接回车一致）。气泡乐观渲染进 liveMsgs。
+    //  · 其余 provider（exec/headless/ACP 协议都不支持 mid-turn）→ 入队，轮末打包发出。
     if (tab.running) {
+      if (tab.provider === 'claude' && providers.find((p) => p.id === 'claude')?.live) {
+        await steerSend(cwd, sendText, displayText, attachments, skillName);
+        return;
+      }
       patchTab(cwd, (t) => ({
         draft: '', attachments: [], skill: undefined,
         queue: [...(t.queue || []), { id: mkQueueId(), text: sendText, attachments }],
       }));
       return;
     }
-    await dispatchTurn(cwd, sendText, raw, attachments, true, skillName);
-  }, [tabs, patchTab, respondPermission, dispatchTurn, tr]);
+    await dispatchTurn(cwd, sendText, displayText, attachments, true, skillName);
+  }, [tabs, providers, patchTab, respondPermission, dispatchTurn, steerSend, tr]);
 
   /** 衍生：在当前 cwd 新开一个全新 session，并立刻把 text 作为首条发出。
    *  与原 session 地位一致（普通会话、进项目树、可再次衍生）。必须先 sessionClose 关掉
@@ -1020,14 +1263,15 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
 
   /** 选中 AI 回答时调用：后台预热一条衍生会话（claude 才有常驻进程可预热）。 */
   const prewarmDerive = useCallback((cwd: string) => {
-    if (provider !== 'claude' || !current?.live) return;
+    const src = tabs.find((t) => t.cwd === cwd);
+    const prov = src?.provider ?? provider;
+    if (prov !== 'claude' || !providers.find((p) => p.id === prov)?.live) return;
     const dir = realDir(cwd);
     if (specLaneRef.current.has(dir)) return;        // 已有预热中 → 不重复
     const lane = nextLaneId();
     specLaneRef.current.set(dir, lane);
-    const src = tabs.find((t) => t.cwd === cwd);
-    void localAgent.warm({ provider, cwd: dir, lane, sessionId: null, permMode: src?.permMode ?? defaultPermMode(provider), model: src?.model, reasoning: src?.reasoning, mcp: src?.mcp });
-  }, [provider, current, tabs]);
+    void localAgent.warm({ provider: prov, cwd: dir, lane, sessionId: null, permMode: src?.permMode ?? defaultPermMode(prov), model: src?.model, reasoning: src?.reasoning, mcp: src?.mcp });
+  }, [provider, providers, tabs]);
 
   /** 衍生：在当前 cwd 下新开一个**独立会话窗格**（新 lane = 同目录并行常驻会话），
    *  作为新标签紧挨源标签插入并立刻把 text 作为首条发出。与普通会话地位一致；想并排看
@@ -1035,22 +1279,24 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   const forkSendText = useCallback(async (cwd: string, rawText: string) => {
     const text = (rawText || '').trim();
     if (!cwd || !text) return;
-    if (!current?.installed || !current?.live) { patchTab(cwd, { status: `⚠ ${tr('local.status.unavailable', { provider: current?.label || provider })}` }); return; }
+    const src = tabs.find((t) => t.cwd === cwd);     // 继承当前窗格的 provider/model/mcp/perm + 分组
+    const prov = src?.provider ?? provider;
+    const det = providers.find((p) => p.id === prov);
+    if (!det?.installed || !det?.live) { patchTab(cwd, { status: `⚠ ${tr('local.status.unavailable', { provider: det?.label || prov })}` }); return; }
     const dir = realDir(cwd);
     const spec = specLaneRef.current.get(dir);       // 已预热的会话 → 直接用，跳过大半冷启
     const lane = spec ?? nextLaneId();
     if (spec) specLaneRef.current.delete(dir);
     const paneKey = makePaneKey(dir, lane);
-    const src = tabs.find((t) => t.cwd === cwd);     // 继承当前窗格的 model/mcp/perm + 分组
-    const permMode = src?.permMode ?? defaultPermMode(provider);
-    const apiKey = provider === 'cursor' ? (cursorKeyRef.current || await fetchCursorKey()) : undefined;
+    const permMode = src?.permMode ?? defaultPermMode(prov);
+    const apiKey = prov === 'cursor' ? (cursorKeyRef.current || await fetchCursorKey()) : undefined;
     // 先 kick off send（预热则瞬时；冷启也尽早开始），与下面建窗格/渲染并行。
-    const sendP = localAgent.send({ provider, cwd: dir, lane, sessionId: null, prompt: text, permMode, model: src?.model, reasoning: src?.reasoning, mcp: src?.mcp, apiKey });
+    const sendP = localAgent.send({ provider: prov, cwd: dir, lane, sessionId: null, prompt: text, permMode, model: src?.model, reasoning: src?.reasoning, mcp: src?.mcp, apiKey });
     // 直接建窗格紧挨源标签插入（不走 addPaneTab —— 这里要预填用户消息 + running 态）。
     setTabs((ts) => {
       if (ts.some((t) => t.cwd === paneKey)) return ts;
       const newTab: Tab = {
-        ...emptyTab(paneKey, null, tr('local.newSession'), undefined, permMode),
+        ...emptyTab(paneKey, null, tr('local.newSession'), undefined, permMode, prov),
         model: src?.model, reasoning: src?.reasoning, mcp: src?.mcp, groupId: src?.groupId ?? null,
         messages: [{ role: 'user', parts: [{ kind: 'text', text }], ts: null, uuid: null }],
         running: true, status: tr('local.status.processingShort'),
@@ -1062,7 +1308,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     setActiveCwd(paneKey);
     const res = await sendP;
     if (!res.ok) patchTab(paneKey, (t) => ({ running: false, status: t.status.startsWith('⚠') ? t.status : `⚠ ${tr('local.status.startFailed')}` }));
-  }, [tabs, current, provider, patchTab, fetchCursorKey, tr]);
+  }, [tabs, providers, provider, patchTab, fetchCursorKey, tr]);
 
   /** 从队列移除一条（用户在 flush 前反悔）。 */
   const dequeue = useCallback((cwd: string, id: string) => {
@@ -1198,11 +1444,11 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   // dep 里 `activeTab` 覆盖了所有派生字段（activeSessionId / messages / liveMsgs / ...），
   // 因为 activeTab 引用变化当且仅当 tabs/activeCwd 变化。
   const la = useMemo(() => ({
-    providers, provider, current, detecting,
+    providers, provider, activeProvider, runningByProvider, attnByProvider, doneByProvider, current, detecting,
     cyclePermMode, commands, skills, modelOptions, modelsLoading, refreshModels, setModel, setReasoning, setMcp, listMcp, refreshMcp, reconnectMcp,
-    projects, expanded, toggleProject, sessionsByPath, loadSessionsFor,
+    projects, expanded, toggleProject, sessionsByPath, loadSessionsFor, pinnedSessions, toggleSessionPin, sessionTitles, renameSession,
     addProject, removeProject,
-    tabs, activeCwd, setActiveTab, closeTab, activeProject,
+    tabs, activeCwd, setActiveTab, closeTab, closeOtherTabs, promoteTab, activeProject,
     layout, gridCwds, placePane, removePane, setSplitRatio,
     groups, createGroupFromTab, addTabToGroup, removeTabFromGroup, toggleGroup, setGroupColor, renameGroup, ungroupGroup, moveGroupBefore, moveTabBefore,
     activeSessionId: activeTab?.sessionId ?? null,
@@ -1217,20 +1463,20 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     question: activeTab?.question ?? null,
     setDraft, appendDraft, setSkill,
     addAttachments, removeAttachment, pickAttachments,
-    openSession, newSession, deleteSession, send, forkSendText, prewarmDerive, dequeue, interrupt, respondPermission, answerQuestion,
+    openSession, newSession, switchActiveProvider, deleteSession, send, forkSendText, prewarmDerive, dequeue, interrupt, respondPermission, answerQuestion,
     loadOlder,
   }), [
-    providers, provider, current, detecting,
+    providers, provider, activeProvider, runningByProvider, attnByProvider, doneByProvider, current, detecting,
     cyclePermMode, commands, skills, modelOptions, modelsLoading, refreshModels, setModel, setReasoning, setMcp, listMcp, refreshMcp, reconnectMcp,
-    projects, expanded, toggleProject, sessionsByPath, loadSessionsFor,
+    projects, expanded, toggleProject, sessionsByPath, loadSessionsFor, pinnedSessions, toggleSessionPin, sessionTitles, renameSession,
     addProject, removeProject,
-    tabs, activeCwd, setActiveTab, closeTab, activeProject,
+    tabs, activeCwd, setActiveTab, closeTab, closeOtherTabs, promoteTab, activeProject,
     layout, gridCwds, placePane, removePane, setSplitRatio,
     groups, createGroupFromTab, addTabToGroup, removeTabFromGroup, toggleGroup, setGroupColor, renameGroup, ungroupGroup, moveGroupBefore, moveTabBefore,
     activeTab,
     setDraft, appendDraft, setSkill,
     addAttachments, removeAttachment, pickAttachments,
-    openSession, newSession, deleteSession, send, forkSendText, prewarmDerive, dequeue, interrupt, respondPermission, answerQuestion,
+    openSession, newSession, switchActiveProvider, deleteSession, send, forkSendText, prewarmDerive, dequeue, interrupt, respondPermission, answerQuestion,
     loadOlder,
   ]);
   return la;

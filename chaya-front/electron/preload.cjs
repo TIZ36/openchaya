@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('chateeElectron', {
     deleteSession: (provider, cwd, sessionId) => ipcRenderer.invoke('localAgent:deleteSession', { provider, cwd, sessionId }),
     listCommands: (provider, cwd) => ipcRenderer.invoke('localAgent:listCommands', { provider, cwd }),
     scanCliSkills: () => ipcRenderer.invoke('localAgent:scanCliSkills'),
+    busyKeys: () => ipcRenderer.invoke('localAgent:busyKeys'),
     send: (payload) => ipcRenderer.invoke('localAgent:send', payload),
     warm: (payload) => ipcRenderer.invoke('localAgent:warm', payload),
     permissionRespond: (permId, decision) => ipcRenderer.invoke('localAgent:permissionRespond', { permId, decision }),

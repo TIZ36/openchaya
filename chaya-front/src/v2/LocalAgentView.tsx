@@ -22,7 +22,7 @@ export type ForeignPaneRender = (id: string) => React.ReactNode;
 export const ForeignPaneContext = React.createContext<ForeignPaneRender | null>(null);
 // 切换本地 provider（由 ClientShell 注入，底层写 settings.localAgentProvider）。
 // 供 composer 里的常规选择框用——徽标盲循环之外的显式入口。
-import { IconSend, IconAgentCode, IconPlus, IconChevron, IconTrash, IconModel, IconSkill } from './icons';
+import { IconSend, IconAgentCode, IconPlus, IconChevron, IconTrash, IconModel, IconSkill, IconPin } from './icons';
 import { CodeBlock, PreBlock, mdRehypePlugins } from './codeBlock';
 import { useI18n, t } from '../i18n';
 import { useWikiNotes, SelectionToolbar, WikiNotes, WikiPicker, buildWikiItems, resolveWikiRef, type WikiItem } from './NotesLayer';
@@ -245,13 +245,20 @@ export const LocalAgentTree: React.FC<{
                       undefined 只是「正在拉」的瞬态 → 同 loading 显示转圈，不再有「点击加载」占位。 */}
                   {(ss === 'loading' || ss === undefined) && <DotsLoading />}
                   {Array.isArray(ss) && ss.length === 0 && <div className="v2-la-hint sub">{tr('local.tree.noSessions')}</div>}
-                  {Array.isArray(ss) && ss.map((s) => (
+                  {Array.isArray(ss) && [...ss]
+                    // pin 的排顶部（后 pin 的更靠上）；未 pin 的保持稳定顺序（sort 稳定 → 0 不动）。
+                    .sort((a, b) => (la.pinnedSessions[b.sessionId] || 0) - (la.pinnedSessions[a.sessionId] || 0))
+                    .map((s) => (
                     <SessionRow
                       key={s.sessionId}
                       s={s}
+                      displayName={la.sessionTitles[s.sessionId] || s.title || s.preview || tr('local.untitledSession')}
                       active={la.activeSessionId === s.sessionId && realDir(la.activeCwd || '') === p.path}
                       open={la.tabs.some((t) => realDir(t.cwd) === p.path && t.sessionId === s.sessionId)}
-                      onOpen={() => openSess(p.path, s.sessionId, s.title || s.preview || tr('local.untitledSession'))}
+                      pinned={!!la.pinnedSessions[s.sessionId]}
+                      onPin={() => la.toggleSessionPin(s.sessionId)}
+                      onRename={(title) => la.renameSession(s.sessionId, title)}
+                      onOpen={() => openSess(p.path, s.sessionId, la.sessionTitles[s.sessionId] || s.title || s.preview || tr('local.untitledSession'))}
                       onDelete={() => la.deleteSession(p.path, s.sessionId)}
                     />
                   ))}
@@ -270,18 +277,34 @@ LocalAgentTree.displayName = 'LocalAgentTree';
 type MenuState = { x: number; y: number; kind: 'tab' | 'group'; id: string };
 
 /** 单个标签 chip：点击切主区内容、可拖到右侧平铺、右键唤出分组菜单。 */
-const TabChip: React.FC<{ la: LocalAgentState; t: Tab; grouped?: boolean; dimmed?: boolean; onMenu: (e: React.MouseEvent, kind: 'tab', id: string) => void; dropProps?: React.HTMLAttributes<HTMLDivElement>; dropBefore?: boolean; onActivate?: (cwd: string) => void; activeCwd?: string | null }> = ({ la, t, grouped, dimmed, onMenu, dropProps, dropBefore, onActivate, activeCwd }) => {
+const TabChip: React.FC<{ la: LocalAgentState; t: Tab; grouped?: boolean; dimmed?: boolean; onMenu: (e: React.MouseEvent, kind: 'tab', id: string) => void; dropProps?: React.HTMLAttributes<HTMLDivElement>; dropBefore?: boolean; onActivate?: (cwd: string) => void; activeCwd?: string | null; renaming?: string | null; setRenaming?: (id: string | null) => void }> = ({ la, t, grouped, dimmed, onMenu, dropProps, dropBefore, onActivate, activeCwd, renaming, setRenaming }) => {
   const { t: tr } = useI18n();
   const proj = la.projects.find((p) => p.path === realDir(t.cwd));
   // 高亮判断：上层（TopTabs）提供 activeCwd 覆盖时，以它为准 —— 这样当全局 activeId
   // 是一个 chat tab 时，本地 tab 不会还残留 hairline；未提供则回退到 la.activeCwd
   // （非 inline 模式下旧行为）。
   const isActive = (activeCwd === undefined ? la.activeCwd : activeCwd) === t.cwd;
+  // 关闭运行中会话前的二次确认（打断会杀掉正在跑的回合）。
+  const [confirmAt, setConfirmAt] = useState<{ left: number; top: number } | null>(null);
+  useEffect(() => {
+    if (!confirmAt) return;
+    const close = () => setConfirmAt(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setConfirmAt(null); };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('mousedown', close); window.removeEventListener('keydown', onKey); };
+  }, [confirmAt]);
+  const host = (typeof document !== 'undefined' && document.querySelector('.chaya-v2')) || (typeof document !== 'undefined' ? document.body : null);
+  const onClose = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (t.running) { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setConfirmAt({ left: Math.min(r.left, window.innerWidth - 240), top: r.bottom + 6 }); }
+    else la.closeTab(t.cwd);
+  };
   // dimmed = 已固定到侧栏、但因当前激活而临时回到顶栏的 tab：灰一些、无关闭键、不可拖。
   return (
     <div
       className={`v2-la-tab${isActive ? ' active' : ''}${la.gridCwds.includes(t.cwd) ? ' ingrid' : ''}${grouped ? ' grouped' : ''}${dropBefore ? ' dropbefore' : ''}${dimmed ? ' dim' : ''}`}
-      onClick={() => { la.setActiveTab(t.cwd); onActivate?.(t.cwd); }}
+      onClick={() => { la.setActiveTab(t.cwd); la.promoteTab(t.cwd); onActivate?.(t.cwd); }}
       draggable={!dimmed}
       onDragStart={dimmed ? undefined : (e) => { e.dataTransfer.setData('text/cwd', t.cwd); e.dataTransfer.effectAllowed = 'copy'; }}
       onContextMenu={(e) => { e.preventDefault(); onMenu(e, 'tab', t.cwd); }}
@@ -290,9 +313,33 @@ const TabChip: React.FC<{ la: LocalAgentState; t: Tab; grouped?: boolean; dimmed
     >
       <span className="proj">{proj?.name || basename(realDir(t.cwd))}</span>
       <span className="sep">/</span>
-      <span className="sess">{t.sessionId ? t.title : tr('local.newSession')}</span>
+      {renaming === `tab:${t.cwd}` && t.sessionId ? (
+        <input
+          autoFocus className="v2-la-tab-rename"
+          defaultValue={la.sessionTitles[t.sessionId] || t.title}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { la.renameSession(t.sessionId!, (e.target as HTMLInputElement).value); setRenaming?.(null); }
+            if (e.key === 'Escape') setRenaming?.(null);
+          }}
+          onBlur={(e) => { la.renameSession(t.sessionId!, e.target.value); setRenaming?.(null); }}
+        />
+      ) : (
+        <span className="sess">{t.sessionId ? (la.sessionTitles[t.sessionId] || t.title) : tr('local.newSession')}</span>
+      )}
       {t.running && <span className="rundot" title={tr('local.running')} />}
-      {!dimmed && <button className="x" title={tr('local.tab.close')} onClick={(e) => { e.stopPropagation(); la.closeTab(t.cwd); }}>✕</button>}
+      {!dimmed && <button className="x" title={tr('local.tab.close')} onClick={onClose}>✕</button>}
+      {confirmAt && host && createPortal(
+        <div className="v2-la-closeconfirm" style={{ position: 'fixed', left: confirmAt.left, top: confirmAt.top, zIndex: 220 }}
+          onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+          <div className="msg">{tr('local.tab.closeRunningConfirm')}</div>
+          <div className="acts">
+            <button className="danger" onClick={() => { setConfirmAt(null); la.closeTab(t.cwd); }}>{tr('local.tab.closeConfirmYes')}</button>
+            <button onClick={() => setConfirmAt(null)}>{tr('common.cancel')}</button>
+          </div>
+        </div>,
+        host,
+      )}
     </div>
   );
 };
@@ -318,6 +365,7 @@ const TabMenu: React.FC<{ la: LocalAgentState; menu: MenuState; onClose: () => v
     if (!t) return null;
     return createPortal(
       <div className="v2-la-menu" style={style} onMouseDown={(e) => e.stopPropagation()}>
+        {t.sessionId && <button onClick={() => { onRename(`tab:${t.cwd}`); onClose(); }}>{tr('local.menu.renameSession')}</button>}
         {!t.groupId && <button onClick={() => { const id = la.createGroupFromTab(t.cwd); onRename(id); }}>{tr('local.menu.newGroup')}</button>}
         {!t.groupId && la.groups.length > 0 && <div className="sec">{tr('local.menu.addToGroup')}</div>}
         {!t.groupId && la.groups.map((g) => (
@@ -329,6 +377,9 @@ const TabMenu: React.FC<{ la: LocalAgentState; menu: MenuState; onClose: () => v
         {onTogglePin && <button onClick={() => { onTogglePin(t.cwd); onClose(); }}>{tr('tabs.pin')}</button>}
         <div className="div" />
         <button className="danger" onClick={() => { la.closeTab(t.cwd); onClose(); }}>{tr('local.tab.close')}</button>
+        {la.tabs.filter((x) => x.provider === t.provider).length > 1 && (
+          <button onClick={() => { la.closeOtherTabs(t.cwd); onClose(); }}>{tr('local.tab.closeOthers')}</button>
+        )}
       </div>,
       host,
     );
@@ -391,9 +442,11 @@ export const LocalAgentTabs: React.FC<{ la: LocalAgentState; inline?: boolean; o
   // 固定到侧栏的 tab 从内联条隐藏（改在左栏常驻，见 ClientShell .v2-rail-pins）；
   // 但「当前激活」的那个固定 tab 仍回到顶栏显示（灰色 dim 样式），与云端 pin 一致。
   const isPinned = (cwd: string) => !!pinnedCwds && pinnedCwds.has(cwd);
-  const visibleTabs = pinnedCwds && pinnedCwds.size
+  // tab 栏只显示「当前执行器(activeProvider)」的 session —— 不同 provider 的标签互不混排。
+  const inProv = (t: Tab) => t.provider === la.activeProvider;
+  const visibleTabs = (pinnedCwds && pinnedCwds.size
     ? la.tabs.filter((t) => !pinnedCwds.has(t.cwd) || t.cwd === activeCwd)
-    : la.tabs;
+    : la.tabs).filter(inProv);
   if (visibleTabs.length === 0) return inline ? null : <span className="v2-la-tabs-empty">Local Agents</span>;
 
   // 把已聚拢的标签按 groupId 折成渲染单元：连续同组 → 一个分组块，否则单标签。
@@ -415,7 +468,7 @@ export const LocalAgentTabs: React.FC<{ la: LocalAgentState; inline?: boolean; o
 
   const body = (<>
       {units.map((u) => u.kind === 'tab' ? (
-        <TabChip key={u.tab.cwd} la={la} t={u.tab} dimmed={isPinned(u.tab.cwd)} onMenu={openMenu} dropProps={groupDrop(u.tab.cwd)} dropBefore={dropAt === u.tab.cwd} onActivate={onTabActivate} activeCwd={activeCwd} />
+        <TabChip key={u.tab.cwd} la={la} t={u.tab} dimmed={isPinned(u.tab.cwd)} onMenu={openMenu} dropProps={groupDrop(u.tab.cwd)} dropBefore={dropAt === u.tab.cwd} onActivate={onTabActivate} activeCwd={activeCwd} renaming={renaming} setRenaming={setRenaming} />
       ) : (
         <div
           key={u.group.id}
@@ -449,7 +502,7 @@ export const LocalAgentTabs: React.FC<{ la: LocalAgentState; inline?: boolean; o
             )}
             {u.group.collapsed && <span className="gcnt">{u.members.length}</span>}
           </div>
-          {!u.group.collapsed && u.members.map((m) => <TabChip key={m.cwd} la={la} t={m} grouped dimmed={isPinned(m.cwd)} onMenu={openMenu} dropProps={groupDrop(m.cwd)} dropBefore={dropAt === m.cwd} onActivate={onTabActivate} activeCwd={activeCwd} />)}
+          {!u.group.collapsed && u.members.map((m) => <TabChip key={m.cwd} la={la} t={m} grouped dimmed={isPinned(m.cwd)} onMenu={openMenu} dropProps={groupDrop(m.cwd)} dropBefore={dropAt === m.cwd} onActivate={onTabActivate} activeCwd={activeCwd} renaming={renaming} setRenaming={setRenaming} />)}
         </div>
       ))}
       {/* 末尾放置区：把分组拖到这里 = 移到最右。inline 模式下不撑满（不要把后面的 chat tabs 推走）。 */}
@@ -462,21 +515,39 @@ export const LocalAgentTabs: React.FC<{ la: LocalAgentState; inline?: boolean; o
 /* 会话行：hover 出垃圾桶；点一下进入两步确认，避免误删。删除走系统回收站可恢复。 */
 const SessionRow: React.FC<{
   s: SessionSummary;
+  displayName: string;
   active: boolean;
   open?: boolean;
+  pinned?: boolean;
+  onPin?: () => void;
+  onRename?: (title: string) => void;
   onOpen: () => void;
   onDelete: () => void;
-}> = ({ s, active, open, onOpen, onDelete }) => {
+}> = ({ s, displayName, active, open, pinned, onPin, onRename, onOpen, onDelete }) => {
   const { t: tr } = useI18n();
   const [confirm, setConfirm] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   return (
     <div
-      className={`v2-la-sess${active ? ' active' : ''}${open && !active ? ' open' : ''}${confirm ? ' confirming' : ''}`}
-      onClick={() => { if (!confirm) onOpen(); }}
+      className={`v2-la-sess${active ? ' active' : ''}${open && !active ? ' open' : ''}${confirm ? ' confirming' : ''}${pinned ? ' pinned' : ''}${renaming ? ' renaming' : ''}`}
+      onClick={() => { if (!confirm && !renaming) onOpen(); }}
+      onContextMenu={onRename ? (e) => { e.preventDefault(); setRenaming(true); } : undefined}
       title={s.preview || s.sessionId}
     >
-      <span className="t">{s.title || s.preview || tr('local.untitledSession')}</span>
-      {confirm ? (
+      {renaming ? (
+        <input
+          autoFocus className="v2-la-sess-rename" defaultValue={displayName}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { onRename?.((e.target as HTMLInputElement).value); setRenaming(false); }
+            if (e.key === 'Escape') setRenaming(false);
+          }}
+          onBlur={(e) => { onRename?.(e.target.value); setRenaming(false); }}
+        />
+      ) : (
+        <span className="t">{displayName}</span>
+      )}
+      {!renaming && (confirm ? (
         <span className="v2-la-sess-confirm" onClick={(e) => e.stopPropagation()}>
           <button className="del" title={tr('local.session.deleteToTrash')} onClick={() => { onDelete(); setConfirm(false); }}>{tr('common.delete')}</button>
           <button className="cancel" title={tr('common.cancel')} onClick={() => setConfirm(false)}>{tr('common.cancel')}</button>
@@ -484,9 +555,10 @@ const SessionRow: React.FC<{
       ) : (
         <>
           <span className="m">{fmtTime(s.updatedAt)}</span>
+          <button className={`v2-la-sess-pin${pinned ? ' on' : ''}`} title={pinned ? tr('local.session.unpin') : tr('local.session.pin')} onClick={(e) => { e.stopPropagation(); onPin?.(); }}><IconPin /></button>
           <button className="v2-la-sess-del" title={tr('local.session.delete')} onClick={(e) => { e.stopPropagation(); setConfirm(true); }}><IconTrash /></button>
         </>
-      )}
+      ))}
     </div>
   );
 };
@@ -717,11 +789,12 @@ const PROVIDER_ICON: Record<string, { color: string; path: string }> = {
     path: 'M23.922 16.997C23.061 18.492 18.063 22.02 12 22.02 5.937 22.02.939 18.492.078 16.997A.641.641 0 0 1 0 16.741v-2.869a.883.883 0 0 1 .053-.22c.372-.935 1.347-2.292 2.605-2.656.167-.429.414-1.055.644-1.517a10.098 10.098 0 0 1-.052-1.086c0-1.331.282-2.499 1.132-3.368.397-.406.89-.717 1.474-.952C7.255 2.937 9.248 1.98 11.978 1.98c2.731 0 4.767.957 6.166 2.093.584.235 1.077.546 1.474.952.85.869 1.132 2.037 1.132 3.368 0 .368-.014.733-.052 1.086.23.462.477 1.088.644 1.517 1.258.364 2.233 1.721 2.605 2.656a.841.841 0 0 1 .053.22v2.869a.641.641 0 0 1-.078.256Zm-11.75-5.992h-.344a4.359 4.359 0 0 1-.355.508c-.77.947-1.918 1.492-3.508 1.492-1.725 0-2.989-.359-3.782-1.259a2.137 2.137 0 0 1-.085-.104L4 11.746v6.585c1.435.779 4.514 2.179 8 2.179 3.486 0 6.565-1.4 8-2.179v-6.585l-.098-.104s-.033.045-.085.104c-.793.9-2.057 1.259-3.782 1.259-1.59 0-2.738-.545-3.508-1.492a4.359 4.359 0 0 1-.355-.508Zm2.328 3.25c.549 0 1 .451 1 1v2c0 .549-.451 1-1 1-.549 0-1-.451-1-1v-2c0-.549.451-1 1-1Zm-5 0c.549 0 1 .451 1 1v2c0 .549-.451 1-1 1-.549 0-1-.451-1-1v-2c0-.549.451-1 1-1Zm3.313-6.185c.136 1.057.403 1.913.878 2.497.442.544 1.134.938 2.344.938 1.573 0 2.292-.337 2.657-.751.384-.435.558-1.15.558-2.361 0-1.14-.243-1.847-.705-2.319-.477-.488-1.319-.862-2.824-1.025-1.487-.161-2.192.138-2.533.529-.269.307-.437.808-.438 1.578v.021c0 .265.021.562.063.893Zm-1.626 0c.042-.331.063-.628.063-.894v-.02c-.001-.77-.169-1.271-.438-1.578-.341-.391-1.046-.69-2.533-.529-1.505.163-2.347.537-2.824 1.025-.462.472-.705 1.179-.705 2.319 0 1.211.175 1.926.558 2.361.365.414 1.084.751 2.657.751 1.21 0 1.902-.394 2.344-.938.475-.584.742-1.44.878-2.497Z',
   },
 };
-export const ProviderLogo: React.FC<{ id: string; className?: string }> = ({ id, className }) => {
+export const ProviderLogo: React.FC<{ id: string; className?: string; mono?: boolean }> = ({ id, className, mono }) => {
   const ic = PROVIDER_ICON[id];
   const cls = `v2-la-prov-logo${className ? ' ' + className : ''}`;
   if (!ic) return <svg className={cls} viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={1.7} aria-hidden><circle cx="12" cy="12" r="8" /></svg>;
-  return <svg className={cls} viewBox="0 0 24 24" width={16} height={16} fill={ic.color} aria-hidden><path d={ic.path} /></svg>;
+  // mono：强制 currentColor，让 CSS 的 color 驱动（静止态走墨灰、激活态再显品牌色）。
+  return <svg className={cls} viewBox="0 0 24 24" width={16} height={16} fill={mono ? 'currentColor' : ic.color} aria-hidden><path d={ic.path} /></svg>;
 };
 
 /* CLI 加载态：provider 品牌 logo 当作容器，品牌色「水位」从底部缓缓升起 + 表面波纹轻晃，
@@ -828,9 +901,67 @@ export const ProviderSwitcher: React.FC<{
   );
 };
 
-/* composer 左下：只读 provider 横幅（切换在侧栏「本地 CLI」标题旁）。 */
-const ProviderBanner: React.FC<{ la: LocalAgentState }> = ({ la }) => {
-  const cur = la.provider as ProviderId;
+/* Provider 书签栏：竖向、依附主卡左上角（侧栏与主卡之间）。
+   provider = 同一工作目录的不同执行器，所以书签贴着工作区（主卡）而非全局顶栏。
+   静止态单色墨灰（克制用色），激活态显完整品牌色并与主卡相连；未就绪的降透明。
+   切换沿用 onPick（在当前活动目录用新 provider 开新 session，工作目录多 provider 共享）。 */
+export const ProviderRail: React.FC<{
+  provider: ProviderId;
+  providers: LocalAgentState['providers'];
+  onPick: (id: ProviderId) => void;
+  /** 每个 provider 当前有几条会话在跑 —— 不同 provider 可并行，各自计数。 */
+  runningByProvider?: Partial<Record<ProviderId, number>>;
+  /** 每个 provider 有几条会话在等用户介入（权限/AskUser）→ 跳跃提示。 */
+  attnByProvider?: Partial<Record<ProviderId, number>>;
+  /** 某 provider 任务刚全部完成且未访问 → 打勾提示（访问即清）。 */
+  doneByProvider?: Partial<Record<ProviderId, boolean>>;
+  /** 右侧检视栏开关书签（笔记/代码改动）—— 方向与 provider 相反，提示「展开右侧内容」。 */
+  footer?: React.ReactNode;
+}> = ({ provider, providers, onPick, runningByProvider, attnByProvider, doneByProvider, footer }) => {
+  const { t: tr } = useI18n();
+  const ready = (id: ProviderId) => { const d = providers.find((p) => p.id === id); return !!d?.installed && !!d?.live; };
+  const installed = (id: ProviderId) => !!providers.find((p) => p.id === id)?.installed;
+  return (
+    <nav className="v2-prov-rail" aria-label={tr('local.prov.switchAria') || 'Provider'}>
+      {PROV_SELECT_ORDER.map((id) => {
+        const active = id === provider;
+        const rdy = ready(id);
+        const runN = runningByProvider?.[id] ?? 0;   // 该 provider 当前在跑的会话数
+        const attnN = attnByProvider?.[id] ?? 0;      // 等用户介入的会话数
+        const done = !active && !runN && !!doneByProvider?.[id];
+        // 徽标优先级：需介入(跳!) > 运行中(计数呼吸点) > 刚完成(打勾)。
+        const badge: 'attn' | 'run' | 'done' | null = attnN > 0 ? 'attn' : runN > 0 ? 'run' : done ? 'done' : null;
+        const statePart = attnN > 0 ? ` · ${tr('local.prov.needsYou')}`
+          : runN > 0 ? ` · ${tr('local.prov.runningN', { n: runN })}`
+          : done ? ` · ${tr('local.prov.allDone')}` : '';
+        const tip = `${PROVIDER_LABELS[id] || id}${rdy ? '' : ` · ${installed(id) ? tr('local.prov.notReady') : tr('local.prov.notInstalled')}`}${statePart}`;
+        return (
+          <button
+            key={id}
+            type="button"
+            className={`v2-prov-bm${active ? ' active' : ''}${rdy ? '' : ' off'}${badge === 'attn' ? ' attn' : badge === 'run' ? ' running' : ''}`}
+            aria-label={tip}
+            aria-current={active ? 'true' : undefined}
+            title={tip}
+            onClick={() => onPick(id)}
+          >
+            <span className="v2-prov-bm-glyph">
+              <ProviderLogo id={id} mono={!active} />
+            </span>
+            {badge === 'attn' && <span className="v2-prov-bm-badge attn" aria-hidden>!</span>}
+            {badge === 'run' && <span className="v2-prov-bm-badge run" aria-hidden>{runN}</span>}
+            {badge === 'done' && <span className="v2-prov-bm-badge done" aria-hidden>✓</span>}
+          </button>
+        );
+      })}
+      {footer && <div className="v2-prov-rail-foot">{footer}</div>}
+    </nav>
+  );
+};
+
+/* composer 左下：只读 provider 横幅（显示本窗格自带的执行器；切换在主卡左缘的书签栏）。 */
+const ProviderBanner: React.FC<{ la: LocalAgentState; provider?: ProviderId }> = ({ la, provider }) => {
+  const cur = (provider ?? la.provider) as ProviderId;
   const d = la.providers.find((p) => p.id === cur);
   const ready = !!d?.installed && !!d?.live;
   return (
@@ -844,6 +975,8 @@ const ProviderBanner: React.FC<{ la: LocalAgentState }> = ({ la }) => {
 const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const { t: tr } = useI18n();
   const tab = la.tabs.find((t) => t.cwd === cwd);
+  // 本窗格自带的执行器：composer 的权限档 / 模型 / effort / MCP / 登录都看它（不看全局默认）。
+  const tabProvider = (tab?.provider ?? la.provider) as ProviderId;
   const streamRef = useRef<HTMLDivElement | null>(null);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const [slashIdx, setSlashIdx] = useState(0);
@@ -854,7 +987,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const [cfgOpen, setCfgOpen] = useState(false);
   const [cfgTab, setCfgTab] = useState<'model' | 'mcp'>('model');
   const [loginOpen, setLoginOpen] = useState(false);
-  const canLogin = LOGIN_PROVIDERS.includes(la.provider);
+  const canLogin = LOGIN_PROVIDERS.includes(tabProvider);
   const [skillMenuOpen, setSkillMenuOpen] = useState(false);
   const pickSkill = (name: string) => { la.setSkill(cwd, name); setSkillMenuOpen(false); requestAnimationFrame(() => taRef.current?.focus()); };
   // 技能选择器内置过滤：打开即聚焦输入框，敲字过滤、↑↓ 选择、⏎ 确认、esc 关闭。
@@ -947,7 +1080,17 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   }, [slashQuery, allCommands]);
   const slashOpen = slashQuery !== null;
   useEffect(() => { setSlashIdx(0); }, [slashQuery]);
-  const pickSlash = (c: SlashCommand) => { la.setDraft(cwd, `${c.name} `); setSlashDismissed(true); requestAnimationFrame(() => taRef.current?.focus()); };
+  const pickSlash = (c: SlashCommand) => {
+    if (c.scope === 'chaya') {
+      // Chaya 技能：选中设结构化 pill（输入框不留 /name 文本），发送时展开。
+      la.setSkill(cwd, c.name.replace(/^\//, ''));
+      la.setDraft(cwd, '');
+    } else {
+      la.setDraft(cwd, `${c.name} `);   // CLI 原生命令：照常插入文本交给 CLI
+    }
+    setSlashDismissed(true);
+    requestAnimationFrame(() => taRef.current?.focus());
+  };
 
   // @ 提及（联动 wiki 笔记/文档）：取末尾 @token（无空格）作 query；slash 优先时不开。
   const mentionQuery = (!slashOpen ? (/(?:^|\s)@([^@\s]*)$/.exec(draft)?.[1] ?? null) : null);
@@ -1096,10 +1239,10 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const paneColor = group?.color ?? tab?.color;
   // 显示用：把不属于当前 provider 档位集的权限模式归一到该 provider 默认，避免 chip 串档。
   const effPerm = useMemo(
-    () => (tab && permModesFor(la.provider).includes(tab.permMode))
+    () => (tab && permModesFor(tabProvider).includes(tab.permMode))
       ? tab.permMode
-      : defaultPermMode(la.provider),
-    [tab?.permMode, la.provider],
+      : defaultPermMode(tabProvider),
+    [tab?.permMode, tabProvider],
   );
   const pm = PERM_META[effPerm];
   const selectedModel = useMemo(
@@ -1107,26 +1250,26 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
     [la.modelOptions, tab?.model],
   );
   const reasoningOptions = useMemo(() => {
-    if (la.provider !== 'codex' && la.provider !== 'claude') return [];
+    if (tabProvider !== 'codex' && tabProvider !== 'claude') return [];
     const seen = new Set<string>();
     let source = selectedModel?.supportedReasoningLevels?.length
       ? selectedModel.supportedReasoningLevels
       : la.modelOptions.flatMap((m) => m.supportedReasoningLevels || []);
     // claude 的 effort 是固定枚举（low/medium/high/xhigh/max）；模型未带级别时给静态兜底。
-    if (la.provider === 'claude' && source.length === 0) source = CLAUDE_EFFORTS;
+    if (tabProvider === 'claude' && source.length === 0) source = CLAUDE_EFFORTS;
     return source.filter((x) => {
       const effort = String(x?.effort || '').trim();
       if (!effort || seen.has(effort)) return false;
       seen.add(effort);
       return true;
     });
-  }, [la.provider, la.modelOptions, selectedModel]);
+  }, [tabProvider, la.modelOptions, selectedModel]);
 
   // 打开「模型 / MCP」对话框：拉一次 MCP 列表 + 探测状态。MCP 源统一读 ~/.claude.json：
   // claude 用 SDK 热挂载并回报逐 server 状态；gemini/copilot 走 ACP 在 session/new 注入
   // （无逐 server 状态，仅切换启用，下次发送时随会话重建生效）。cursor/codex 不支持。
-  const hasMcp = la.provider === 'claude' || la.provider === 'gemini' || la.provider === 'copilot';
-  const mcpLiveStatus = la.provider === 'claude';   // 仅 claude 有实时探测/重连
+  const hasMcp = tabProvider === 'claude' || tabProvider === 'gemini' || tabProvider === 'copilot';
+  const mcpLiveStatus = tabProvider === 'claude';   // 仅 claude 有实时探测/重连
   const openCfg = () => { setCfgOpen(true); if (hasMcp) { if (!mcpList) void la.listMcp(cwd).then(setMcpList); if (mcpLiveStatus) la.refreshMcp(cwd); } else setCfgTab('model'); };
   // 对话框开启时：Esc 关闭（不冒泡去触发 Tab 切权限等全局键）。
   // 必须在 `if (!tab) return null` 之前调用 —— 之前放在 return 之后会让关闭最后
@@ -1208,7 +1351,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
           running={running}
           busy={!!perm || !!question}
           status={status}
-          provider={la.provider}
+          provider={tabProvider}
           sessionId={sessionId}
           scrollerRef={streamRef}
         />
@@ -1253,7 +1396,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
         {/* Split-screen reuses the SAME composer as full mode (notes pill, model
             picker, the works) — just scaled down via .v2-la-mini (zoom), instead
             of a bespoke slim layout. One component, one set of behaviours. */}
-        <div className={`v2-composer${inGrid ? ' v2-la-mini' : ''}${running ? ' v2-comp-working' : ''}`} data-mode="chat" data-prov={la.provider}>
+        <div className={`v2-composer${inGrid ? ' v2-la-mini' : ''}${running ? ' v2-comp-working' : ''}`} data-mode="chat" data-prov={tabProvider}>
           {capToast && <div className="v2-la-captoast">{capToast}</div>}
           <div className="v2-box">
             {/* CLI 跑动时的边缘旋转流光：遮罩在容器、旋转在子层(纯合成器动画不掉帧)。 */}
@@ -1379,8 +1522,8 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
               ref={taRef}
               rows={1}
               placeholder={
-                !current?.live ? tr('local.composer.unsupported', { provider: current?.label || la.provider })
-                  : running ? tr('local.composer.queuePlaceholder')
+                !current?.live ? tr('local.composer.unsupported', { provider: current?.label || tabProvider })
+                  : running ? tr(tabProvider === 'claude' ? 'local.composer.steerPlaceholder' : 'local.composer.queuePlaceholder')
                   : sessionId ? '' : tr('local.composer.placeholder')
               }
               value={draft}
@@ -1391,7 +1534,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
             />
             <div className="v2-row">
               <div className="v2-l">
-                <ProviderBanner la={la} />
+                <ProviderBanner la={la} provider={tabProvider} />
                 <WikiNotes wiki={wiki} onInsert={insertWikiRef} isActive={cwd === la.activeCwd} />
                 {current?.live && (
                   <button
@@ -1413,10 +1556,10 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
               <button
                 className={`v2-la-mode tone-${pm.tone}`}
                 onClick={() => la.cyclePermMode(cwd)}
-                title={tr('local.permMode.title', { hint: permHint(la.provider, effPerm) })}
+                title={tr('local.permMode.title', { hint: permHint(tabProvider, effPerm) })}
               >
                 <span className="v2-la-mode-ic" aria-hidden>{PERM_ICONS[pm.tone] || PERM_ICONS.default}</span>
-                <span className="v2-la-mode-lb">{permLabel(la.provider, effPerm)}</span>
+                <span className="v2-la-mode-lb">{permLabel(tabProvider, effPerm)}</span>
               </button>
               {current?.live && (
                 <button className={`v2-la-cfg${la.modelsLoading && la.modelOptions.length === 0 ? ' loading' : ''}`} onClick={openCfg} title={tr('local.cfg.modelMcp')}>
@@ -1428,9 +1571,9 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
               )}
               {running ? (
                 <>
-                  {/* 处理中也能发：有草稿时显示「排队」按钮（Enter 等效），本轮完成后自动打包发出。 */}
+                  {/* 处理中也能发：claude = 直接插话引导（原生 steering）；其余 provider = 排队，本轮完成后打包发出。 */}
                   {(draft.trim() || attachments.length > 0) && (
-                    <button className="v2-send queue" title={tr('local.composer.queue')} onClick={() => la.send(cwd)}>
+                    <button className="v2-send queue" title={tr(tabProvider === 'claude' ? 'local.composer.steer' : 'local.composer.queue')} onClick={() => la.send(cwd)}>
                       <IconSend />
                     </button>
                   )}
@@ -1462,8 +1605,8 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                 <>
                 {canLogin && (
                   <button className="v2-la-login-row" onClick={() => setLoginOpen(true)}>
-                    <ProviderLogo id={la.provider} />
-                    <span>{tr('local.cfg.login', { provider: PROVIDER_LABELS[la.provider] || la.provider })}</span>
+                    <ProviderLogo id={tabProvider} />
+                    <span>{tr('local.cfg.login', { provider: PROVIDER_LABELS[tabProvider] || tabProvider })}</span>
                   </button>
                 )}
                 {la.modelOptions.length === 0 ? (
@@ -1484,7 +1627,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                         ))}
                       </div>
                     ))}
-                    {(la.provider === 'codex' || la.provider === 'claude') && reasoningOptions.length > 0 && (
+                    {(tabProvider === 'codex' || tabProvider === 'claude') && reasoningOptions.length > 0 && (
                       <div className="v2-la-model-group">
                         <div className="v2-la-model-vendor">{tr('local.cfg.reasoning')}</div>
                         <button className={`v2-la-model-item${!tab.reasoning ? ' on' : ''}`} onClick={() => la.setReasoning(cwd, '')}>
@@ -1535,7 +1678,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
       )}
       {loginOpen && (
         <LoginTerminal
-          provider={la.provider}
+          provider={tabProvider}
           onClose={() => setLoginOpen(false)}
           onDone={() => { void la.refreshModels(); }}
         />
@@ -1664,7 +1807,7 @@ export const LocalAgentConversation: React.FC<{ la: LocalAgentState }> = React.m
   // 让动画完整走一轮、肉眼看得到，而不是一闪而过。
   const coldLoading = useMinVisible(la.detecting && la.providers.length === 0, 800);
   if (coldLoading) {
-    return <div className="v2-la-single"><div className="v2-la-tl v2-la-tl--loading"><ProviderWaterfill id={la.provider} /></div></div>;
+    return <div className="v2-la-single"><div className="v2-la-tl v2-la-tl--loading"><ProviderWaterfill id={la.activeProvider} /></div></div>;
   }
 
   // 主区跟随当前激活标签：激活的是分屏里的窗格 → 显示分屏；否则（未分组/未平铺标签）→ 单屏显示该会话。
