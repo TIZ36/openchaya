@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aperture — 精修</title>
+<style>
+  :root{--bg:#0c0d10;--line:#23262e;--ink:#e9ecf1;--mut:#8b93a1;--accent:#5b8cff;}
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(900px 500px at 80% -10%,#1b2230 0%,transparent 60%),var(--bg);
+    color:var(--ink);font:15px/1.6 -apple-system,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;padding:56px 40px 120px}
+  header{max-width:1180px;margin:0 auto 36px}
+  h1{font-size:28px;letter-spacing:-.02em;margin:0 0 8px;font-weight:680}
+  .lede{color:var(--mut);max-width:740px;margin:0}
+  .controls{display:flex;gap:18px;align-items:center;margin-top:22px;flex-wrap:wrap}
+  .controls .grp{display:flex;gap:8px;align-items:center}
+  .controls label{color:var(--mut);font-size:13px}
+  .sw{width:24px;height:24px;border-radius:50%;border:2px solid transparent;cursor:pointer;transition:.15s}
+  .sw[aria-pressed="true"]{border-color:#fff;transform:scale(1.1)}
+  input[type=range]{width:120px;accent-color:var(--accent)}
+  .grid{max-width:1180px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:22px}
+  .card{background:linear-gradient(180deg,#17191f,#121317);border:1px solid var(--line);border-radius:18px;padding:22px;display:flex;flex-direction:column;gap:16px}
+  .row{display:flex;gap:18px;align-items:center}
+  .tile{width:112px;height:112px;border-radius:26px;flex:0 0 auto;background:radial-gradient(120% 120% at 30% 18%,#26282f 0%,#0a0a0c 78%);box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 10px 26px rgba(0,0,0,.5);display:grid;place-items:center}
+  .scales{display:flex;gap:14px;align-items:center}
+  .scell{display:flex;flex-direction:column;align-items:center;gap:6px}
+  .scell .lab{font-size:10px;color:var(--mut)}
+  .chip{border-radius:10px;display:grid;place-items:center;background:#0a0a0c}
+  .chip.light{background:#f4f1ea}
+  .meta{border-top:1px solid var(--line);padding-top:14px}
+  .meta .code{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700}
+  .meta .nm{font-size:17px;font-weight:640;margin:2px 0 4px}
+  .meta .desc{color:var(--mut);font-size:13px;margin:0}
+  svg{display:block}
+  .note{max-width:1180px;margin:42px auto 0;color:var(--mut);font-size:13px;border-top:1px solid var(--line);padding-top:18px}
+  code{background:#0a0a0c;padding:1px 6px;border-radius:6px;color:#cdd5e0}
+</style>
+</head>
+<body>
+<header>
+  <h1>Aperture — 精修方向</h1>
+  <p class="lede">回到光圈的几何本源：N 条等距偏移、依次旋转的直线弦，相互交叠自然围出中心多边孔——不需要外环和辐条。下面是几种「简约·精致」处理，可调叶片数 / 张开度 / 描边粗细 / accent 实时看效果。</p>
+  <div class="controls">
+    <div class="grp"><label>Accent</label>
+      <button class="sw" data-c="#5b8cff" style="background:#5b8cff" aria-pressed="true"></button>
+      <button class="sw" data-c="#d97757" style="background:#d97757"></button>
+      <button class="sw" data-c="#4fb286" style="background:#4fb286"></button>
+      <button class="sw" data-c="#c7a14a" style="background:#c7a14a"></button>
+      <button class="sw" data-c="#e9ecf1" style="background:#e9ecf1"></button>
+    </div>
+    <div class="grp"><label>叶片 <b id="nv">6</b></label><input id="n" type="range" min="3" max="8" step="1" value="6"></div>
+    <div class="grp"><label>开口 <b id="ov">8.5</b></label><input id="open" type="range" min="3" max="15" step="0.5" value="8.5"></div>
+    <div class="grp"><label>线宽 <b id="wv">2.4</b></label><input id="w" type="range" min="1.4" max="4" step="0.1" value="2.4"></div>
+  </div>
+</header>
+<main class="grid" id="grid"></main>
+<p class="note">挑中后告诉我代号+参数+颜色（如「Iris，6 叶 / 开口 8.5 / 金」），我就把它定稿成 <code>public/favicon.svg</code> + <code>build/icon-source.svg</code> 全套并生成 .icns。</p>
+
+<script>
+const C={x:32,y:32};
+// 光圈核心几何：n 条弦，每条到圆心距离 = open（决定开口大小），半径 R 决定叶尖长度。
+// 第 i 条弦在切点角 β=rot+i*360/n；弦沿切线方向延伸 ±sqrt(R²-open²)。
+function chords(n,open,R,rot){const out=[];const half=Math.sqrt(Math.max(0,R*R-open*open));
+  for(let i=0;i<n;i++){const b=(rot+i*360/n)*Math.PI/180;const tx=C.x+open*Math.cos(b),ty=C.y+open*Math.sin(b);
+    const dx=-Math.sin(b),dy=Math.cos(b);
+    out.push([tx+half*dx,ty+half*dy,tx-half*dx,ty-half*dy,tx,ty,b]);}
+  return out;}
+
+const V={
+  // A) Iris 纯弦：最克制，圆头细线，弦自然交叠出多边孔
+  iris(s,a,mono,P){const ink=mono||'#e9ecf1';const cs=chords(P.n,P.open,22,P.rot);
+    return wrap(s,cs.map(c=>`<line x1="${f(c[0])}" y1="${f(c[1])}" x2="${f(c[2])}" y2="${f(c[3])}" stroke="${ink}" stroke-width="${P.w}" stroke-linecap="round"/>`).join(''));},
+
+  // B) Iris·accent：其中一叶用 accent，其余中性——克制的品牌一点
+  irisAccent(s,a,mono,P){const ink=mono||'#e9ecf1';const c=mono||a;const cs=chords(P.n,P.open,22,P.rot);
+    return wrap(s,cs.map((cc,i)=>`<line x1="${f(cc[0])}" y1="${f(cc[1])}" x2="${f(cc[2])}" y2="${f(cc[3])}" stroke="${i===0?c:ink}" stroke-width="${P.w}" stroke-linecap="round" opacity="${i===0?1:.92}"/>`).join(''));},
+
+  // C) Hole 负形：只勾中心多边孔（弦的内段连成多边形）+ 极短叶尖刻痕，最 minimal
+  hole(s,a,mono,P){const ink=mono||'#e9ecf1';const c=mono||a;const cs=chords(P.n,P.open,22,P.rot);
+    // 相邻弦交点 = 多边形顶点
+    const pts=[];for(let i=0;i<P.n;i++){const A=cs[i],B=cs[(i+1)%P.n];const p=ix(A,B);if(p)pts.push(p);}
+    const poly=pts.map((p,i)=>`${i?'L':'M'}${f(p[0])} ${f(p[1])}`).join(' ')+' Z';
+    const ticks=cs.map(cc=>{const tx=cc[4],ty=cc[5],b=cc[6];const dx=-Math.sin(b),dy=Math.cos(b);
+      return `<line x1="${f(tx+6*dx)}" y1="${f(ty+6*dy)}" x2="${f(tx+13*dx)}" y2="${f(ty+13*dy)}" stroke="${ink}" stroke-width="${P.w}" stroke-linecap="round" opacity=".5"/>`;}).join('');
+    return wrap(s,`<path d="${poly}" stroke="${c}" stroke-width="${P.w}" stroke-linejoin="round" fill="none"/>${ticks}`);},
+
+  // D) Solid 实叶：每片叶填实(叶尖→相邻两交点)，留出中心负形孔，最「精致厚重」
+  solid(s,a,mono,P){const ink=mono||'#e9ecf1';const c=mono||a;const cs=chords(P.n,P.open,22.5,P.rot);
+    const pts=[];for(let i=0;i<P.n;i++){const A=cs[i],B=cs[(i+1)%P.n];const p=ix(A,B);if(p)pts.push(p);}
+    let blades='';for(let i=0;i<P.n;i++){const tipA=[cs[i][0],cs[i][1]];const vIn=pts[i];const vPrev=pts[(i-1+P.n)%P.n];
+      blades+=`<path d="M${f(vPrev[0])} ${f(vPrev[1])} L${f(tipA[0])} ${f(tipA[1])} L${f(vIn[0])} ${f(vIn[1])} Z" fill="${ink}" opacity="${i%2?0.62:0.92}"/>`;}
+    const hole=pts.map((p,i)=>`${i?'L':'M'}${f(p[0])} ${f(p[1])}`).join(' ')+' Z';
+    return wrap(s,`${blades}<path d="${hole}" fill="${c}"/>`);},
+
+  // E) Ring 含纳：纯弦 + 一圈极细外环，给「秩序感」但不喧宾
+  ring(s,a,mono,P){const ink=mono||'#e9ecf1';const cs=chords(P.n,P.open,19.5,P.rot);
+    return wrap(s,`<circle cx="32" cy="32" r="23.5" stroke="${ink}" stroke-width="${Math.max(1,P.w*0.6).toFixed(1)}" opacity=".28"/>`+
+      cs.map(c=>`<line x1="${f(c[0])}" y1="${f(c[1])}" x2="${f(c[2])}" y2="${f(c[3])}" stroke="${ink}" stroke-width="${P.w}" stroke-linecap="round"/>`).join(''));},
+
+  // F) Pinwheel 旋:开口拧一点，弦略呈风车,更有"快门在动"的动势
+  pinwheel(s,a,mono,P){const ink=mono||'#e9ecf1';const c=mono||a;const cs=chords(P.n,P.open,22,P.rot);
+    return wrap(s,cs.map((cc,i)=>`<line x1="${f(cc[4])}" y1="${f(cc[5])}" x2="${f(cc[0])}" y2="${f(cc[1])}" stroke="${ink}" stroke-width="${P.w}" stroke-linecap="round"/>`).join('')+
+      `<circle cx="32" cy="32" r="${(P.open-1).toFixed(1)}" stroke="${c}" stroke-width="${P.w}" fill="none" opacity=".9"/>`);},
+};
+function wrap(s,inner){return `<svg width="${s}" height="${s}" viewBox="0 0 64 64" fill="none">${inner}</svg>`;}
+function f(n){return (Math.round(n*100)/100);}
+// 两弦交点
+function ix(A,B){const x1=A[0],y1=A[1],x2=A[2],y2=A[3],x3=B[0],y3=B[1],x4=B[2],y4=B[3];
+  const d=(x1-x2)*(y3-y4)-(y1-y2)*(x3-x4);if(Math.abs(d)<1e-6)return null;
+  const t=((x1-x3)*(y3-y4)-(y1-y3)*(x3-x4))/d;return [x1+t*(x2-x1),y1+t*(y2-y1)];}
+
+const CARDS=[
+  ['iris','Iris','纯弦 · 最克制','N 条圆头细线交叠成孔。零冗余，缩到 16px 仍清晰。我的首选。'],
+  ['irisAccent','Iris · Accent','一叶点彩','单叶染 accent，其余中性——品牌色的克制用法。'],
+  ['hole','Aperture Hole','负形孔','只勾中心多边孔 + 极短叶尖刻痕，极简到近乎符号。'],
+  ['solid','Solid Blades','实叶 · 厚重','叶片填实留中心负形孔，最精致、最有「光学器件」质感。'],
+  ['ring','Contained','含纳环','纯弦外加一圈极细环，秩序感强、适合需要闭合外形的场合。'],
+  ['pinwheel','Pinwheel','风车动势','短叶 + 中心圆，像快门正在收放，动态拆解友好。'],
+];
+let accent='#5b8cff', P={n:6,open:8.5,w:2.4,rot:-90};
+function render(){
+  document.getElementById('grid').innerHTML=CARDS.map(([k,en,zh,desc],i)=>`
+    <div class="card">
+      <div class="row">
+        <div class="tile">${V[k](72,accent,null,P)}</div>
+        <div class="scales">
+          <div class="scell"><div class="chip" style="width:48px;height:48px;border-radius:12px">${V[k](40,accent,null,P)}</div><span class="lab">48</span></div>
+          <div class="scell"><div class="chip" style="width:24px;height:24px;border-radius:6px">${V[k](22,accent,null,P)}</div><span class="lab">24</span></div>
+          <div class="scell"><div class="chip" style="width:16px;height:16px;border-radius:4px">${V[k](15,accent,null,P)}</div><span class="lab">16</span></div>
+          <div class="scell"><div class="chip light" style="width:48px;height:48px;border-radius:12px">${V[k](40,accent,'#15171c',P)}</div><span class="lab">浅</span></div>
+        </div>
+      </div>
+      <div class="meta"><div class="code">${String(i+1).padStart(2,'0')} · ${en}</div><div class="nm">${zh}</div><p class="desc">${desc}</p></div>
+    </div>`).join('');
+}
+document.querySelectorAll('.sw').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.sw').forEach(x=>x.setAttribute('aria-pressed','false'));b.setAttribute('aria-pressed','true');accent=b.dataset.c;render();}));
+const bind=(id,key,lab)=>{const el=document.getElementById(id);el.addEventListener('input',()=>{P[key]=parseFloat(el.value);document.getElementById(lab).textContent=el.value;render();});};
+bind('n','n','nv');bind('open','open','ov');bind('w','w','wv');
+render();
+</script>
+</body>
+</html>

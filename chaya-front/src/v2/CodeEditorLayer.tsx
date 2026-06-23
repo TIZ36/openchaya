@@ -253,8 +253,11 @@ const CodeEditorLayerInner: React.FC<{
   const [menuOpen, setMenuOpen] = useState(false);   // 「在编辑器打开」下拉
   const [editorPick, setEditorPick] = useState<'vscode' | 'cursor'>(() => ((typeof localStorage !== 'undefined' && localStorage.getItem('chaya:editorPick')) as 'vscode' | 'cursor') || 'vscode');
   const [note, setNote] = useState('');
-  const [git, setGit] = useState<{ loading: boolean; repo: boolean; gitMissing: boolean; files: GitFile[] }>({ loading: false, repo: false, gitMissing: false, files: [] });
+  const [git, setGit] = useState<{ loading: boolean; repo: boolean; gitMissing: boolean; files: GitFile[]; branch: string; ahead: number; behind: number; hasUpstream: boolean }>({ loading: false, repo: false, gitMissing: false, files: [], branch: '', ahead: 0, behind: 0, hasUpstream: false });
   const [mode, setMode] = useState<'git' | 'review' | 'auto'>('git');   // 工作区事实 / 评审 / 自动化
+  // 手动提交 / 推送
+  const [commitMsg, setCommitMsg] = useState('');
+  const [gitBusy, setGitBusy] = useState<'commit' | 'push' | null>(null);
 
   // 只看「已落库」的 messages，不混 liveMsgs —— liveMsgs 每个 token 都换新数组引用，一旦纳入
   // 这个 memo 就会在流式期每个字重算一遍 sessionTouchedAbs（遍历全部消息），是输入卡顿的主因。
@@ -263,11 +266,11 @@ const CodeEditorLayerInner: React.FC<{
 
   // 拉 git 工作区状态（文件夹事实）。手动刷新 / 打开 / cwd 变 / 本会话推进 都会调。
   const refresh = useCallback(() => {
-    if (!cwd) { setGit({ loading: false, repo: false, gitMissing: false, files: [] }); return; }
+    if (!cwd) { setGit({ loading: false, repo: false, gitMissing: false, files: [], branch: '', ahead: 0, behind: 0, hasUpstream: false }); return; }
     setGit((g) => ({ ...g, loading: true }));
     localAgent.gitStatus(cwd).then((r) => {
-      setGit({ loading: false, repo: !!r.repo, gitMissing: !!r.gitMissing, files: r.files || [] });
-    }).catch(() => setGit({ loading: false, repo: false, gitMissing: false, files: [] }));
+      setGit({ loading: false, repo: !!r.repo, gitMissing: !!r.gitMissing, files: r.files || [], branch: r.branch || '', ahead: r.ahead || 0, behind: r.behind || 0, hasUpstream: !!r.hasUpstream });
+    }).catch(() => setGit({ loading: false, repo: false, gitMissing: false, files: [], branch: '', ahead: 0, behind: 0, hasUpstream: false }));
   }, [cwd]);
 
   const pickMode = useCallback((m: 'git' | 'review' | 'auto') => setMode(m), []);
@@ -283,6 +286,25 @@ const CodeEditorLayerInner: React.FC<{
     if (r.ok) refresh();
     else window.alert(r.error || tr('local.editor.revertFailed'));
   }, [cwd, revertingAll, git.files.length, refresh, tr]);
+
+  const doCommit = useCallback(async () => {
+    if (!cwd || gitBusy) return;
+    const msg = commitMsg.trim();
+    if (!msg) return;
+    setGitBusy('commit'); setNote('');
+    const r = await localAgent.gitCommit(cwd, msg);
+    setGitBusy(null);
+    if (r.ok) { setCommitMsg(''); refresh(); }
+    else setNote(r.error || tr('local.editor.commitFailed'));
+  }, [cwd, gitBusy, commitMsg, refresh, tr]);
+  const doPush = useCallback(async () => {
+    if (!cwd || gitBusy) return;
+    setGitBusy('push'); setNote('');
+    const r = await localAgent.gitPush(cwd);
+    setGitBusy(null);
+    if (r.ok) { setNote(tr('local.editor.pushDone')); refresh(); }
+    else setNote(r.error || tr('local.editor.pushFailed'));
+  }, [cwd, gitBusy, refresh, tr]);
 
   // 打开时：检测编辑器 + 拉 git；Esc 关闭。（与笔记列改为「上下分屏」共存，不再互斥让位。）
   useEffect(() => {
@@ -426,6 +448,35 @@ const CodeEditorLayerInner: React.FC<{
         <div className="v2-editor-changes"><ReviewPanel cwd={cwd} provider={provider} modelOptions={modelOptions} activeProvider={activeProvider} onSendToChat={onSendToChat} /></div>
       ) : (
       <div className="v2-editor-changes">
+        {/* worktree 顶栏：当前分支名 + 手动 commit / push。 */}
+        {git.repo && (
+          <div className="v2-editor-gitbar">
+            <div className="branchrow">
+              <svg className="bic" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><circle cx="6" cy="6" r="2.4" /><circle cx="6" cy="18" r="2.4" /><circle cx="18" cy="8" r="2.4" /><path d="M6 8.4v7.2M18 10.4a6 6 0 0 1-6 6H8.4" /></svg>
+              <span className="branch" title={git.branch}>{git.branch || 'HEAD'}</span>
+              {git.hasUpstream && (git.ahead > 0 || git.behind > 0) && (
+                <span className="ab">{git.ahead > 0 ? `↑${git.ahead}` : ''}{git.behind > 0 ? ` ↓${git.behind}` : ''}</span>
+              )}
+              <span className="grow" />
+              <button className={`push${gitBusy === 'push' ? ' busy' : ''}`} onClick={doPush} disabled={!!gitBusy || !cwd} title={tr('local.editor.push')}>
+                {gitBusy === 'push' ? tr('local.editor.pushing') : tr('local.editor.push')}{git.ahead > 0 ? ` ${git.ahead}` : ''}
+              </button>
+            </div>
+            {git.files.length > 0 && (
+              <div className="commitrow">
+                <input
+                  className="msg" value={commitMsg}
+                  placeholder={tr('local.editor.commitPlaceholder')}
+                  onChange={(e) => setCommitMsg(e.target.value)}
+                  onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void doCommit(); } }}
+                />
+                <button className={`commit${gitBusy === 'commit' ? ' busy' : ''}`} onClick={doCommit} disabled={!commitMsg.trim() || !!gitBusy}>
+                  {gitBusy === 'commit' ? tr('local.editor.committing') : tr('local.editor.commit')}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         {!git.repo ? (
           <div className="v2-editor-empty">
             <p className="t">{!cwd ? tr('local.editor.modeChanges') : git.gitMissing ? tr('local.editor.gitMissing') : tr('local.editor.notRepo')}</p>

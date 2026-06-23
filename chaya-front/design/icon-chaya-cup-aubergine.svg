@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Chaya 茶 — same cup+steam mark, aubergine treatment per the .impeccable brief:
+     cream paper tile, fountain-pen plum ink (oklch 0.38 0.12 310 ≈ #5a3b62),
+     sparing warm-ochre steam. Letterpress deboss, no glow, no gold. -->
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+  <defs>
+    <linearGradient id="cream" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7f2ea"/><stop offset="1" stop-color="#efe6d8"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#cream)"/>
+  <rect x="2.5" y="2.5" width="59" height="59" rx="11.5" fill="none" stroke="#5a3b62" stroke-opacity="0.10" stroke-width="1"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#ffffff" stroke-opacity="0.65" transform="translate(0 0.8)">
+      <path d="M20.5 31 L43.5 31" stroke-width="3"/>
+      <path d="M21 31 C21 41 25.5 45.5 32 45.5 C38.5 45.5 43 41 43 31" stroke-width="3"/>
+      <path d="M43 33 C49.5 32 49.5 40 43 39" stroke-width="3"/>
+    </g>
+    <!-- plum ink mark -->
+    <g stroke="#54375d">
+      <path d="M20.5 31 L43.5 31" stroke-width="3"/>
+      <path d="M21 31 C21 41 25.5 45.5 32 45.5 C38.5 45.5 43 41 43 31" stroke-width="3"/>
+      <path d="M43 33 C49.5 32 49.5 40 43 39" stroke-width="3"/>
+    </g>
+    <!-- steam in sparing warm ochre (marginalia) -->
+    <g stroke="#b8893a" stroke-opacity="0.9">
+      <path d="M28 25.5 C24.5 21.5 31 19.5 27.8 15" stroke-width="2.4"/>
+      <path d="M36 25.5 C32.5 21.5 39 19.5 35.8 15" stroke-width="2.4"/>
+    </g>
+  </g>
+</svg>

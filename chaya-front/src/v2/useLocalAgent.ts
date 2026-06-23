@@ -15,10 +15,11 @@ import {
   loadMcpBySession, saveMcpBySession, permModesFor, defaultPermMode,
   loadExpandedProjects, saveExpandedProjects, loadCodexImportedSessions,
   type DetectedProvider, type ProviderId, type SessionSummary, type TranscriptMessage, type LocalProject,
-  type PermMode, type SlashCommand, type PermissionRequest, type PermissionDecision, type QuestionRequest,
-  type TabGroup, type ModelInfo, type McpStatus, type Attachment,
+  type PermMode, type SlashCommand, type PermissionRequest, type PermissionDecision, type QuestionRequest, type ElicitRequest, type ElicitResult,
+  type TabGroup, type ModelInfo, type McpStatus, type Attachment, type UsageInfo,
 } from './services/localAgent';
 import { loadSkills, expandSkill, syncCliSkills, SKILLS_CHANGED_EVENT, type LocalSkill } from './services/skills';
+import { agentBySession } from './services/agents';
 import { api } from '../utils/apiClient';
 import { TYPEWRITER_PRESETS, DEFAULT_TYPEWRITER, FINISH_DRAIN_SEC, type TypewriterConfig } from './typewriter';
 import { useI18n } from '../i18n';
@@ -54,6 +55,34 @@ export function useLivePreview(cwd: string): string {
   return useSyncExternalStore(subscribe, () => lpText.get(cwd) ?? '');
 }
 
+/* ------------------------------------------------------------------ *
+ * composer 草稿外部 store —— 与 livePreview 同款套路：每个键入【不进 tabs】。
+ * 之前 draft 挂在 Tab 上：每敲一个字 patchTab → setTabs 换引用 → la 换引用 →
+ * 侧栏树（全部项目×会话）+ 顶栏 tab 条 + provider 书签栏 + 各窗格 memo 比较
+ * 全部跟着跑一遍 —— 会话/标签一多输入框就卡。现在键入只写这张 Map 并精准
+ * 通知订阅了该 cwd 的 composer（即所在窗格），其余 React 树对打字零感知。
+ * ------------------------------------------------------------------ */
+const draftText = new Map<string, string>();
+const draftListeners = new Map<string, Set<() => void>>();
+/** 读某窗格当前草稿（非 hook，事件处理器里用，永不 stale）。 */
+export function getDraft(cwd: string): string { return draftText.get(cwd) ?? ''; }
+function draftSet(cwd: string, v: string): void {
+  if ((draftText.get(cwd) ?? '') === v) return;
+  if (v) draftText.set(cwd, v); else draftText.delete(cwd);
+  const ls = draftListeners.get(cwd);
+  if (ls) for (const cb of ls) cb();
+}
+/** 订阅某窗格的草稿（键入只重渲订阅者自己 —— 即该窗格）。 */
+export function useDraft(cwd: string): string {
+  const subscribe = useCallback((cb: () => void) => {
+    let s = draftListeners.get(cwd);
+    if (!s) { s = new Set(); draftListeners.set(cwd, s); }
+    s.add(cb);
+    return () => { s!.delete(cb); if (s!.size === 0) draftListeners.delete(cwd); };
+  }, [cwd]);
+  return useSyncExternalStore(subscribe, () => draftText.get(cwd) ?? '');
+}
+
 /** 一个打开的标签（= 一个项目的当前会话），自带完整对话状态。 */
 export interface Tab {
   cwd: string;
@@ -64,10 +93,10 @@ export interface Tab {
   status: string;
   running: boolean;
   loading: boolean;
-  draft: string;
   pendingLoad?: boolean;   // 从持久化恢复、尚未读盘载入的标签
   perm?: PermissionRequest | null;   // agent 正在等用户授权/选择
   question?: QuestionRequest | null; // agent 用 AskUserQuestion 抛来的选择题
+  elicit?: ElicitRequest | null;     // MCP 服务端 elicitation/create 等用户填表/授权
   color: string;           // 偏好色（自动分配）：用于窗格头部/头像/边框
   groupId?: string | null; // 所属标签分组（类 Chrome 标签组），null = 未分组
   permMode: PermMode;      // 每个会话独立的权限模式（切一个不影响其他）
@@ -80,7 +109,11 @@ export interface Tab {
   mcpStatus?: McpStatus[]; // MCP 连接状态（来自 init / setMcp 回执）
   attachments?: Attachment[]; // 待发送的参考附件（拖入/选取的文件 + 粘贴图片），发送后清空
   queue?: QueuedMsg[];        // AI 处理中时用户继续发的指令：本轮结束后自动打包成一轮发出
+  plan?: PlanUsage;           // 订阅额度占用（claude /usage 解析）：当前会话/周用了百分之多少
 }
+
+/** 订阅计划额度占用（对应 claude `/usage`）：百分比 0..100。 */
+export type PlanUsage = UsageInfo;
 
 /** 队列里的一条待发指令（在 AI 处理中入队，本轮收尾后与同队其它条目打包成一轮）。 */
 export interface QueuedMsg {
@@ -95,7 +128,7 @@ let _colorSeq = 0;
 function nextColor(): string { return TAB_COLORS[_colorSeq++ % TAB_COLORS.length]; }
 
 function emptyTab(cwd: string, sessionId: string | null, title: string, color?: string, permMode: PermMode = 'default', provider: ProviderId = 'claude'): Tab {
-  return { cwd, sessionId, title, color: color || nextColor(), messages: [], liveMsgs: [], status: '', running: false, loading: false, draft: '', permMode, provider };
+  return { cwd, sessionId, title, color: color || nextColor(), messages: [], liveMsgs: [], status: '', running: false, loading: false, permMode, provider };
 }
 
 function normalizePermissionShortcut(text: string): 'allow' | 'deny' | null {
@@ -190,6 +223,11 @@ interface Smooth {
 
 // 首屏只渲染尾部 N 条历史，余量后台补齐（见 setHistory）。
 const HISTORY_TAIL = 20;
+// 进 DOM 的消息条数硬上限。每条完成的回合都 append 进 tab.messages，长会话（跑一两小时、
+// 几百回合）若不重新窗口化，消息只增不减——而 DOM 节点活在 Blink 的 cppgc/Oilpan 堆里，
+// 最终单次大分配「Ran out of reservation」崩渲染进程（且 JS 堆很小，正是这种崩法）。
+// 超过这个数就把最旧的折进 histRef（上滑「加载更早」仍可取回），DOM 始终有界。
+const RENDER_TAIL_MAX = 60;
 
 /* ------------------------------------------------------------------ *
  * paneKey：一个窗格(标签)的唯一身份。主会话 paneKey = 项目目录(cwd) 本身；
@@ -270,6 +308,9 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   // 稳定排序：记住每个目录的会话显示顺序(sessionId[])，重新拉取时保持原序、新会话置顶 —— 用某会话
   // 不会让它跳位（修「点击/使用后重排序」）。
   const sessionOrderRef = useRef<Record<string, string[]>>({});
+  // 乐观会话：新会话首轮 init 拿到真实 id 即插进左栏（不等 CLI 把 .jsonl 落盘）。dir → (sessionId → 占位标题)。
+  // 读盘后若该 id 已出现就退役；否则继续随每次 loadSessionsFor 合并显示，杜绝「回答中却不在左栏」。
+  const optimisticRef = useRef<Map<string, Map<string, string>>>(new Map());
   // 会话 pin：sessionId → pinnedAt(ms)。pin 的排在工作目录顶部，后 pin 的更靠上。纯本地持久化。
   const [pinnedSessions, setPinnedSessions] = useState<Record<string, number>>(() => {
     try { return JSON.parse(localStorage.getItem(SESSION_PINS_KEY) || '{}') || {}; } catch { return {}; }
@@ -323,7 +364,14 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
 
   // 多标签：每个 cwd 一个标签；activeCwd 是当前激活标签。
   const [tabs, setTabs] = useState<Tab[]>(boot.tabs);
+  // 永不 stale 的 tabs 快照：供事件处理器 / paneKey 分配等「在渲染之外」读取当前标签集。
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
   const [activeCwd, setActiveCwd] = useState<string | null>(boot.activeCwd);
+  // 「发送」信号：用户真正发出一条消息时 bump（tick + cwd）。点击 tab 不再置左 —— 只有发起提问
+  // 才把该会话提到 tab 栏最左（见 send 里的 promoteTab + ClientShell 监听 lastSend 提 topTab）。
+  const [sendTick, setSendTick] = useState(0);
+  const lastSentCwdRef = useRef<string | null>(null);
   const [groups, setGroups] = useState<TabGroup[]>(boot.groups);   // 标签分组（类 Chrome）
   const [layout, setLayout] = useState<LayoutNode | null>(boot.layout);   // 分屏树（null = 单窗）
 
@@ -363,7 +411,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   // 每个 provider 有几条会话在等用户介入（权限审批 / AskUserQuestion）→ rail 跳跃提示。
   const attnByProvider = useMemo(() => {
     const m: Partial<Record<ProviderId, number>> = {};
-    for (const t of tabs) if (t.perm || t.question) m[t.provider] = (m[t.provider] || 0) + 1;
+    for (const t of tabs) if (t.perm || t.question || t.elicit) m[t.provider] = (m[t.provider] || 0) + 1;
     return m;
   }, [tabs]);
   // 「完成」标：某 provider 的运行数从 >0 落到 0 且当前不在该 provider → 书签显打勾，访问即清。
@@ -603,7 +651,9 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
 
   const loadSessionsFor = useCallback(async (path: string) => {
     const dir = realDir(path);
-    setSessionsByPath((m) => ({ ...m, [dir]: 'loading' }));
+    // 仅「首次加载」（还没有任何列表）才显示 loading 呼吸点；已有列表时静默重拉、就地替换，
+    // 工程目录从不闪烁（修「刷新一下就闪 loading」）。
+    if (!Array.isArray(sessionsByPathRef.current[dir])) setSessionsByPath((m) => ({ ...m, [dir]: 'loading' }));
     let ss = await localAgent.listSessions(activeProvider, dir);
     if (activeProvider === 'codex') {
       const imported = loadCodexImportedSessions()[dir];
@@ -611,6 +661,15 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
         const allow = new Set(imported);
         ss = ss.filter((s) => allow.has(s.sessionId));
       }
+    }
+    // 合并仍未落盘的「乐观会话」（新会话拿到 id 即插，避免读盘延迟导致左栏缺失）；
+    // 读盘已含的同 id 占位即退役。
+    const opt = optimisticRef.current.get(dir);
+    if (opt && opt.size) {
+      const have = new Set(ss.map((s) => s.sessionId));
+      for (const id of [...opt.keys()]) if (have.has(id)) opt.delete(id);
+      for (const [id, title] of opt) ss = [{ sessionId: id, title, preview: null, turns: 0, updatedAt: Date.now() }, ...ss];
+      if (opt.size === 0) optimisticRef.current.delete(dir);
     }
     // 稳定排序：保留上次显示顺序，仅把「新出现」的会话置顶（其余不动）。后端按 updatedAt 倒序返回，
     // 直接用会让「刚用过的会话跳到顶」—— 这里固定下来，避免点击/使用导致重排序。
@@ -626,6 +685,26 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     ss = [...ss].sort((a, b) => (pos.get(a.sessionId) ?? 0) - (pos.get(b.sessionId) ?? 0));
     setSessionsByPath((m) => ({ ...m, [dir]: ss }));
   }, [activeProvider, codexImportsTick]);
+
+  // 把一个刚拿到真实 id 的新会话立刻插进左栏（不等 CLI 落盘 + 读盘）。记进 optimisticRef，
+  // 之后每次 loadSessionsFor 都会合并它，直到读盘真正含该会话才退役。dir 还没加载过 → 先全量
+  // 读盘（loadSessionsFor 内会合并它），避免只剩这一条而漏掉同目录其他历史会话。
+  const optimisticSession = useCallback((path: string, sessionId: string, title: string) => {
+    const dir = realDir(path);
+    let opt = optimisticRef.current.get(dir);
+    if (!opt) { opt = new Map(); optimisticRef.current.set(dir, opt); }
+    opt.set(sessionId, title);
+    if (!Array.isArray(sessionsByPathRef.current[dir])) { void loadSessionsFor(dir); return; }
+    setSessionsByPath((m) => {
+      const cur = m[dir];
+      const arr = Array.isArray(cur) ? cur : [];
+      if (arr.some((s) => s.sessionId === sessionId)) return m;
+      const order = sessionOrderRef.current[dir] || [];
+      if (!order.includes(sessionId)) sessionOrderRef.current[dir] = [sessionId, ...order];
+      const entry: SessionSummary = { sessionId, title, preview: null, turns: 0, updatedAt: Date.now() };
+      return { ...m, [dir]: [entry, ...arr] };
+    });
+  }, [loadSessionsFor]);
 
   const toggleProject = useCallback((p: LocalProject) => {
     const dir = realDir(p.path);
@@ -675,6 +754,10 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       dropSmooth(t.cwd);
       void localAgent.sessionClose(dir, paneLane(t.cwd));
       pendingByCwd.current.delete(t.cwd);
+      // 与 closeTab 对齐：回收该窗格的内存（整段历史 + steering 去重记录），否则关项目后泄漏。
+      histRef.current.delete(t.cwd);
+      steeredRef.current.delete(t.cwd);
+      draftSet(t.cwd, '');
     }
     setTabs((ts) => ts.filter((t) => realDir(t.cwd) !== dir));
     setActiveCwd((c) => (c && realDir(c) === dir ? null : c));
@@ -682,16 +765,19 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
 
   /* ---- 标签操作：每个 session 一个独立窗格(pane)；同项目多个 session 并存同时跑 ----
    * 给项目分配 paneKey：项目还没开过 → 裸 dir；已开过 → 新 lane(dir#@#lane)。 */
+  // 该目录已有任意窗格（裸 dir 或任意 lane）→ 一律分新 lane，绝不复用已占用的 paneKey
+  // （修「同项目第二个会话顶掉第一个」——之前只比裸 dir，首会话若是衍生(lane)就会让新会话抢裸 dir）。
   const paneKeyForDir = useCallback((dir: string): string =>
-    tabs.some((t) => t.cwd === dir) ? makePaneKey(dir, nextLaneId()) : dir
-  , [tabs]);
+    tabsRef.current.some((t) => realDir(t.cwd) === dir) ? makePaneKey(dir, nextLaneId()) : dir
+  , []);
 
   /* 新增一个会话窗格：紧挨触发它的标签插入、继承其分组；不 sessionClose 旧会话
    * （这是同项目多会话并行的关键——旧实现是替换+关进程，只能一个）。
    * paneKey 已存在（裸 dir 首会话复用）→ 替换该标签并保留偏好色。 */
-  const addPaneTab = useCallback((paneKey: string, sessionId: string | null, title: string, sourceCwd?: string, prov: ProviderId = provider): void => {
+  const addPaneTab = useCallback((paneKey: string, sessionId: string | null, title: string, sourceCwd?: string, prov: ProviderId = provider, focus = true): void => {
     const defPerm = defaultPermMode(prov);
     dropSmooth(paneKey);
+    draftSet(paneKey, '');   // 复用 paneKey 开新会话 → 不继承旧 composer 草稿（与旧 emptyTab 行为一致）
     pendingByCwd.current.delete(paneKey);
     setTabs((ts) => {
       const i = ts.findIndex((t) => t.cwd === paneKey);
@@ -710,7 +796,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
         : [fresh, ...ts];
       return clusterTabs(arr);
     });
-    setActiveCwd(paneKey);
+    if (focus) setActiveCwd(paneKey);   // 后台开（召唤 agent 会话）时不抢焦点
   }, [provider, dropSmooth, activeCwd]);
 
   // 落历史：窗口化加载。大会话只把尾部 N 条放进 tab.messages（进 React 树的只有这些），
@@ -729,6 +815,30 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     }
   }, [patchTab]);
 
+  /** 把新消息追加进某 tab 的时间线，并把「进 DOM 的条数」窗口化在 RENDER_TAIL_MAX 内。
+   *  histRef 始终持有该会话的全量数组（窗口化时存在）；溢出的旧消息折进它、histMore 前移，
+   *  上滑 loadOlder 可逐批取回。在 patchTab 的 updater 里调用（prev = 当前 tab）。 */
+  const appendWindowed = (cwd: string, prev: Tab, added: TranscriptMessage[]): Partial<Tab> => {
+    const hist = histRef.current.get(cwd);
+    const prevMore = hist ? (prev.histMore ?? 0) : 0;
+    const fullPrev = hist ?? prev.messages;
+    // StrictMode 幂等护栏：本函数在 patchTab 的 updater 里跑、并写 histRef（外部可变 store）——
+    // React 会用相同 prev 双跑该 updater，第二次读到的是第一次刚写进 histRef 的数组，于是把
+    // added 又拼一遍 → 消息翻倍（「发一条出现两条」，histRef 一旦被填充即触发：开 >20 条历史的
+    // 会话就会填充）。这里按【引用相等】判断 histRef 尾部是否已是这批 added：是则不再重复拼接。
+    const already = hist && added.length > 0 && hist.length >= added.length
+      && added.every((m, i) => hist[hist.length - added.length + i] === m);
+    const full = (added.length && !already) ? [...fullPrev, ...added] : fullPrev;
+    const visibleLen = full.length - prevMore;
+    if (visibleLen <= RENDER_TAIL_MAX) {
+      if (hist) { histRef.current.set(cwd, full); return { messages: full.slice(prevMore), histMore: prevMore }; }
+      return { messages: full, histMore: 0 };
+    }
+    const newMore = full.length - RENDER_TAIL_MAX;
+    histRef.current.set(cwd, full);
+    return { messages: full.slice(newMore), histMore: newMore };
+  };
+
   /** 取下一批更早的历史消息前插进时间线（histMore 是已展示窗口在全量数组里的起点）。 */
   const loadOlder = useCallback((cwd: string) => {
     const all = histRef.current.get(cwd);
@@ -745,15 +855,12 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   // 不重复开。sourceCwd = 触发它的标签（新标签紧挨其后插入）。
   const openSession = useCallback(async (projPath: string, sid: string, title: string, sourceCwd?: string) => {
     const dir = realDir(projPath);
-    const existing = tabs.find((t) => realDir(t.cwd) === dir && t.sessionId === sid);
+    // 也认 pendingByCwd：新会话首轮 init 把真实 id 先放这儿，标签写回前的窗口期内点左栏
+    // 同样应聚焦运行中的标签，而不是再开一个空白窗。
+    const existing = tabs.find((t) => realDir(t.cwd) === dir && (t.sessionId === sid || pendingByCwd.current.get(t.cwd) === sid));
     if (existing) {
-      // 已开 → 聚焦它，并把它的标签挪到最左（未分组时）。
+      // 已开 → 仅聚焦它，不重排（点击=浏览，不置左；置左只在发起提问时发生）。
       setActiveCwd(existing.cwd);
-      setTabs((ts) => {
-        const i = ts.findIndex((t) => t.cwd === existing.cwd);
-        if (i <= 0 || ts[i].groupId) return ts;
-        return clusterTabs([ts[i], ...ts.filter((t) => t.cwd !== existing.cwd)]);
-      });
       return;
     }
     // 从浏览树打开的会话属于「当前浏览的 provider」（activeProvider）。
@@ -774,6 +881,22 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     const { messages: msgs } = await localAgent.readSession(prov, dir, sid);
     setHistory(paneKey, sid, msgs);
   }, [activeProvider, providers, tabs, paneKeyForDir, addPaneTab, patchTab, setHistory]);
+
+  /** 召唤用：确保 agent 绑定会话有一个（后台、不抢焦点）标签在跟它——这样召唤产生的权限/AskUser
+   *  请求能被原生路由到该标签处理，输出也落进该会话、之后点开可见。已开则复用。同步返回其 paneKey，
+   *  调用方据此把召唤发到同一 (dir, lane)，事件才会被该标签收到。历史读盘后台进行，不拖慢唤起。 */
+  const ensureAgentSessionTab = useCallback((projPath: string, sid: string, title: string, prov: ProviderId, permMode: PermMode): string => {
+    const dir = realDir(projPath);
+    const existing = tabsRef.current.find((t) => realDir(t.cwd) === dir && (t.sessionId === sid || pendingByCwd.current.get(t.cwd) === sid));
+    if (existing) return existing.cwd;
+    const paneKey = paneKeyForDir(dir);
+    addPaneTab(paneKey, sid, title, undefined, prov, false);   // 后台开，不 setActiveCwd
+    const det = providers.find((p) => p.id === prov);
+    patchTab(paneKey, { loading: true, permMode, model: modelMemRef.current[sid] || undefined, mcp: mcpMemRef.current[sid] || undefined });
+    if (det?.live) void localAgent.warm({ provider: prov, cwd: dir, lane: paneLane(paneKey), sessionId: sid, permMode, model: modelMemRef.current[sid] || undefined, mcp: mcpMemRef.current[sid] || undefined, apiKey: prov === 'cursor' ? cursorKeyRef.current : undefined });
+    void localAgent.readSession(prov, dir, sid).then(({ messages }) => setHistory(paneKey, sid, messages)).catch(() => { /* 读盘失败不阻断 */ });
+    return paneKey;
+  }, [providers, paneKeyForDir, addPaneTab, patchTab, setHistory]);
 
   // 新建会话：同样开成独立新窗格，紧挨触发它的标签。
   // providerOverride：从 composer 切 provider 时显式带入目标 provider —— 直接用它预热，
@@ -828,6 +951,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
 
   const closeTab = useCallback((cwd: string) => {
     dropSmooth(cwd);
+    draftSet(cwd, '');
     histRef.current.delete(cwd);
     steeredRef.current.delete(cwd);
     void localAgent.sessionClose(realDir(cwd), paneLane(cwd));   // 关标签 → 回收常驻进程（运行中=打断）
@@ -853,7 +977,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (!victims.length) return;
     const victimSet = new Set(victims.map((v) => v.cwd));
     for (const v of victims) {
-      dropSmooth(v.cwd); histRef.current.delete(v.cwd); steeredRef.current.delete(v.cwd);
+      dropSmooth(v.cwd); draftSet(v.cwd, ''); histRef.current.delete(v.cwd); steeredRef.current.delete(v.cwd);
       void localAgent.sessionClose(realDir(v.cwd), paneLane(v.cwd));
       pendingByCwd.current.delete(v.cwd);
     }
@@ -877,8 +1001,6 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
          关键性能点：tabs 引用在流式期间每帧都变（livePreview/liveMsgs），但落盘的
          只有下面这几个低频字段——用结构指纹作依赖，避免打字机每帧同步写 localStorage。 ---- */
   const firstSaveRef = useRef(true);
-  const tabsRef = useRef(tabs);
-  tabsRef.current = tabs;
   const tabsPersistFp = tabs.map((t) => `${t.cwd}|${t.sessionId ?? ''}|${t.title}|${t.groupId ?? ''}|${t.permMode ?? ''}|${t.provider}`).join('§');
   useEffect(() => {
     if (firstSaveRef.current) { firstSaveRef.current = false; return; }
@@ -906,13 +1028,15 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   const setActiveTab = useCallback((cwd: string) => setActiveCwd(cwd), []);
 
   // 草稿/发送/中断都按 cwd 寻址（多窗格下每个窗独立）。
-  const setDraft = useCallback((cwd: string, v: string) => { patchTab(cwd, { draft: v }); }, [patchTab]);
+  // 键入只写外部 store（不进 tabs，零全局重渲）。
+  const setDraft = useCallback((cwd: string, v: string) => { draftSet(cwd, v); }, []);
   /** 选/清 Chaya 技能（composer pill）。空字符串/undefined = 清除。 */
   const setSkill = useCallback((cwd: string, name: string | undefined) => { patchTab(cwd, { skill: name || undefined }); }, [patchTab]);
   /** 往某标签的输入框追加文本（评审「发送到对话」用）：稳定引用，不随 draft 变化。 */
   const appendDraft = useCallback((cwd: string, text: string) => {
-    patchTab(cwd, (t) => ({ draft: (t.draft ? `${t.draft}\n\n` : '') + text }));
-  }, [patchTab]);
+    const cur = getDraft(cwd);
+    draftSet(cwd, (cur ? `${cur}\n\n` : '') + text);
+  }, []);
 
   /* ---- 参考附件（按 cwd / 窗格独立）：拖入文件、附件按钮选取、粘贴板图片。
          图片走视觉（image block），其它文件按 @路径 让 agent 读取分析。 ---- */
@@ -1000,6 +1124,20 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   /** 删除会话（移到回收站）。乐观从列表移除；若某标签正开着它则清空该标签会话。
    *  顺手清掉该 sessionId 在 perm/model/reasoning/mcp 记忆里的残留（否则 localStorage 会无界增长）。 */
   const deleteSession = useCallback(async (cwd: string, sid: string) => {
+    // 不变量：被某个本地 Agent 绑定的会话不可删（它是该 Agent 的记忆来源）。先解绑再删。
+    const boundAgent = agentBySession(sid);
+    if (boundAgent) {
+      try { window.dispatchEvent(new CustomEvent('chaya:toast', { detail: { text: `该会话已是 Agent「@${boundAgent.name}」的记忆来源，请先在 Agents 面板解绑再删除。` } })); } catch { /* non-browser */ }
+      return { ok: false, blocked: true, agentName: boundAgent.name } as const;
+    }
+    const dir = realDir(cwd);
+    // 关键：把该会话从「乐观会话」与「显示顺序」记忆里一并抹掉。否则乐观条目永不退役（读盘
+    // 已无该会话 → 合并逻辑判定「还没落盘」继续插回），删完立刻又冒出一条占位（untitled）会话。
+    const oc = optimisticRef.current.get(dir);
+    if (oc) { oc.delete(sid); if (oc.size === 0) optimisticRef.current.delete(dir); }
+    const ord = sessionOrderRef.current[dir];
+    if (ord) sessionOrderRef.current[dir] = ord.filter((id) => id !== sid);
+    pendingByCwd.current.forEach((v, k) => { if (realDir(k) === dir && v === sid) pendingByCwd.current.delete(k); });
     setSessionsByPath((m) => {
       const cur = m[cwd];
       if (!Array.isArray(cur)) return m;
@@ -1016,9 +1154,29 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     // 删的是浏览树里（activeProvider）的会话；若某开着的标签绑着它，按该标签自带 provider 删更准。
     const prov = bound[0]?.provider ?? activeProvider;
     const res = await localAgent.deleteSession(prov, realDir(cwd), sid);
-    if (!res.ok) void loadSessionsFor(cwd);
+    // 删除落定后再静默重拉一次「权威列表」：即便关 tab 触发的 session_closed→finalizeTurn 抢先
+    // 重读盘把它捞回来，这一拉（此时磁盘已删）也会把它清掉，且乐观记忆已抹，不会再插回。
+    void loadSessionsFor(cwd);
     return res;
   }, [activeProvider, loadSessionsFor, closeTab]);
+
+  /** 侧路拉 claude 订阅额度（/usage）。账号级 → 刷到所有 claude 标签；主进程已带 45s 缓存。 */
+  const refreshUsage = useCallback((cwd?: string) => {
+    void localAgent.usage(cwd ? realDir(cwd) : undefined).then((u) => {
+      if (!u) return;
+      setTabs((ts) => {
+        let changed = false;
+        const next = ts.map((t) => {
+          if (t.provider !== 'claude') return t;
+          if (t.plan && t.plan.session === u.session && t.plan.week === u.week && t.plan.weekSonnet === u.weekSonnet) return t;
+          changed = true; return { ...t, plan: u };
+        });
+        return changed ? next : ts;
+      });
+    }).catch(() => {});
+  }, []);
+  // 挂载即拉一次额度，让额度条在发首条消息前就有初值（账号级、主进程缓存）。
+  useEffect(() => { refreshUsage(); }, [refreshUsage]);
 
   function handleEvent(cwd: string, ev: any) {
     const t = ev?.type;
@@ -1029,18 +1187,40 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       if (Array.isArray(ev.models) && ev.models.length) setModelOptions(ev.models);
       return;
     }
+    if (t === 'usage') {    // 静默 /usage 探针解析出的订阅额度 → 刷到所有 claude 标签（账号级）
+      const u = ev.data as UsageInfo | null;
+      if (u) setTabs((ts) => {
+        let changed = false;
+        const next = ts.map((tab) => {
+          if (tab.provider !== 'claude') return tab;
+          if (tab.plan && tab.plan.session === u.session && tab.plan.week === u.week && tab.plan.weekSonnet === u.weekSonnet) return tab;
+          changed = true; return { ...tab, plan: u };
+        });
+        return changed ? next : ts;
+      });
+      return;
+    }
     if (t === 'system' && ev.subtype === 'init') {
       if (parentId) return;
       if (ev.session_id) {
-        const wasNew = !pendingByCwd.current.get(cwd);
+        // 新会话拿到真实 id → 只记进 pendingByCwd（供标签写回 / 左栏点击匹配），
+        // 但【不】立刻刷进工程目录：新会话在「一次 AI 回答完成」后才显示（见 finalizeTurn）。
+        // 这样回答进行中工程目录保持安静、不闪、不提前冒出占位会话。
         pendingByCwd.current.set(cwd, ev.session_id);
-        // 新会话拿到真实 id → 早一步刷左栏，立刻显示该对话（不必等整回合结束）。
-        if (wasNew) setTimeout(() => void loadSessionsFor(cwd), 300);
       }
       // init 带 MCP 连接状态 → 存到该标签供 MCP 控件显示。
       const mcpStatus = Array.isArray(ev.mcp_servers) ? ev.mcp_servers : undefined;
       // 预热（用户还没发送）时 init 也会来——此时 running=false，别显示「处理中」。
-      patchTab(cwd, (tab) => ({ ...(tab.running ? { status: tr('local.status.processing') } : {}), ...(mcpStatus ? { mcpStatus } : {}) }));
+      // 关键：拿到真实 id 就立刻写回标签（不等回合结束）。否则新会话首轮里 tab.sessionId 仍是
+      // null、只活在 pendingByCwd，而左栏已经刷出这条会话——点它时 openSession 匹配不到正在跑
+      // 的标签，就又开一个空白窗（「幽灵会话/对不上」）。早写回让左栏点击直接聚焦到运行中的标签。
+      patchTab(cwd, (tab) => ({
+        ...(tab.running ? { status: tr('local.status.processing') } : {}),
+        ...(mcpStatus ? { mcpStatus } : {}),
+        // 只在「已发送、回合进行中」时写回——空闲预热的 pane 保持 sessionId=null，
+        // 切 provider 才能就地复用空 pane（switchActiveProvider 的 empty 判定）。
+        ...(ev.session_id && !tab.sessionId && tab.running ? { sessionId: ev.session_id } : {}),
+      }));
       return;
     }
     if (t === 'stream_event') {
@@ -1083,7 +1263,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       return;
     }
     if (t === 'question_request') {
-      patchTab(cwd, { question: { permId: ev.permId, questions: (ev.input && ev.input.questions) || [] }, status: tr('local.status.awaitingChoice') });
+      patchTab(cwd, { question: { permId: ev.permId, questions: (ev.input && ev.input.questions) || [], agentId: ev.agentId || null }, status: tr('local.status.awaitingChoice') });
       return;
     }
     if (t === 'permission_request') {
@@ -1091,6 +1271,18 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
         perm: {
           permId: ev.permId, toolName: ev.toolName, input: ev.input,
           title: ev.title, displayName: ev.displayName, description: ev.description, suggestions: ev.suggestions,
+          agentId: ev.agentId || null,
+        },
+        status: tr('local.status.awaitingPermission'),
+      });
+      return;
+    }
+    if (t === 'elicitation_request') {
+      patchTab(cwd, {
+        elicit: {
+          elicitId: ev.elicitId, serverName: ev.serverName, message: ev.message,
+          mode: ev.mode === 'url' ? 'url' : 'form', url: ev.url, schema: ev.schema,
+          title: ev.title, displayName: ev.displayName, description: ev.description,
         },
         status: tr('local.status.awaitingPermission'),
       });
@@ -1101,6 +1293,8 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       if (parentId) return;
       if (ev.session_id) pendingByCwd.current.set(cwd, ev.session_id);
       finalizeTurn(cwd, (ev.subtype && ev.subtype !== 'success') ? `⚠ ${tr('local.status.turnAbnormal')}` : '');
+      // 本回合占用了额度 → 侧路刷新 /usage（主进程带 45s 缓存，多窗格合一）。仅 claude 有。
+      if ((tabsRef.current.find((x) => x.cwd === cwd)?.provider ?? 'claude') === 'claude') refreshUsage(cwd);
       return;
     }
     if (t === 'error') { finalizeTurn(cwd, `⚠ ${ev.error || tr('local.status.execError')}`); return; }
@@ -1122,16 +1316,33 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       // 记住这个会话「最后一次发送时的权限级别」，重开历史会话时默认切回它。
       if (sid) { permMemRef.current[sid] = tab.permMode; savePermBySession(permMemRef.current); }
       return {
-        messages: [...tab.messages, ...tab.liveMsgs],
-        liveMsgs: [], running: false, perm: null, question: null,
+        ...appendWindowed(cwd, tab, tab.liveMsgs),
+        liveMsgs: [], running: false, perm: null, question: null, elicit: null,
         sessionId: sid,
         status: errStatus || '',
       };
     });
-    void loadSessionsFor(cwd);   // 新会话拿到真实 id / 已更新 → 刷新左栏
+    // 一次 AI 回答完成 → 此刻才把新会话显示到工程目录（回答中不显示）。读盘可能略有延迟，
+    // 先乐观插一条占位（标题取首条用户提问），随后读盘补回真实标题/回合数；已显示的不重复插。
+    if (pending) {
+      const dir = realDir(cwd);
+      const cur = sessionsByPathRef.current[dir];
+      const shown = Array.isArray(cur) && cur.some((s) => s.sessionId === pending);
+      if (!shown) {
+        let firstText: string | null = null;
+        const tb = tabsRef.current.find((x) => x.cwd === cwd);
+        for (const m of (tb?.messages || [])) {
+          if (m.role !== 'user') continue;
+          const tp = m.parts.find((p) => p.kind === 'text') as { kind: 'text'; text: string } | undefined;
+          if (tp && tp.text.trim()) { firstText = tp.text.trim().slice(0, 80); break; }
+        }
+        expandProject(cwd);
+        optimisticSession(cwd, pending, firstText || tr('local.newSession'));
+      }
+    }
+    void loadSessionsFor(cwd);   // 刷新左栏（已加载的目录静默就地替换，不闪）
     // 标题是后端在回合后异步生成的：补一刷快速拿到自动重命名，不必等下次手动 load。
     setTimeout(() => void loadSessionsFor(cwd), 1800);
-    expandProject(cwd);
   }
 
   /** 用户对权限请求作答 → 回传给 SDK 的 canUseTool，agent 继续。 */
@@ -1144,6 +1355,12 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   const answerQuestion = useCallback((cwd: string, permId: string, answerText: string) => {
     patchTab(cwd, { question: null, status: tr('local.status.processing') });
     void localAgent.permissionRespond(permId, { behavior: 'deny', message: answerText });
+  }, [patchTab, tr]);
+
+  /** 用户对 MCP elicitation 作答（提交表单 / 取消）→ 回传给 SDK onElicitation，MCP 调用继续。 */
+  const respondElicitation = useCallback((cwd: string, elicitId: string, result: ElicitResult) => {
+    patchTab(cwd, { elicit: null, status: result.action === 'accept' ? tr('local.status.processing') : '' });
+    void localAgent.elicitationRespond(elicitId, result);
   }, [patchTab, tr]);
 
   /** 真正把一轮发给后端：拼用户气泡、running=true、调 localAgent.send。
@@ -1165,14 +1382,28 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     const parts: MsgPart[] = skillName
       ? [{ kind: 'skill', name: skillName }, { kind: 'text', text: displayText + attNote }]
       : [{ kind: 'text', text: displayText + attNote }];
+    if (clearComposer) draftSet(cwd, '');
+    // 用户气泡对象提到 updater 外创建 → 引用稳定，配合 appendWindowed 的幂等护栏，StrictMode
+    // 双跑 updater 时不会把这条用户消息拼两遍（修「发一条出现两条用户消息」）。
+    const userMsg: TranscriptMessage = { role: 'user', parts, ts: null, uuid: null };
     patchTab(cwd, (t) => ({
-      ...(clearComposer ? { draft: '', attachments: [], skill: undefined } : {}),
-      messages: [...t.messages, { role: 'user', parts, ts: null, uuid: null }],
-      liveMsgs: [], running: true, status: tr('local.status.processingShort'), perm: null, question: null,
+      ...(clearComposer ? { attachments: [], skill: undefined } : {}),
+      ...appendWindowed(cwd, t, [userMsg]),
+      liveMsgs: [], running: true, status: tr('local.status.processingShort'), perm: null, question: null, elicit: null,
     }));
     const res = await localAgent.send({ provider: prov, cwd: realDir(cwd), lane: paneLane(cwd), sessionId: sid, prompt: sendText, permMode: tab.permMode, model: tab.model, reasoning: tab.reasoning, mcp: tab.mcp, apiKey, attachments });
     if (!res.ok) patchTab(cwd, (t) => ({ running: false, status: t.status.startsWith('⚠') ? t.status : `⚠ ${tr('local.status.startFailed')}` }));
   }, [tabs, providers, patchTab, dropSmooth, fetchCursorKey, tr]);
+
+  /** 程序化把一段文本作为新一轮发给某个会话（不读/不动用户草稿）。
+   *  召唤 agent 得到结论后，把结论交回发起会话、自动触发它继续（sendText=给 CLI 的全文，
+   *  displayText=气泡显示的简短交接说明）。仅当该会话空闲时发，忙时跳过（避免打断正在跑的轮次）。 */
+  const handoffToSession = useCallback((cwd: string, sendText: string, displayText: string): boolean => {
+    const tab = tabsRef.current.find((t) => t.cwd === cwd);
+    if (!tab || tab.running || !sendText.trim()) return false;
+    void dispatchTurn(cwd, sendText, displayText, [], false);
+    return true;
+  }, [dispatchTurn]);
 
   /** claude steering：agent 处理中把新消息直接推进常驻会话的输入流（SDK 在下一个工具
    *  间隙读到并调整方向）。气泡乐观渲染进 liveMsgs（时间线顺序正确：已流出的内容在上、
@@ -1189,8 +1420,9 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     const pend = steeredRef.current.get(cwd) || [];
     pend.push(sendText.trim());
     steeredRef.current.set(cwd, pend);
+    draftSet(cwd, '');
     patchTab(cwd, (t) => ({
-      draft: '', attachments: [], skill: undefined,
+      attachments: [], skill: undefined,
       liveMsgs: [...t.liveMsgs, { role: 'user', parts, ts: null, uuid: null }],
     }));
     // steer:true → 主进程只推消息，绝不动会话配置（effort 重建/切模型会杀掉跑着的回合）。
@@ -1204,13 +1436,14 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   const send = useCallback(async (cwd: string) => {
     const tab = tabs.find((t) => t.cwd === cwd);
     if (!cwd || !tab) return;
-    const raw = tab.draft.trim();
+    const raw = getDraft(cwd).trim();
     const attachments = tab.attachments || [];
     if (!raw && attachments.length === 0 && !tab.skill) return;
     if (tab.perm && attachments.length === 0) {
       const shortcut = normalizePermissionShortcut(raw);
       if (shortcut) {
-        patchTab(cwd, { draft: '', attachments: [] });
+        draftSet(cwd, '');
+        patchTab(cwd, { attachments: [] });
         respondPermission(cwd, tab.perm.permId, shortcut === 'allow'
           ? { behavior: 'allow' }
           : { behavior: 'deny', message: tr('local.perm.denyMessage') });
@@ -1236,6 +1469,11 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
         displayText = (mm?.[2] || '').trim();   // 手打 /name 命中技能 → 气泡去掉 /name 前缀，只留参数
       }
     }
+    // 发起提问才置左：把该会话提到 tab 栏最左（点击 tab 本身不再 promote），并发「发送」信号
+    // 让 ClientShell 同步把对应顶栏 tab 也提左。steer / 入队 / 首发都算一次发送。
+    promoteTab(cwd);
+    lastSentCwdRef.current = cwd;
+    setSendTick((x) => x + 1);
     // AI 处理中（含等权限/选择）：
     //  · claude（常驻 SDK 会话）→ 原生 steering：直接推进输入流，CLI 在下一个工具调用
     //    间隙读到并调整方向（与终端里运行中直接回车一致）。气泡乐观渲染进 liveMsgs。
@@ -1245,14 +1483,15 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
         await steerSend(cwd, sendText, displayText, attachments, skillName);
         return;
       }
+      draftSet(cwd, '');
       patchTab(cwd, (t) => ({
-        draft: '', attachments: [], skill: undefined,
+        attachments: [], skill: undefined,
         queue: [...(t.queue || []), { id: mkQueueId(), text: sendText, attachments }],
       }));
       return;
     }
     await dispatchTurn(cwd, sendText, displayText, attachments, true, skillName);
-  }, [tabs, providers, patchTab, respondPermission, dispatchTurn, steerSend, tr]);
+  }, [tabs, providers, patchTab, respondPermission, dispatchTurn, steerSend, promoteTab, tr]);
 
   /** 衍生：在当前 cwd 新开一个全新 session，并立刻把 text 作为首条发出。
    *  与原 session 地位一致（普通会话、进项目树、可再次衍生）。必须先 sessionClose 关掉
@@ -1345,17 +1584,17 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (!cwd) return;
     // 中断：把待发队列整合为一条回填到输入框（不发出），用户中断当前轮后可继续编辑再发。
     // 同步清空 queue —— 抢在中断触发的 finalizeTurn（running→false）之前，避免自动 flush 把队列发出去。
-    patchTab(cwd, (t) => {
-      const q = t.queue || [];
-      if (q.length === 0) return {};
+    const t = tabsRef.current.find((x) => x.cwd === cwd);
+    const q = t?.queue || [];
+    if (t && q.length > 0) {
       const merged = q.map((i) => i.text).filter(Boolean).join('\n\n');
-      // 时序：队列条目在前（更早入队），用户当前正在敲的草稿在后。
-      const draft = [merged, t.draft.trim()].filter(Boolean).join('\n\n');
+      // 时序：队列条目在前（更早入队），用户当前正在敲的草稿在后。草稿走外部 store。
+      draftSet(cwd, [merged, getDraft(cwd).trim()].filter(Boolean).join('\n\n'));
       const seen = new Set((t.attachments || []).map((a) => a.id));
       const attachments = [...(t.attachments || [])];
       for (const a of q.flatMap((i) => i.attachments || [])) { if (!seen.has(a.id)) { seen.add(a.id); attachments.push(a); } }
-      return { queue: [], draft, attachments };
-    });
+      patchTab(cwd, { queue: [], attachments });
+    }
     void localAgent.interrupt(realDir(cwd), paneLane(cwd));
   }, [patchTab]);
 
@@ -1458,13 +1697,14 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     status: activeTab?.status ?? '',
     running: activeTab?.running ?? false,
     loadingSession: activeTab?.loading ?? false,
-    draft: activeTab?.draft ?? '',
     perm: activeTab?.perm ?? null,
     question: activeTab?.question ?? null,
+    elicit: activeTab?.elicit ?? null,
     setDraft, appendDraft, setSkill,
     addAttachments, removeAttachment, pickAttachments,
-    openSession, newSession, switchActiveProvider, deleteSession, send, forkSendText, prewarmDerive, dequeue, interrupt, respondPermission, answerQuestion,
+    openSession, ensureAgentSessionTab, handoffToSession, newSession, switchActiveProvider, deleteSession, send, forkSendText, prewarmDerive, dequeue, interrupt, respondPermission, answerQuestion, respondElicitation,
     loadOlder,
+    lastSend: { tick: sendTick, cwd: lastSentCwdRef.current },
   }), [
     providers, provider, activeProvider, runningByProvider, attnByProvider, doneByProvider, current, detecting,
     cyclePermMode, commands, skills, modelOptions, modelsLoading, refreshModels, setModel, setReasoning, setMcp, listMcp, refreshMcp, reconnectMcp,
@@ -1476,8 +1716,9 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     activeTab,
     setDraft, appendDraft, setSkill,
     addAttachments, removeAttachment, pickAttachments,
-    openSession, newSession, switchActiveProvider, deleteSession, send, forkSendText, prewarmDerive, dequeue, interrupt, respondPermission, answerQuestion,
+    openSession, ensureAgentSessionTab, handoffToSession, newSession, switchActiveProvider, deleteSession, send, forkSendText, prewarmDerive, dequeue, interrupt, respondPermission, answerQuestion, respondElicitation,
     loadOlder,
+    sendTick,
   ]);
   return la;
 }

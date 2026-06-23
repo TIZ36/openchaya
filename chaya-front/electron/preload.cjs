@@ -25,10 +25,12 @@ contextBridge.exposeInMainWorld('chateeElectron', {
     deleteSession: (provider, cwd, sessionId) => ipcRenderer.invoke('localAgent:deleteSession', { provider, cwd, sessionId }),
     listCommands: (provider, cwd) => ipcRenderer.invoke('localAgent:listCommands', { provider, cwd }),
     scanCliSkills: () => ipcRenderer.invoke('localAgent:scanCliSkills'),
+    usage: (cwd) => ipcRenderer.invoke('localAgent:usage', { cwd }),
     busyKeys: () => ipcRenderer.invoke('localAgent:busyKeys'),
     send: (payload) => ipcRenderer.invoke('localAgent:send', payload),
     warm: (payload) => ipcRenderer.invoke('localAgent:warm', payload),
     permissionRespond: (permId, decision) => ipcRenderer.invoke('localAgent:permissionRespond', { permId, decision }),
+    elicitationRespond: (elicitId, result) => ipcRenderer.invoke('localAgent:elicitationRespond', { elicitId, result }),
     interrupt: (cwd, lane) => ipcRenderer.invoke('localAgent:interrupt', { cwd, lane }),
     sessionClose: (cwd, lane) => ipcRenderer.invoke('localAgent:sessionClose', { cwd, lane }),
     setPermMode: (cwd, permMode, lane) => ipcRenderer.invoke('localAgent:setPermMode', { cwd, permMode, lane }),
@@ -46,6 +48,8 @@ contextBridge.exposeInMainWorld('chateeElectron', {
     gitDiffFile: (dir, file, untracked) => ipcRenderer.invoke('localAgent:gitDiffFile', { dir, file, untracked }),
     gitRevertFile: (dir, file, untracked) => ipcRenderer.invoke('localAgent:gitRevertFile', { dir, file, untracked }),
     gitRevertAll: (dir) => ipcRenderer.invoke('localAgent:gitRevertAll', { dir }),
+    gitCommit: (dir, message) => ipcRenderer.invoke('localAgent:gitCommit', { dir, message }),
+    gitPush: (dir) => ipcRenderer.invoke('localAgent:gitPush', { dir }),
     // CLI 登录 pty：起会话 / 键入 / 杀 / 查状态 + 订阅按 id 路由的输出事件。
     loginStart: (provider, cols, rows) => ipcRenderer.invoke('localAgent:loginStart', { provider, cols, rows }),
     loginInput: (id, data) => ipcRenderer.invoke('localAgent:loginInput', { id, data }),
@@ -63,6 +67,14 @@ contextBridge.exposeInMainWorld('chateeElectron', {
       ipcRenderer.on('localAgent:event', handler);
       return () => ipcRenderer.removeListener('localAgent:event', handler);
     },
+    // 会话互问（Phase 2）：agent 通过 ask_session 工具发起 → 主进程请求渲染层执行 →
+    // 渲染层用 sessionBridge 跑完后把答复回传。onAgentAsk 订阅请求，agentAskResult 回结果。
+    onAgentAsk: (cb) => {
+      const handler = (_e, data) => cb(data);
+      ipcRenderer.on('localAgent:agentAskRequest', handler);
+      return () => ipcRenderer.removeListener('localAgent:agentAskRequest', handler);
+    },
+    agentAskResult: (requestId, text) => ipcRenderer.invoke('localAgent:agentAskResult', { requestId, text }),
   },
 
   // 自动化任务桥（纯本地，存 userData；调度仅在 App 运行期间）

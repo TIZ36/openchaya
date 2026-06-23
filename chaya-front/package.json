@@ -10,11 +10,12 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf node_modules/.vite dist",
-    "electron:dev": "concurrently -k -n VITE,ELECTRON -c cyan,magenta \"vite\" \"wait-on tcp:5177 && electron .\"",
+    "dev:name": "node scripts/dev-rename-electron.cjs",
+    "electron:dev": "concurrently -k -n VITE,ELECTRON -c cyan,magenta \"vite\" \"wait-on tcp:5177 && node scripts/dev-rename-electron.cjs && electron .\"",
     "electron:build": "vite build && electron-builder",
     "electron:pack": "vite build && electron-builder --dir",
     "rebuild:native": "electron-rebuild -f -w node-pty",
-    "postinstall": "electron-rebuild -f -w node-pty || true"
+    "postinstall": "electron-rebuild -f -w node-pty || true; node scripts/dev-rename-electron.cjs || true"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.150",
@@ -24,6 +25,8 @@
     "@codemirror/search": "^6.7.0",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.43.0",
+    "@dicebear/collection": "^9.4.2",
+    "@dicebear/core": "^9.4.2",
     "@larksuiteoapi/node-sdk": "^1.66.1",
     "@radix-ui/react-toast": "^1.2.15",
     "codemirror": "^6.0.2",

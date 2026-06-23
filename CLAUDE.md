@@ -213,11 +213,16 @@ const data = (raw && raw.code === 0 && raw.data) ? raw.data : raw;
 
 ## 启动方式
 
+> PG / Redis / MySQL 已统一到「本地共享基础设施」`~/docker-shared`（name: shared-infra，
+> 见其 README）。本项目 **不再自带 pg/redis**；共享实例端口/账号与原来一致，后端配置无需改动。
+> PG=shared-postgres(:5432, postgres/postgres, db=chaya)，Redis=shared-redis(:6379, pwd=123456, db=1)。
+
 ```bash
+cd ~/docker-shared && docker compose up -d         # 共享 PG + Redis(+MySQL)
 cd ~/aiproj/chaya-next
-docker compose up -d                    # PG + Redis
-cd chaya-engine && ./restart.sh         # 后端 :3002
-cd ~/aiproj/chaya-next/chaya-front && pnpm dev     # 前端 :5177
+docker compose --profile ml up -d                  # 仅本项目专属 ML 向量 sidecar :8100（按需）
+cd chaya-engine && ./restart.sh                    # 后端 :3002
+cd ~/aiproj/chaya-next/chaya-front && pnpm dev      # 前端 :5177
 ```
 
 ## 技术选型

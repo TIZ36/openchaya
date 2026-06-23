@@ -7,14 +7,17 @@
  *
  * 对话用时间线渲染（状态点 + 工具卡片：Edit 代码块 / Bash IN/OUT），配色走 Chaya token。
  */
-import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { basename, PERM_META, permModesFor, defaultPermMode, permLabel, permHint, LOGIN_PROVIDERS, type TranscriptMessage, type SlashCommand, type SessionSummary, type PermissionRequest, type QuestionRequest, type TabGroup as TabGroupT, type McpAvailable, type ModelInfo, type Attachment, type ProviderId } from './services/localAgent';
+import { basename, localAgent, PERM_META, permModesFor, defaultPermMode, permLabel, permHint, LOGIN_PROVIDERS, type TranscriptMessage, type SlashCommand, type SessionSummary, type PermissionRequest, type QuestionRequest, type ElicitRequest, type TabGroup as TabGroupT, type McpAvailable, type ModelInfo, type Attachment, type ProviderId, type AgentAskRequest } from './services/localAgent';
 import { LoginTerminal } from './LoginTerminal';
-import type { LocalAgentState, LayoutNode, DropSide, Tab, QueuedMsg } from './useLocalAgent';
-import { TAB_COLORS, isForeignLeaf, realDir, useLivePreview } from './useLocalAgent';
+import type { LocalAgentState, LayoutNode, DropSide, Tab, QueuedMsg, PlanUsage } from './useLocalAgent';
+import { TAB_COLORS, isForeignLeaf, realDir, paneLane, useLivePreview, useDraft, getDraft } from './useLocalAgent';
+import { askSession, onAsksChange, getAsk, getAsks, markInjected, cancelAsk, dismissAsk, respondAskPermission, answerAskQuestion, type AskTarget, type SessionAsk } from './services/sessionBridge';
+import { listAgents, subscribeAgents, touchAgent, retrieveAgentMemory, getAgent, recordMemoryOnAnswer, markMemoryWritten, type LocalAgent } from './services/agents';
+import { AgentFace } from './AgentFace';
 
 // 异类窗格渲染器：由 ClientShell 注入（wiki → 知识库；chat:<sid> → 聊天会话）。分屏树叶子
 // 若是异类 id（见 isForeignLeaf），就走这个渲染器，从而把 CLI 之外的页装进同一分屏。
@@ -22,7 +25,7 @@ export type ForeignPaneRender = (id: string) => React.ReactNode;
 export const ForeignPaneContext = React.createContext<ForeignPaneRender | null>(null);
 // 切换本地 provider（由 ClientShell 注入，底层写 settings.localAgentProvider）。
 // 供 composer 里的常规选择框用——徽标盲循环之外的显式入口。
-import { IconSend, IconAgentCode, IconPlus, IconChevron, IconTrash, IconModel, IconSkill, IconPin } from './icons';
+import { IconSend, IconAgentCode, IconPlus, IconChevron, IconTrash, IconModel, IconSkill, IconPin, IconPlug } from './icons';
 import { CodeBlock, PreBlock, mdRehypePlugins } from './codeBlock';
 import { useI18n, t } from '../i18n';
 import { useWikiNotes, SelectionToolbar, WikiNotes, WikiPicker, buildWikiItems, resolveWikiRef, type WikiItem } from './NotesLayer';
@@ -100,8 +103,12 @@ function groupModelsByVendor(models: ModelInfo[]): [string, ModelInfo[]][] {
 // 6K（原 18K）：多会话并行流式时每帧 reparse 成本相乘，阈值收紧到肉眼几乎
 // 注意不到降级、但并发下帧预算稳得住的水平。
 const LIVE_MD_MAX = 6_000;
+// 即便定稿，超大单条文本走 full markdown（remark/rehype/Shiki）也会让渲染进程单次大
+// 分配 OOM。源头（main readSession）已截断历史 part，这里再兜底直播路径与任何漏网者：
+// 超阈值直接当纯文本渲染（cheap），不进 markdown 解析。
+const MD_HARD_MAX = 200_000;
 export const MD: React.FC<{ text: string; live?: boolean }> = React.memo(({ text, live }) => {
-  if (live && text.length > LIVE_MD_MAX) {
+  if (text.length > ((live ? LIVE_MD_MAX : MD_HARD_MAX))) {
     return <div className="v2-md v2-md-livelong"><pre>{text}</pre></div>;
   }
   return (
@@ -115,6 +122,295 @@ export const MD: React.FC<{ text: string; live?: boolean }> = React.memo(({ text
   );
 });
 
+/** 轻量模糊匹配：query 须为 text 的子序列；返回打分（越大越好），无匹配返回 null。
+ *  连续命中 + 词首/分隔后命中加权，让「优化登录」能匹配上「登录页优化」一类。 */
+export function fuzzyScore(query: string, text: string): number | null {
+  if (!query) return 0;
+  let qi = 0, score = 0, streak = 0, prev = -2;
+  for (let ti = 0; ti < text.length && qi < query.length; ti++) {
+    if (text[ti] === query[qi]) {
+      streak = ti === prev + 1 ? streak + 1 : 1;
+      let pt = 1 + streak;
+      if (ti === 0 || /[\s/_\-·.]/.test(text[ti - 1])) pt += 3;   // 词首/分隔后加权
+      score += pt; prev = ti; qi++;
+    }
+  }
+  return qi === query.length ? score : null;
+}
+
+/** 文本 → 匹配用 token 集：拉丁词（≥2 字符）+ 中文 2-gram（中文无空格，靠 bigram 才能比关键词，
+ *  如「归因」「上游」）。这样草稿「主流程归因…」能命中描述「关于callback上游归因」的「归因」。 */
+function profileTokens(s: string): Set<string> {
+  const out = new Set<string>();
+  const lower = (s || '').toLowerCase();
+  for (const m of lower.matchAll(/[a-z0-9]{2,}/g)) out.add(m[0]);
+  const cjk = lower.replace(/[^一-鿿]+/g, '');
+  for (let i = 0; i + 2 <= cjk.length; i++) out.add(cjk.slice(i, i + 2));
+  return out;
+}
+
+/** 草稿与 agent 能力的匹配。CJK 友好（名/标签/描述按拉丁词+中文 bigram 比 token）。
+ *  - strong：命中了 agent 的名字根 / 标签 token（= 用户意图明确的触发关键词）。
+ *  - distinct：与草稿交集的不同 token 数（多个交集 = 更可信，不是蹭一个字）。
+ *  strict=true（用于「发送即自动分配」）：必须 strong 或 ≥2 个交集，避免不相关内容也召唤；
+ *  strict=false（用于联想 chip 这种「仅建议」）：阈值低，宽松提示，用户自己点。 */
+export function associateAgent(draft: string, agents: LocalAgent[], strict = false): LocalAgent | null {
+  const d = draft.trim().toLowerCase();
+  if (d.length < 4) return null;
+  const dq = profileTokens(d);
+  let best: LocalAgent | null = null; let bestScore = 0; let bestStrong = false; let bestDistinct = 0;
+  for (const a of agents) {
+    let score = 0; let distinct = 0; let strong = false;
+    const name = a.name.toLowerCase();
+    if (name.length >= 3 && d.includes(name)) { score += 5; strong = true; }
+    for (const t of (a.tags || [])) { const tg = t.toLowerCase().trim(); if (tg.length >= 2 && d.includes(tg)) { score += 4; strong = true; } }
+    // 名字根/标签的 token（如 @pltv-expert 里的 "pltv"、标签「归因」）命中 = strong；描述 token 命中 = weak。
+    const nameTok = profileTokens(`${a.name} ${(a.tags || []).join(' ')}`);
+    const descTok = profileTokens(a.description);
+    for (const t of dq) {
+      const cjk = !/[a-z0-9]/.test(t);
+      if (nameTok.has(t)) { score += cjk ? 4 : 3; distinct++; strong = true; }
+      else if (descTok.has(t)) { score += cjk ? 3 : 2; distinct++; }
+    }
+    if (score > bestScore) { bestScore = score; best = a; bestStrong = strong; bestDistinct = distinct; }
+  }
+  if (!best) return null;
+  if (strict) return ((bestStrong || bestDistinct >= 2) && bestScore >= 4) ? best : null;
+  return bestScore >= 3 ? best : null;
+}
+
+/** 会话互问的一个候选目标（# 选择器用）。 */
+interface AskCand {
+  key: string;
+  kind: 'existing' | 'spawn';
+  provider: ProviderId;
+  dir: string;
+  lane?: string;
+  sessionId?: string | null;
+  title: string;
+  proj: string;       // 项目名（分组用）
+  dirLabel: string;   // 目录 basename（前缀显示）
+  open: boolean;      // 当前是否已打开（已开优先）
+  updatedAt: number;
+  model?: string;
+  mcp?: string[];
+}
+
+/** 汇总「可被问的会话」候选：① 跨 provider 的已打开会话；② 各项目已存盘会话（当前 provider）。
+ *  纯函数，# 选择器与 agent 自主提问（ask_session）共用一套候选与判定。 */
+export function buildAskCandidates(la: LocalAgentState, excludeCwd?: string, untitled = '未命名会话'): AskCand[] {
+  const out: AskCand[] = [];
+  const openKeys = new Set<string>();
+  for (const x of la.tabs) {
+    if ((excludeCwd && x.cwd === excludeCwd) || !x.provider || (!x.sessionId && !x.running)) continue;
+    const dir = realDir(x.cwd);
+    out.push({
+      key: `ex:${x.cwd}`, kind: 'existing', provider: x.provider, dir, lane: paneLane(x.cwd),
+      sessionId: x.sessionId, model: x.model, mcp: x.mcp, open: true, updatedAt: Number.MAX_SAFE_INTEGER,
+      title: (x.sessionId && la.sessionTitles[x.sessionId]) || x.title || basename(dir),
+      proj: la.projects.find((p) => p.path === dir)?.name || basename(dir), dirLabel: basename(dir),
+    });
+    if (x.sessionId) openKeys.add(`${dir}|${x.sessionId}`);
+  }
+  for (const p of la.projects) {
+    const dir = realDir(p.path);
+    const ss = la.sessionsByPath[dir];
+    if (!Array.isArray(ss)) continue;
+    for (const s of ss) {
+      if (openKeys.has(`${dir}|${s.sessionId}`)) continue;
+      out.push({
+        key: `sv:${dir}:${s.sessionId}`, kind: 'spawn', provider: la.activeProvider, dir, lane: undefined,
+        sessionId: s.sessionId, open: false, updatedAt: s.updatedAt || 0,
+        title: la.sessionTitles[s.sessionId] || s.title || s.preview || untitled,
+        proj: p.name || basename(dir), dirLabel: basename(dir),
+      });
+    }
+  }
+  return out;
+}
+
+const askCandToTarget = (c: AskCand): AskTarget => ({
+  kind: c.kind, provider: c.provider, dir: c.dir, lane: c.lane, sessionId: c.sessionId,
+  title: `${c.dirLabel} · ${c.title}`, model: c.model, mcp: c.mcp,
+});
+
+/** 把 agent 的 ask_session({to, ephemeral}) 解析成一个目标候选。
+ *  ephemeral / 无匹配 → 在最佳匹配项目（或发起会话所在目录）临时起一个新会话作答。 */
+function resolveAgentAskTarget(la: LocalAgentState, req: AgentAskRequest): AskTarget {
+  const fromDir = realDir(req.fromRunKey);
+  const pool = buildAskCandidates(la, req.fromRunKey).filter((c) => `${c.dir}${c.lane ? `#@#${c.lane}` : ''}` !== req.fromRunKey);
+  const q = (req.to || '').toLowerCase();
+  let best: AskCand | null = null; let bestScore = -1;
+  for (const c of pool) {
+    const s = fuzzyScore(q, `${c.dirLabel} ${c.proj} ${c.title}`.toLowerCase());
+    if (s !== null && s > bestScore) { bestScore = s; best = c; }
+  }
+  if (req.ephemeral || !best) {
+    const dir = best?.dir || fromDir;
+    return { kind: 'spawn', provider: la.activeProvider, dir, sessionId: null, title: `${basename(dir)} · 临时会话` };
+  }
+  return askCandToTarget(best);
+}
+
+/** 会话互问 · agent 端控制器：订阅主进程 ask_session 请求 → 解析目标 → 复用 sessionBridge 跑完 →
+ *  把答复回传，解开 agent 的工具调用。挂一份即可（单例，在 ClientShell）。 */
+export const AgentAskController: React.FC<{ la: LocalAgentState }> = ({ la }) => {
+  const laRef = useRef(la);
+  laRef.current = la;
+  useEffect(() => {
+    return localAgent.onAgentAsk((req: AgentAskRequest) => {
+      const cur = laRef.current;
+      // 让候选更全：给尚未加载的项目各拉一次会话列表（best-effort，不阻塞本次解析）。
+      cur.projects.forEach((p) => { if (cur.sessionsByPath[realDir(p.path)] === undefined) void cur.loadSessionsFor(p.path); });
+      const target = resolveAgentAskTarget(cur, req);
+      const ask = askSession({ from: { cwd: req.fromRunKey, title: 'AI 会话' }, target, question: req.question, origin: 'agent' });
+      let settled = false;
+      const settle = () => {
+        const a = getAsk(ask.id);
+        if (!a || settled) return;
+        if (a.phase === 'answered' || a.phase === 'error' || a.phase === 'cancelled') {
+          settled = true; off();
+          void localAgent.agentAskResult(req.requestId, a.answer || a.error || '（对方会话未产出回答）');
+        }
+      };
+      const off = onAsksChange(settle);
+      settle();   // 兜底：极少数同步即终态
+    });
+  }, []);
+  return null;
+};
+
+const SUMMON_PHASE: Record<string, string> = { pending: '正在拉起…', running: '处理中…', answered: '已答复', error: '出错', cancelled: '已取消' };
+
+/** 会话内联的「被分配 Agent」卡片：紧凑、子 agent 风格，嵌在对话流里。运行时折叠成一行
+ *  （脸+谁+当前活动+步骤计时），点开看流式 markdown 答复；答完默认展开，可纳入草稿（item 5/1.1/2.3）。
+ *  若被分配的会话在等用户确认（权限/AskUser），头部给「需要确认 → 去会话」直达其后台标签。 */
+/** 召唤详情大弹框（点击小卡片打开）：满血显示流式 markdown 输出 + 权限/AskUserQuestion 交互。
+ *  portal 进 .chaya-v2 根（themed CSS 变量才生效）。 */
+const SummonModal: React.FC<{ ask: SessionAsk; onAdopt: (text: string) => void; onClose: () => void }> = ({ ask, onAdopt, onClose }) => {
+  const busy = ask.phase === 'pending' || ask.phase === 'running';
+  const body = ask.answer || ask.live;
+  const adopt = () => {
+    const text = (ask.answer || '').trim();
+    onAdopt(`> 来自 @${ask.agentName || 'agent'} 的回答：\n${text.split('\n').map((l) => `> ${l}`).join('\n')}`);
+    markInjected(ask.id);
+  };
+  const host: Element = (typeof document !== 'undefined' && document.querySelector('.chaya-v2')) || document.body;
+  return createPortal(
+    <div className="v2-summon-scrim" onMouseDown={onClose}>
+      <div className="v2-summon-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="hd">
+          <span className="face"><AgentFace seed={ask.agentName || ''} /></span>
+          <span className="who">分配给 <b>@{ask.agentName}</b></span>
+          <span className={`ph${busy ? ' busy' : ''}`}>{busy && <i className="dot" aria-hidden />}{(ask.perm || ask.askQuestion) ? '待你确认' : SUMMON_PHASE[ask.phase]}</span>
+          <div className="v2-grow" />
+          <button className="x" title="关闭" onMouseDown={onClose}>✕</button>
+        </div>
+        <div className="q">{ask.question}</div>
+        <div className="bd">
+          {ask.askQuestion && <div className="ask"><QuestionPrompt q={ask.askQuestion} onSubmit={(text) => answerAskQuestion(ask.id, text)} onCancel={() => answerAskQuestion(ask.id, '用户取消')} /></div>}
+          {ask.perm && <div className="ask"><PermissionPrompt perm={ask.perm} onAllow={() => respondAskPermission(ask.id, { behavior: 'allow' })} onAlways={() => respondAskPermission(ask.id, { behavior: 'allow', updatedPermissions: ask.perm!.suggestions || undefined })} onDeny={() => respondAskPermission(ask.id, { behavior: 'deny', message: '用户拒绝' })} /></div>}
+          {body
+            ? <div className="body"><MD text={body} live={busy} />{busy && <span className="caret" aria-hidden />}</div>
+            : busy && <div className="wait">{ask.activity || '正在把 Agent 拉进议题…'}</div>}
+          {ask.error && <div className="err">{ask.error}</div>}
+        </div>
+        <div className="ft">
+          {busy && <button className="stop" onMouseDown={() => cancelAsk(ask.id)}>中断</button>}
+          {ask.injected ? <span className="handed">已交回主会话</span> : (ask.answer && <button className="adopt" onMouseDown={adopt}>纳入草稿</button>)}
+          {!busy && <button className="x2" onMouseDown={() => { dismissAsk(ask.id); onClose(); }}>移除</button>}
+          <div className="v2-grow" />
+          <button className="ghost" onMouseDown={onClose}>关闭</button>
+        </div>
+      </div>
+    </div>,
+    host,
+  );
+};
+
+/** 会话内联的「被分配 Agent」小卡片：一行（脸 + @名 + 动态输出 + 状态），不全宽、可多个堆叠；
+ *  点击打开大弹框看满血流式输出 + 交互。等你确认时高亮提示去点开。 */
+const SummonCard: React.FC<{ ask: SessionAsk; onAdopt: (text: string) => void }> = ({ ask, onAdopt }) => {
+  const busy = ask.phase === 'pending' || ask.phase === 'running';
+  const needsInput = !!(ask.perm || ask.askQuestion);
+  const [modal, setModal] = useState(false);
+  // 一行动态输出：跑动时显示工具活动 / 流式尾巴；答完显示答案首句预览（状态点在右侧，不重复）。
+  const tail = ask.activity || (ask.live ? ask.live.replace(/\s+/g, ' ').trim().slice(-72) : '');
+  const preview = (ask.answer || '').split('\n').map((s) => s.trim()).filter(Boolean)[0] || '';
+  const lineText = needsInput ? '需要你确认' : (busy ? (tail || '处理中…') : (ask.error ? ask.error : (preview || '已答复')));
+  return (
+    <>
+      <button
+        className={`v2-la-sline phase-${ask.phase}${busy ? ' busy' : ''}${needsInput ? ' attn' : ''}`}
+        onClick={() => setModal(true)}
+        title={ask.question}
+      >
+        <span className="face"><AgentFace seed={ask.agentName || ''} /></span>
+        <span className="who">@{ask.agentName}</span>
+        <span className="act">{lineText}</span>
+        <span className="ph">{busy && <i className="dot" aria-hidden />}{needsInput ? '待确认' : SUMMON_PHASE[ask.phase]}</span>
+        <span className="chev" aria-hidden>⤢</span>
+      </button>
+      {modal && <SummonModal ask={ask} onAdopt={onAdopt} onClose={() => setModal(false)} />}
+    </>
+  );
+};
+
+/** 自订阅单条召唤（按 id）：让卡片随 bridge store 自更新，而不连累外层时间线每帧重渲。 */
+const SummonCardLive: React.FC<{ id: string; onAdopt: (text: string) => void }> = ({ id, onAdopt }) => {
+  const ask = useSyncExternalStore(onAsksChange, () => getAsk(id), () => getAsk(id));
+  if (!ask) return null;
+  return <SummonCard ask={ask} onAdopt={onAdopt} />;
+};
+
+/** 召唤汇报控制器（单例，ClientShell 挂）：被分配的 agent 得出结论后，自动把结论交回发起会话、
+ *  触发它继续作答（子 agent → 主 agent 的编排）。每条召唤只交接一次；主会话忙则跳过。 */
+export const AgentSummonReportController: React.FC<{ la: LocalAgentState }> = ({ la }) => {
+  const laRef = useRef(la);
+  laRef.current = la;
+  const done = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const handle = () => {
+      for (const a of getAsks()) {
+        if (a.origin !== 'agent-summon' || a.phase !== 'answered' || a.injected || done.current.has(a.id)) continue;
+        const answer = (a.answer || '').trim();
+        if (!answer) continue;
+        done.current.add(a.id);
+        const sendText = `（系统）你委派的 @${a.agentName || 'agent'} 已就「${a.question}」给出调研结论：\n\n${answer}\n\n请基于此结论直接回应用户的原始诉求，无需复述全文。`;
+        const display = `↩ @${a.agentName || 'agent'} 调研完成，已交回主会话`;
+        const ok = laRef.current.handoffToSession(a.fromCwd, sendText, display);
+        if (ok) markInjected(a.id);   // 标记已交回（卡片显示「已交回主会话」，不再给手动按钮）
+        else done.current.delete(a.id);   // 主会话忙 → 留待下次（用户也可手动纳入）
+      }
+    };
+    const off = onAsksChange(handle);
+    handle();
+    return off;
+  }, []);
+  return null;
+};
+
+/** 记忆写入控制器（单例，ClientShell 挂）：监听 agent-summon 答完，把问答存为一条记忆（混合·便宜半）。
+ *  仅对配了 smartnote 记忆 + autoDistill 的 agent 生效；记 ts 到本地台账。不跑 LLM。 */
+export const AgentMemoryController: React.FC = () => {
+  const seen = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const handle = () => {
+      for (const a of getAsks()) {
+        if (a.origin !== 'agent-summon' || a.phase !== 'answered' || !a.agentId || seen.current.has(a.id)) continue;
+        seen.current.add(a.id);
+        const agent = getAgent(a.agentId);
+        if (!agent) continue;
+        void recordMemoryOnAnswer(agent, a.question, a.answer || '').then((ok) => { if (ok) markMemoryWritten(agent.id); });
+      }
+    };
+    const off = onAsksChange(handle);
+    handle();
+    return off;
+  }, []);
+  return null;
+};
+
 export const PROVIDER_LABELS: Record<string, string> = {
   claude: 'Claude Code',
   cursor: 'Cursor',
@@ -127,6 +423,16 @@ export const PROVIDER_LABELS: Record<string, string> = {
 const IconFolder = () => (
   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
     <path d="M1.5 3.5h4l1.5 2h7.5v7a1 1 0 0 1-1 1h-12a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1Z" />
+  </svg>
+);
+
+// Agent 徽标：圆角机身 + 天线 + 双眼 + 两侧耳，匹配 24×24 线性图标风格。
+export const IconAgent = () => (
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="5" width="10" height="8" rx="2.4" />
+    <path d="M8 5V2.7" /><circle cx="8" cy="1.9" r="0.95" />
+    <path d="M1.8 8.4v1.8M14.2 8.4v1.8" />
+    <path d="M6 9h0.01M10 9h0.01" />
   </svg>
 );
 
@@ -215,8 +521,22 @@ export const LocalAgentTree: React.FC<{
   const { t: tr } = useI18n();
   const openSess = (cwd: string, sid: string, title: string) => { onEnter(); void la.openSession(cwd, sid, title); };
   const fresh = (cwd: string) => { onEnter(); la.newSession(cwd); };
+  // 订阅本地 Agent 列表：用于给会话行打「已绑定」徽标（绑定则不可删）。
+  const [agents, setAgents] = useState<LocalAgent[]>(() => listAgents());
+  useEffect(() => subscribeAgents(() => setAgents(listAgents())), []);
+  const agentForSession = useCallback((sid: string) => agents.find((a) => a.sessionId === sid), [agents]);
+  const promote = (p: { path: string; name: string }, s: SessionSummary, title: string) => {
+    const existing = agentForSession(s.sessionId);
+    window.dispatchEvent(new CustomEvent('chaya:promoteAgent', { detail: {
+      agentId: existing?.id, provider: la.activeProvider, dir: realDir(p.path), sessionId: s.sessionId, title,
+    } }));
+  };
   return (
     <div className="v2-la-tree">
+      <div className="v2-sec v2-la-projsec">
+        <span>Agents</span>
+        <button className="v2-add" title="管理本地 Agent" onClick={() => window.dispatchEvent(new CustomEvent('chaya:openAgents'))}><IconAgent /></button>
+      </div>
       {/* CLI 品牌行已上移到主导航的 CLI 入口（含 provider 徽标）；这里直接从项目列表开始。 */}
       {/* 项目列表 */}
       <div className="v2-sec v2-la-projsec">
@@ -256,7 +576,9 @@ export const LocalAgentTree: React.FC<{
                       active={la.activeSessionId === s.sessionId && realDir(la.activeCwd || '') === p.path}
                       open={la.tabs.some((t) => realDir(t.cwd) === p.path && t.sessionId === s.sessionId)}
                       pinned={!!la.pinnedSessions[s.sessionId]}
+                      boundAgent={agentForSession(s.sessionId)?.name}
                       onPin={() => la.toggleSessionPin(s.sessionId)}
+                      onPromote={() => promote(p, s, la.sessionTitles[s.sessionId] || s.title || s.preview || tr('local.untitledSession'))}
                       onRename={(title) => la.renameSession(s.sessionId, title)}
                       onOpen={() => openSess(p.path, s.sessionId, la.sessionTitles[s.sessionId] || s.title || s.preview || tr('local.untitledSession'))}
                       onDelete={() => la.deleteSession(p.path, s.sessionId)}
@@ -304,7 +626,7 @@ const TabChip: React.FC<{ la: LocalAgentState; t: Tab; grouped?: boolean; dimmed
   return (
     <div
       className={`v2-la-tab${isActive ? ' active' : ''}${la.gridCwds.includes(t.cwd) ? ' ingrid' : ''}${grouped ? ' grouped' : ''}${dropBefore ? ' dropbefore' : ''}${dimmed ? ' dim' : ''}`}
-      onClick={() => { la.setActiveTab(t.cwd); la.promoteTab(t.cwd); onActivate?.(t.cwd); }}
+      onClick={() => { la.setActiveTab(t.cwd); onActivate?.(t.cwd); }}
       draggable={!dimmed}
       onDragStart={dimmed ? undefined : (e) => { e.dataTransfer.setData('text/cwd', t.cwd); e.dataTransfer.effectAllowed = 'copy'; }}
       onContextMenu={(e) => { e.preventDefault(); onMenu(e, 'tab', t.cwd); }}
@@ -519,11 +841,13 @@ const SessionRow: React.FC<{
   active: boolean;
   open?: boolean;
   pinned?: boolean;
+  boundAgent?: string;       // 已绑定的 Agent @-handle（绑定则不可删 + 显示徽标）
   onPin?: () => void;
+  onPromote?: () => void;    // 升格为 Agent
   onRename?: (title: string) => void;
   onOpen: () => void;
   onDelete: () => void;
-}> = ({ s, displayName, active, open, pinned, onPin, onRename, onOpen, onDelete }) => {
+}> = ({ s, displayName, active, open, pinned, boundAgent, onPin, onPromote, onRename, onOpen, onDelete }) => {
   const { t: tr } = useI18n();
   const [confirm, setConfirm] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -545,7 +869,7 @@ const SessionRow: React.FC<{
           onBlur={(e) => { onRename?.(e.target.value); setRenaming(false); }}
         />
       ) : (
-        <span className="t">{displayName}</span>
+        <span className="t">{displayName}{boundAgent && <span className="v2-la-sess-agent" title={`已绑定为 Agent @${boundAgent}`}>@{boundAgent}</span>}</span>
       )}
       {!renaming && (confirm ? (
         <span className="v2-la-sess-confirm" onClick={(e) => e.stopPropagation()}>
@@ -555,8 +879,13 @@ const SessionRow: React.FC<{
       ) : (
         <>
           <span className="m">{fmtTime(s.updatedAt)}</span>
+          {onPromote && (
+            <button className={`v2-la-sess-promote${boundAgent ? ' on' : ''}`} title={boundAgent ? `已是 Agent @${boundAgent}` : '升格为 Agent'} onClick={(e) => { e.stopPropagation(); onPromote(); }}><IconAgent /></button>
+          )}
           <button className={`v2-la-sess-pin${pinned ? ' on' : ''}`} title={pinned ? tr('local.session.unpin') : tr('local.session.pin')} onClick={(e) => { e.stopPropagation(); onPin?.(); }}><IconPin /></button>
-          <button className="v2-la-sess-del" title={tr('local.session.delete')} onClick={(e) => { e.stopPropagation(); setConfirm(true); }}><IconTrash /></button>
+          {boundAgent
+            ? <button className="v2-la-sess-del" disabled title={`已绑定 Agent @${boundAgent}，请先解绑再删除`} onClick={(e) => e.stopPropagation()} style={{ opacity: 0.35, cursor: 'not-allowed' }}><IconTrash /></button>
+            : <button className="v2-la-sess-del" title={tr('local.session.delete')} onClick={(e) => { e.stopPropagation(); setConfirm(true); }}><IconTrash /></button>}
         </>
       ))}
     </div>
@@ -586,7 +915,10 @@ const PermissionPrompt: React.FC<{
   const canAlways = Array.isArray(perm.suggestions) && perm.suggestions.length > 0;
   return (
     <div className="v2-la-perm">
-      <div className="v2-la-perm-hd"><span className="dot" /><b>{perm.toolName}</b><span className="t">{heading}</span></div>
+      <div className="v2-la-perm-hd">
+        <span className="dot" /><b>{perm.toolName}</b><span className="t">{heading}</span>
+        {perm.agentId && <span className="v2-la-subagent-tag" title={`${tr('local.subagent.from')} · ${perm.agentId}`}>{tr('local.subagent.tag')}</span>}
+      </div>
       {detail && <div className="v2-la-perm-body">{detail}</div>}
       <div className="v2-la-perm-acts">
         <button className="allow" onClick={onAllow}>{tr('local.perm.allow')}</button>
@@ -662,6 +994,7 @@ const QuestionPrompt: React.FC<{
 
   return (
     <div className="v2-la-q">
+      {q.agentId && <div className="v2-la-q-from"><span className="v2-la-subagent-tag" title={`${tr('local.subagent.from')} · ${q.agentId}`}>{tr('local.subagent.tag')}</span></div>}
       {/* 多问题：横向分页 tab（点击切题，答完打勾），只显示当前题，省高度 */}
       {multiQ && (
         <div className="v2-la-q-tabs">
@@ -686,6 +1019,83 @@ const QuestionPrompt: React.FC<{
         <button className="submit" disabled={!canSubmit} onClick={submit}>
           {tr('local.question.submit')}{multiQ ? ` (${answeredCount}/${questions.length})` : ''}
         </button>
+        <button className="cancel" onClick={onCancel}>{tr('common.cancel')}</button>
+      </div>
+    </div>
+  );
+};
+
+/* MCP elicitation/create → 表单（按 requestedSchema 渲染字段）或 URL 授权卡片。
+   提交=accept(content)，取消=cancel；不填=decline。锚在输入框上方，不随对话流滚走。 */
+const ElicitPrompt: React.FC<{
+  elicit: ElicitRequest;
+  onAccept: (content: Record<string, unknown>) => void;
+  onDecline: () => void;
+  onCancel: () => void;
+}> = ({ elicit, onAccept, onDecline, onCancel }) => {
+  const { t: tr } = useI18n();
+  const schema = (elicit.schema && typeof elicit.schema === 'object') ? elicit.schema : null;
+  const props = (schema?.properties && typeof schema.properties === 'object') ? schema.properties as Record<string, any> : {};
+  const required: string[] = Array.isArray(schema?.required) ? schema!.required as string[] : [];
+  const fields = Object.keys(props);
+  const [vals, setVals] = useState<Record<string, unknown>>(() => {
+    const init: Record<string, unknown> = {};
+    for (const k of fields) { const d = props[k]?.default; if (d !== undefined) init[k] = d; else if (props[k]?.type === 'boolean') init[k] = false; }
+    return init;
+  });
+  const set = (k: string, v: unknown) => setVals((s) => ({ ...s, [k]: v }));
+  const missing = required.some((k) => { const v = vals[k]; return v === undefined || v === '' || v === null; });
+
+  const heading = elicit.title || elicit.displayName || tr('local.perm.requests', { tool: elicit.serverName || 'MCP' });
+
+  if (elicit.mode === 'url') {
+    return (
+      <div className="v2-la-perm v2-la-elicit">
+        <div className="v2-la-perm-hd"><span className="dot" /><b>{elicit.serverName || 'MCP'}</b><span className="t">{heading}</span></div>
+        <div className="v2-la-perm-body">
+          {elicit.message && <div className="desc">{elicit.message}</div>}
+          {elicit.url && <a className="v2-la-elicit-url" href={elicit.url} target="_blank" rel="noreferrer">{elicit.url}</a>}
+        </div>
+        <div className="v2-la-perm-acts">
+          <button className="allow" onClick={() => { if (elicit.url) window.open(elicit.url, '_blank', 'noreferrer'); onAccept({}); }}>{tr('local.elicit.openAuth') || '打开授权'}</button>
+          <button className="deny" onClick={onCancel}>{tr('common.cancel')}</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="v2-la-perm v2-la-elicit">
+      <div className="v2-la-perm-hd"><span className="dot" /><b>{elicit.serverName || 'MCP'}</b><span className="t">{heading}</span></div>
+      <div className="v2-la-perm-body">
+        {elicit.message && <div className="desc">{elicit.message}</div>}
+        {fields.length === 0 && <div className="desc">{tr('local.elicit.noFields') || '（无字段，确认即可）'}</div>}
+        {fields.map((k) => {
+          const f = props[k] || {};
+          const label = f.title || k;
+          const isReq = required.includes(k);
+          const enumOpts: unknown[] | null = Array.isArray(f.enum) ? f.enum : null;
+          return (
+            <label key={k} className="v2-la-elicit-field">
+              <span className="lab">{label}{isReq && <span className="req">*</span>}</span>
+              {f.description && <span className="fdesc">{f.description}</span>}
+              {enumOpts
+                ? <select value={String(vals[k] ?? '')} onChange={(e) => set(k, e.target.value)}>
+                    <option value="" disabled>{tr('local.elicit.choose') || '请选择…'}</option>
+                    {enumOpts.map((o, i) => <option key={i} value={String(o)}>{String(o)}</option>)}
+                  </select>
+                : f.type === 'boolean'
+                ? <input type="checkbox" checked={!!vals[k]} onChange={(e) => set(k, e.target.checked)} />
+                : (f.type === 'number' || f.type === 'integer')
+                ? <input type="number" value={vals[k] === undefined ? '' : String(vals[k])} onChange={(e) => set(k, e.target.value === '' ? undefined : Number(e.target.value))} />
+                : <input type="text" value={String(vals[k] ?? '')} onChange={(e) => set(k, e.target.value)} />}
+            </label>
+          );
+        })}
+      </div>
+      <div className="v2-la-perm-acts">
+        <button className="allow" disabled={missing} onClick={() => onAccept(vals)}>{tr('local.elicit.submit') || '提交'}</button>
+        <button className="deny" onClick={onDecline}>{tr('local.elicit.decline') || '拒绝'}</button>
         <button className="cancel" onClick={onCancel}>{tr('common.cancel')}</button>
       </div>
     </div>
@@ -717,11 +1127,21 @@ type PaneTimelineProps = {
   provider: string;
   sessionId: string | null;
   scrollerRef: React.RefObject<HTMLDivElement | null>;
+  summonAnchors: { id: string; anchorKey?: string }[];   // 召唤卡片按锚点插进时间线（稳定，仅增减时变）
+  onSummonAdopt: (text: string) => void;
 };
-const PaneTimeline: React.FC<PaneTimelineProps> = React.memo(({ cwd, turns, loadingSession, hasConversation: hasConvBase, running, busy, status, provider, sessionId, scrollerRef }) => {
+const PaneTimeline: React.FC<PaneTimelineProps> = React.memo(({ cwd, turns, loadingSession, hasConversation: hasConvBase, running, busy, status, provider, sessionId, scrollerRef, summonAnchors, onSummonAdopt }) => {
   const { t: tr } = useI18n();
   const livePreview = useLivePreview(cwd);
   const hasConversation = hasConvBase || !!livePreview;
+  // 召唤卡片插进时间线：锚点命中某轮 key → 排在该轮之后；锚点已不在窗口（或无锚）→ 落到末尾。
+  const turnKeys = new Set(turns.map((t) => t.key).filter(Boolean) as string[]);
+  const summonByAnchor = new Map<string, string[]>();
+  const summonTail: string[] = [];
+  for (const s of summonAnchors) {
+    if (s.anchorKey && turnKeys.has(s.anchorKey)) (summonByAnchor.get(s.anchorKey) || summonByAnchor.set(s.anchorKey, []).get(s.anchorKey)!).push(s.id);
+    else summonTail.push(s.id);
+  }
   // 流式跟随：用户近底则跟字滚，已上翻看历史则不打扰（硬滚/换会话仍由父级处理）。
   useEffect(() => {
     if (!livePreview) return;
@@ -735,18 +1155,26 @@ const PaneTimeline: React.FC<PaneTimelineProps> = React.memo(({ cwd, turns, load
       {!loadingSession && !hasConversation && (
         <div className="v2-la-hint center">{sessionId ? tr('local.pane.emptySession') : tr('local.pane.newSessionHint')}</div>
       )}
-      {!loadingSession && turns.map((t, i) => (
-        t.role === 'user'
-          ? <UserTurn key={t.key ?? `t${i}`} text={t.text} skill={t.skill} />
-          : <AgentTurn
-              key={t.key ?? `t${i}`}
-              blocks={t.blocks}
-              provider={provider}
-              streaming={t.streaming}
-              tail={i === turns.length - 1 && livePreview ? livePreview : undefined}
-              working={i === turns.length - 1 && running && !busy}
-            />
-      ))}
+      {!loadingSession && turns.map((t, i) => {
+        const anchored = t.key ? summonByAnchor.get(t.key) : undefined;
+        return (
+          <React.Fragment key={t.key ?? `t${i}`}>
+            {t.role === 'user'
+              ? <UserTurn text={t.text} skill={t.skill} />
+              : <AgentTurn
+                  blocks={t.blocks}
+                  provider={provider}
+                  streaming={t.streaming}
+                  tail={i === turns.length - 1 && livePreview ? livePreview : undefined}
+                  working={i === turns.length - 1 && running && !busy}
+                />}
+            {anchored && <div className="v2-la-summons">{anchored.map((id) => <SummonCardLive key={id} id={id} onAdopt={onSummonAdopt} />)}</div>}
+          </React.Fragment>
+        );
+      })}
+      {!loadingSession && summonTail.length > 0 && (
+        <div className="v2-la-summons">{summonTail.map((id) => <SummonCardLive key={id} id={id} onAdopt={onSummonAdopt} />)}</div>
+      )}
       {!loadingSession && running && !busy && (turns.length === 0 || turns[turns.length - 1].role === 'user') && (
         <AgentTurn blocks={[]} provider={provider} tail={livePreview || undefined} working />
       )}
@@ -972,6 +1400,60 @@ const ProviderBanner: React.FC<{ la: LocalAgentState; provider?: ProviderId }> =
   );
 };
 
+/* 额度浮层里的单条维度（label + 细条 + 百分比）。 */
+const PlanDim: React.FC<{ label: string; pct?: number; reset?: string }> = ({ label, pct, reset }) => {
+  if (pct === undefined) return null;
+  return (
+    <div className="v2-la-ctx-dim">
+      <div className="v2-la-ctx-dim-top">
+        <span className="v2-la-ctx-dim-nm">{label}</span>
+        <span className={`v2-la-ctx-dim-pct${pct >= 90 ? ' hot' : pct >= 70 ? ' warm' : ''}`}>{pct}%</span>
+      </div>
+      <span className="v2-la-ctx-bar full"><i className={pct >= 90 ? 'hot' : pct >= 70 ? 'warm' : ''} style={{ width: `${pct}%` }} /></span>
+      {reset && <div className="v2-la-ctx-dim-reset">{reset} 重置</div>}
+    </div>
+  );
+};
+
+/* composer 左下：订阅额度条（仅 claude 订阅账号）。行内只显示当前会话额度（Current session）；
+   点击展开浮层看多维度（会话 5h / 本周全模型 / 本周 Sonnet）+「What's contributing」分解。 */
+const PlanGauge: React.FC<{ plan?: PlanUsage }> = ({ plan }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+  const pct = plan?.session;
+  if (pct === undefined) return null;
+  return (
+    <div className="v2-la-ctx-wrap" ref={ref}>
+      <button
+        type="button"
+        className={`v2-la-ctx${pct >= 90 ? ' hot' : pct >= 70 ? ' warm' : ''}${open ? ' open' : ''}`}
+        title="点击查看多维度额度"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="v2-la-ctx-bar"><i style={{ width: `${pct}%` }} /></span>
+        <span className="v2-la-ctx-pct">{pct}%</span>
+      </button>
+      {open && (
+        <div className="v2-la-ctx-pop" role="dialog">
+          <div className="v2-la-ctx-pop-hd">订阅额度使用</div>
+          <PlanDim label="当前会话 (5h)" pct={plan?.session} reset={plan?.sessionReset} />
+          <PlanDim label="本周 (全模型)" pct={plan?.week} reset={plan?.weekReset} />
+          <PlanDim label="本周 (仅 Sonnet)" pct={plan?.weekSonnet} />
+          {plan?.breakdown && <pre className="v2-la-ctx-pop-bd">{plan.breakdown}</pre>}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const { t: tr } = useI18n();
   const tab = la.tabs.find((t) => t.cwd === cwd);
@@ -985,10 +1467,27 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const [dropSide, setDropSide] = useState<DropSide | null>(null);
   const [fileOver, setFileOver] = useState(false);   // 拖文件进窗格的高亮态
   const [cfgOpen, setCfgOpen] = useState(false);
-  const [cfgTab, setCfgTab] = useState<'model' | 'mcp'>('model');
+  const [mcpMenuOpen, setMcpMenuOpen] = useState(false);   // MCP 独立菜单（从模型弹框抽出，自成一个 composer 按钮）
+  const [modelQuery, setModelQuery] = useState('');   // 模型选择弹框的模糊搜索（模型多时快速过滤）
   const [loginOpen, setLoginOpen] = useState(false);
   const canLogin = LOGIN_PROVIDERS.includes(tabProvider);
   const [skillMenuOpen, setSkillMenuOpen] = useState(false);
+  const [toolsMenuOpen, setToolsMenuOpen] = useState(false);   // 窄宽时把 附件/Skill/MCP 收进的 + 溢出菜单
+  // 工具栏宽度不够时把 附件/Skill/MCP 折成一个 + 图标。用 ResizeObserver 测「行」宽度
+  // （不随折叠变化，因 .v2-l flex:1 撑满 → 无抖动）；不用 container-query，免得 containment
+  // 劫持 ProviderBanner 的 position:fixed 菜单（见 chaya_fixed_modal_in_glass_box）。
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [compactTools, setCompactTools] = useState(false);
+  useEffect(() => {
+    const el = rowRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((ents) => {
+      const w = ents[0]?.contentRect.width ?? 0;
+      if (w > 0) setCompactTools(w < 600);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const pickSkill = (name: string) => { la.setSkill(cwd, name); setSkillMenuOpen(false); requestAnimationFrame(() => taRef.current?.focus()); };
   // 技能选择器内置过滤：打开即聚焦输入框，敲字过滤、↑↓ 选择、⏎ 确认、esc 关闭。
   const [skillQuery, setSkillQuery] = useState('');
@@ -1011,10 +1510,11 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const [capToast, setCapToast] = useState('');   // 「已记入速记」轻提示
   // @ 提及：联动 wiki 笔记/文档。trailing @token → 候选 → 选中插入路径/内容。
   const [mentionIdx, setMentionIdx] = useState(0);
+  const [assocDismiss, setAssocDismiss] = useState<string | null>(null);   // 被忽略的联想 agent id
 
   const attachments = tab?.attachments ?? NO_ATTS;
   const queue = tab?.queue ?? NO_QUEUE;
-  const draft = tab?.draft ?? '';
+  const draft = useDraft(cwd);   // 外部 store：键入只重渲本窗格，不进 tabs
   const messages = tab?.messages ?? NO_MSGS;
   const liveMsgs = tab?.liveMsgs ?? NO_MSGS;
   const running = tab?.running ?? false;
@@ -1022,6 +1522,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const loadingSession = tab?.loading ?? false;
   const perm = tab?.perm ?? null;
   const question = tab?.question ?? null;
+  const elicit = tab?.elicit ?? null;
   const sessionId = tab?.sessionId ?? null;
   const histMore = tab?.histMore ?? 0;
 
@@ -1063,16 +1564,38 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const historyTurns = useMemo(() => groupTurns(historyBlocks, false), [historyBlocks]);
   const liveTurns = useMemo(() => groupTurns(liveBlocks, false), [liveBlocks]);
   const turns = useMemo(() => (liveTurns.length ? [...historyTurns, ...liveTurns] : historyTurns), [historyTurns, liveTurns]);
+  // 召唤卡片要插进时间线对应位置：记当前最后一条消息的 key 作锚点（召唤时读它）。
+  const lastTurnKeyRef = useRef<string | undefined>(undefined);
+  lastTurnKeyRef.current = turns.length ? turns[turns.length - 1].key : undefined;
+  // 本会话的召唤锚点（id+anchorKey）。关键：不订阅整 store 每帧重渲本 pane（会拖垮流式，见 perf 约束），
+  // 改 effect 里订阅但仅当「召唤集合签名」变化才 setState —— 流式 token 不触发，新增/结束/交回才触发。
+  const [summonAnchors, setSummonAnchors] = useState<{ id: string; anchorKey?: string }[]>([]);
+  useEffect(() => {
+    const sig = (xs: { id: string; anchorKey?: string }[]) => xs.map((s) => `${s.id}:${s.anchorKey || ''}`).join(',');
+    const compute = () => {
+      const mine = getAsks().filter((a) => a.origin === 'agent-summon' && a.fromCwd === cwd && a.phase !== 'cancelled').map((a) => ({ id: a.id, anchorKey: a.anchorKey }));
+      setSummonAnchors((prev) => (sig(prev) === sig(mine) ? prev : mine));
+    };
+    compute();
+    return onAsksChange(compute);
+  }, [cwd]);
+  const onSummonAdopt = useCallback((text: string) => la.appendDraft(cwd, text), [la, cwd]);
   // livePreview 已拆到 PaneTimeline 内部订阅（见其注释），这里不再因每帧出字而重算。
   const hasConversation = turns.length > 0 || running;
 
   // 斜杠命令弹层：draft 以 / 开头且还在敲命令 token（无空白）时打开。
   const slashQuery = (!slashDismissed && draft.startsWith('/') && !/\s/.test(draft)) ? draft.slice(1) : null;
   // Chaya 技能（provider 无关）并入斜杠菜单，排在 CLI 原生命令前——所有 provider 都能 / 触发。
-  const allCommands = useMemo<SlashCommand[]>(() => [
-    ...la.skills.map((s) => ({ name: `/${s.name}`, description: s.description, scope: 'chaya' as const, origin: s.source === 'cli' ? s.origin : undefined })),
-    ...la.commands,
-  ], [la.skills, la.commands]);
+  const allCommands = useMemo<SlashCommand[]>(() => {
+    const merged = [
+      ...la.skills.map((s) => ({ name: `/${s.name}`, description: s.description, scope: 'chaya' as const, origin: s.source === 'cli' ? s.origin : undefined })),
+      ...la.commands,
+    ];
+    // 同名去重（技能与原生 CLI 命令可能重名，如从 CLI 导入的技能又是原生 /命令）：
+    // 保留先出现的（技能优先），避免重复项 + React key 撞车。
+    const seen = new Set<string>();
+    return merged.filter((c) => (seen.has(c.name) ? false : (seen.add(c.name), true)));
+  }, [la.skills, la.commands]);
   const slashItems = useMemo(() => {
     if (slashQuery === null) return [] as SlashCommand[];
     const q = slashQuery.toLowerCase();
@@ -1092,21 +1615,63 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
     requestAnimationFrame(() => taRef.current?.focus());
   };
 
-  // @ 提及（联动 wiki 笔记/文档）：取末尾 @token（无空格）作 query；slash 优先时不开。
+  // 本地 Agent 注册表（@ 召唤用）：订阅变化，列表改了即时反映。
+  const [agents, setAgents] = useState<LocalAgent[]>(() => listAgents());
+  useEffect(() => subscribeAgents(() => setAgents(listAgents())), []);
+
+  // 预热：有召唤意图（@ 列出 / 联想命中）时，提前把 agent 绑定会话的进程暖起来（resume 读盘在后台付掉），
+  // 这样真正召唤时命中热进程 ≈ 主会话自研究的速度，不必每次冷启重放历史。90s 去重，避免反复 warm。
+  const warmedRef = useRef<Map<string, number>>(new Map());
+  const prewarmAgent = useCallback((agent: LocalAgent) => {
+    if (!agent?.sessionId) return;
+    const now = Date.now();
+    if (now - (warmedRef.current.get(agent.id) || 0) < 90_000) return;
+    warmedRef.current.set(agent.id, now);
+    void localAgent.warm({ provider: agent.provider, cwd: realDir(agent.dir), lane: undefined, sessionId: agent.sessionId, permMode: agent.provider === 'cursor' ? 'ask' : 'plan', model: agent.model, mcp: agent.mcp });
+  }, []);
+
+  // @ 提及：末尾 @token（无空格）作 query；slash 优先时不开。下拉同时给「本地 Agent」与 wiki 笔记/文档。
   const mentionQuery = (!slashOpen ? (/(?:^|\s)@([^@\s]*)$/.exec(draft)?.[1] ?? null) : null);
-  const mentionOpen = mentionQuery !== null && wiki.available;
+  // 命中的本地 Agent：按 name/description/tags 模糊排序（空 query 给全部，最近用过的靠前）。
+  const mentionAgents = useMemo(() => {
+    if (mentionQuery === null) return [] as LocalAgent[];
+    const q = mentionQuery.toLowerCase();
+    const scored = agents
+      .map((a) => ({ a, s: fuzzyScore(q, `${a.name} ${a.description} ${(a.tags || []).join(' ')}`.toLowerCase()) }))
+      .filter((x) => x.s !== null);
+    scored.sort((x, y) => (q ? (y.s! - x.s!) : 0) || ((y.a.lastUsedAt || 0) - (x.a.lastUsedAt || 0)));
+    return scored.map((x) => x.a).slice(0, 6);
+  }, [mentionQuery, agents]);
+  const mentionOpen = mentionQuery !== null && (wiki.available || mentionAgents.length > 0);
   const mentionItems = useMemo(
-    () => (mentionOpen ? buildWikiItems(wiki, mentionQuery || '') : [] as WikiItem[]),
-    [mentionOpen, mentionQuery, wiki.notes, wiki.docs, wiki.defaultPath],
+    () => (mentionOpen && wiki.available ? buildWikiItems(wiki, mentionQuery || '') : [] as WikiItem[]),
+    [mentionOpen, mentionQuery, wiki.notes, wiki.docs, wiki.defaultPath, wiki.available],
   );
+  // 组合键盘导航的总长度与路由：前段是 agents，后段是 wiki items。
+  const mentionTotal = mentionAgents.length + mentionItems.length;
   useEffect(() => { setMentionIdx(0); }, [mentionQuery]);
+
+  // 轻量联想：草稿命中某 agent 能力时，给一条不抢焦点的「让 @X 来看看?」提示。
+  // 任意下拉/浮层打开、或正敲 @ 时不显示，避免打扰；被忽略的 agent 不再提示。
+  const assocAgent = useMemo(() => {
+    if (slashOpen || mentionOpen || mentionQuery !== null) return null;
+    const a = associateAgent(draft, agents);
+    return a && a.id !== assocDismiss ? a : null;
+  }, [draft, agents, slashOpen, mentionOpen, mentionQuery, assocDismiss]);
+
+  // 召唤意图 → 提前暖 agent 会话进程（@ 列出的 + 联想命中的），让真正召唤时几乎零冷启。
+  useEffect(() => { if (assocAgent) prewarmAgent(assocAgent); }, [assocAgent, prewarmAgent]);
+  useEffect(() => { for (const a of mentionAgents) prewarmAgent(a); }, [mentionAgents, prewarmAgent]);
+
+  // 当前会话若已升格为 Agent：对话区顶部显示身份条（独立优雅外观）。
+  const paneAgent = useMemo(() => (sessionId ? agents.find((a) => a.sessionId === sessionId) : undefined), [agents, sessionId]);
   // 打开 @ 时拉一次最新 wiki 列表（含云端文档）。
   const mentionWasOpen = useRef(false);
   useEffect(() => { if (mentionOpen && !mentionWasOpen.current) wiki.reload(); mentionWasOpen.current = mentionOpen; }, [mentionOpen, wiki]);
 
   /** 把一段 wiki 引用插进输入框：@ 提及时替换末尾 @token；否则追加。 */
   const insertWikiRef = useCallback((text: string) => {
-    const d = la.tabs.find((t) => t.cwd === cwd)?.draft ?? '';
+    const d = getDraft(cwd);
     const m = /(^|\s)@[^@\s]*$/.exec(d);
     const next = m ? d.slice(0, m.index + m[1].length) + text + ' ' : (d ? d.replace(/\s*$/, ' ') : '') + text + ' ';
     la.setDraft(cwd, next);
@@ -1115,6 +1680,77 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const pickMention = useCallback(async (it: WikiItem) => {
     insertWikiRef(await resolveWikiRef(it));
   }, [insertWikiRef]);
+
+  // 会话互问候选（# 呼出）：① 跨 provider 的已打开会话（续接其上下文）；
+  // ② 各项目里已存盘的会话（当前 provider，临时 lane 续接其历史作答，答完即关）。
+  const askFromTitle = (sessionId && la.sessionTitles[sessionId]) || tab?.title || basename(realDir(cwd)) || 'A';
+  /** @ 召唤本地 Agent：以 question 续接其绑定会话作答（天然跨 provider），配了外置记忆则先检索注入。
+   *  答复由 AgentSummonController 自动折回本会话草稿。目标永远来自 agent 绑定，不现场猜会话。 */
+  const summonAgent = useCallback((agent: LocalAgent, question: string) => {
+    touchAgent(agent.id);
+    // 续接 agent 绑定 session（主车道）只读发一条消息。单一消费者（sessionBridge）= 快、不互相干扰。
+    const fire = (memoryContext: string) => askSession({
+      from: { cwd, title: askFromTitle, dir: realDir(cwd) },
+      target: { kind: 'existing', provider: agent.provider, dir: agent.dir, lane: undefined, sessionId: agent.sessionId, title: `@${agent.name}`, model: agent.model, mcp: agent.mcp },
+      question,
+      origin: 'agent-summon',
+      systemPrompt: agent.systemPrompt,   // 一般为空（item 4）；填了才作为角色设定前置
+      memoryContext,
+      bare: true,
+      agentId: agent.id,
+      agentName: agent.name,
+      anchorKey: lastTurnKeyRef.current,   // 插进时间线「此刻最后一条消息」之后
+    });
+    // 无记忆 → 立即发，零等待。有记忆 → 检索设 700ms 硬超时，避免唤起被 smartnote 往返拖慢。
+    if (!agent.memory) { fire(''); return; }
+    const cap = new Promise<string>((r) => setTimeout(() => r(''), 700));
+    void Promise.race([retrieveAgentMemory(agent, question).catch(() => ''), cap]).then((m) => fire(m as string));
+  }, [cwd, askFromTitle]);
+
+  // 本回合是否已显式 @ 召唤过（用于 send 时不再自动分配，避免重复召唤）。
+  const explicitSummonRef = useRef(false);
+  /** @ 下拉选中：剥掉末尾 @token，把剩余草稿作为问题召唤该 Agent（空问题则提示先写问题）。 */
+  const armSummon = useCallback((agent: LocalAgent) => {
+    const d = getDraft(cwd);
+    const question = d.replace(/(^|\s)@[^@\s]*$/, '').trim();
+    if (!question) {
+      la.setDraft(cwd, d.replace(/(^|\s)@[^@\s]*$/, '$1'));
+      try { window.dispatchEvent(new CustomEvent('chaya:toast', { detail: { text: `先写下要问 @${agent.name} 的问题，再 @ 召唤` } })); } catch { /* */ }
+      requestAnimationFrame(() => taRef.current?.focus());
+      return;
+    }
+    la.setDraft(cwd, d.replace(/(^|\s)@[^@\s]*$/, '$1'));   // 保留问题正文，仅去掉 @handle
+    explicitSummonRef.current = true;
+    summonAgent(agent, question);
+    requestAnimationFrame(() => taRef.current?.focus());
+  }, [cwd, la, summonAgent]);
+
+  /** 组合 @ 下拉的键盘选择：前 mentionAgents 段走召唤，后段走 wiki 插入。 */
+  const pickMentionAt = useCallback((idx: number) => {
+    if (idx < mentionAgents.length) { armSummon(mentionAgents[idx]); return; }
+    const it = mentionItems[idx - mentionAgents.length];
+    if (it) void pickMention(it);
+  }, [mentionAgents, mentionItems, armSummon, pickMention]);
+
+  /** 发送：没显式 @ 召唤过、且草稿明显命中某 agent 能力时，自动分配该 agent 并行作答（item 1）。
+   *  然后照常把消息发给当前会话。自召唤（当前会话就是该 agent 的绑定会话）跳过。 */
+  const handleSend = useCallback(() => {
+    const explicit = explicitSummonRef.current;
+    explicitSummonRef.current = false;
+    const d = getDraft(cwd).trim();
+    let assigned = explicit;
+    if (!explicit && d && !/@[^@\s]+\s*$/.test(d)) {
+      const cand = associateAgent(d, listAgents(), true);   // 自动分配走严格匹配，避免不相关内容也召唤
+      if (cand && cand.sessionId !== sessionId && !(paneAgent && paneAgent.id === cand.id)) {
+        summonAgent(cand, d);
+        assigned = true;
+      }
+    }
+    // 分配给 agent 的这一轮交给它作答（内联子 agent 卡），主 session 不再重复回答（item 1.3）。
+    if (assigned) { la.setDraft(cwd, ''); requestAnimationFrame(() => taRef.current?.focus()); return; }
+    void la.send(cwd);
+  }, [cwd, sessionId, paneAgent, summonAgent, la]);
+
 
   // 自动滚到底（与 ClientShell 主聊保持同款 + 远端挂载的稳态加固）：
   //  ① rAF 队列防 thrash：多个状态变化挤进一帧只测一次 scrollHeight。
@@ -1203,16 +1839,18 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
         if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickSlash(slashItems[slashIdx]); return; }
       }
     }
-    if (mentionOpen && mentionItems.length) {
+    if (mentionOpen && mentionTotal) {
       if (e.key === 'Escape') { e.preventDefault(); la.setDraft(cwd, draft.replace(/(^|\s)@[^@\s]*$/, '$1')); return; }
-      if (e.key === 'ArrowDown') { e.preventDefault(); setMentionIdx((i) => (i + 1) % mentionItems.length); return; }
-      if (e.key === 'ArrowUp') { e.preventDefault(); setMentionIdx((i) => (i - 1 + mentionItems.length) % mentionItems.length); return; }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); void pickMention(mentionItems[mentionIdx]); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); setMentionIdx((i) => (i + 1) % mentionTotal); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setMentionIdx((i) => (i - 1 + mentionTotal) % mentionTotal); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMentionAt(mentionIdx); return; }
     }
     if (e.key === 'Tab') { e.preventDefault(); la.cyclePermMode(cwd); return; }
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void la.send(cwd); }
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); handleSend(); }
   };
-  const onDraftChange = (v: string) => { la.setDraft(cwd, v); if (slashDismissed) setSlashDismissed(false); };
+  const onDraftChange = (v: string) => {
+    la.setDraft(cwd, v); if (slashDismissed) setSlashDismissed(false);
+  };
   // 粘贴板里的图片（截图等）→ 作为参考图片附件，显示缩略图、随下条消息走视觉。
   const onPaste = (e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items;
@@ -1249,6 +1887,15 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
     () => la.modelOptions.find((m) => m.value === tab?.model) || null,
     [la.modelOptions, tab?.model],
   );
+  // 模型按 vendor 分组 + 按搜索词过滤（匹配显示名 / value / 描述）。
+  const modelFilter = modelQuery.trim().toLowerCase();
+  const filteredModelGroups = useMemo(() => {
+    const groups = groupModelsByVendor(la.modelOptions);
+    if (!modelFilter) return groups;
+    return groups
+      .map(([v, ms]) => [v, ms.filter((m) => `${m.displayName} ${m.value} ${m.description || ''}`.toLowerCase().includes(modelFilter))] as [string, typeof ms])
+      .filter(([, ms]) => ms.length > 0);
+  }, [la.modelOptions, modelFilter]);
   const reasoningOptions = useMemo(() => {
     if (tabProvider !== 'codex' && tabProvider !== 'claude') return [];
     const seen = new Set<string>();
@@ -1270,7 +1917,9 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   // （无逐 server 状态，仅切换启用，下次发送时随会话重建生效）。cursor/codex 不支持。
   const hasMcp = tabProvider === 'claude' || tabProvider === 'gemini' || tabProvider === 'copilot';
   const mcpLiveStatus = tabProvider === 'claude';   // 仅 claude 有实时探测/重连
-  const openCfg = () => { setCfgOpen(true); if (hasMcp) { if (!mcpList) void la.listMcp(cwd).then(setMcpList); if (mcpLiveStatus) la.refreshMcp(cwd); } else setCfgTab('model'); };
+  const openCfg = () => { setModelQuery(''); setCfgOpen(true); };
+  // MCP 菜单：打开时拉一次可用列表 + 探测状态（claude）。
+  const openMcpMenu = () => { setMcpMenuOpen((o) => { const next = !o; if (next) { if (!mcpList) void la.listMcp(cwd).then(setMcpList); if (mcpLiveStatus) la.refreshMcp(cwd); } return next; }); };
   // 对话框开启时：Esc 关闭（不冒泡去触发 Tab 切权限等全局键）。
   // 必须在 `if (!tab) return null` 之前调用 —— 之前放在 return 之后会让关闭最后
   // 一个 tab 时 hook 数量减少，触发 "Rendered fewer hooks than expected"。
@@ -1335,6 +1984,16 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
         </div>
       )}
 
+      {paneAgent && (
+        <div className="v2-la-agentbar">
+          <span className="av"><AgentFace seed={paneAgent.name || paneAgent.id} /></span>
+          <div className="meta">
+            <div className="nm">@{paneAgent.name}{paneAgent.memory && <span className="mem" title="挂接了 smartnote 外置记忆">RAG</span>}{paneAgent.systemPrompt && <span className="sp" title={paneAgent.systemPrompt}>已设角色</span>}{!!paneAgent.ledger?.writeCount && <span className="sp" title={`最近写入 ${fmtTime(paneAgent.ledger.lastWriteAt ?? Date.now())}`}>记忆 {paneAgent.ledger.writeCount}</span>}</div>
+            {paneAgent.description && <div className="ds">{paneAgent.description}</div>}
+          </div>
+          <button className="edit" title="编辑 Agent" onClick={() => window.dispatchEvent(new CustomEvent('chaya:promoteAgent', { detail: { agentId: paneAgent.id, provider: paneAgent.provider, dir: paneAgent.dir, sessionId: paneAgent.sessionId, title: paneAgent.description || paneAgent.name } }))}>编辑</button>
+        </div>
+      )}
       <section className="v2-la-pane-stream" ref={streamRef}>
         {/* 更早的历史还藏着：上滑到顶自动取下一批，点它也行（内容不满一屏时滚动事件不来）。 */}
         {histMore > 0 && !loadingSession && (
@@ -1354,6 +2013,8 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
           provider={tabProvider}
           sessionId={sessionId}
           scrollerRef={streamRef}
+          summonAnchors={summonAnchors}
+          onSummonAdopt={onSummonAdopt}
         />
       </section>
 
@@ -1393,19 +2054,61 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
             />
           </div>
         )}
+        {elicit && (
+          <div className="v2-la-anchor">
+            <ElicitPrompt
+              elicit={elicit}
+              onAccept={(content) => la.respondElicitation(cwd, elicit.elicitId, { action: 'accept', content })}
+              onDecline={() => la.respondElicitation(cwd, elicit.elicitId, { action: 'decline' })}
+              onCancel={() => la.respondElicitation(cwd, elicit.elicitId, { action: 'cancel' })}
+            />
+          </div>
+        )}
         {/* Split-screen reuses the SAME composer as full mode (notes pill, model
             picker, the works) — just scaled down via .v2-la-mini (zoom), instead
             of a bespoke slim layout. One component, one set of behaviours. */}
         <div className={`v2-composer${inGrid ? ' v2-la-mini' : ''}${running ? ' v2-comp-working' : ''}`} data-mode="chat" data-prov={tabProvider}>
           {capToast && <div className="v2-la-captoast">{capToast}</div>}
+          {assocAgent && (
+            <div className="v2-la-assoc">
+              <button className="hit" title={assocAgent.description} onMouseDown={(e) => { e.preventDefault(); explicitSummonRef.current = true; summonAgent(assocAgent, draft.trim()); setAssocDismiss(assocAgent.id); }}>
+                <span className="ic"><IconAgent /></span>
+                让 <b>@{assocAgent.name}</b> 来看看？
+              </button>
+              <button className="x" title="忽略" onMouseDown={(e) => { e.preventDefault(); setAssocDismiss(assocAgent.id); }}>✕</button>
+            </div>
+          )}
           <div className="v2-box">
             {/* CLI 跑动时的边缘旋转流光：遮罩在容器、旋转在子层(纯合成器动画不掉帧)。 */}
             {running && <div className="v2-comp-ring" aria-hidden />}
             {/* @ 联动：选 wiki 笔记/文档 → 插入路径引用(本地) 或 内容(云端)。浮在框上方。 */}
             {mentionOpen && (
               <div className="v2-la-mention">
-                <div className="v2-la-mention-hd">{tr('local.wiki.mentionHead')}</div>
-                <WikiPicker items={mentionItems} loading={wiki.loading} activeIdx={mentionIdx} onPick={(it) => void pickMention(it)} emptyHint={tr('local.wiki.empty')} />
+                {mentionAgents.length > 0 && (
+                  <>
+                    <div className="v2-la-mention-hd">本地 Agent · @ 召唤</div>
+                    {mentionAgents.map((a, i) => (
+                      <button
+                        key={a.id}
+                        className={`v2-la-mention-agent${i === mentionIdx ? ' active' : ''}`}
+                        onMouseEnter={() => setMentionIdx(i)}
+                        onMouseDown={(e) => { e.preventDefault(); armSummon(a); }}
+                        title={a.description}
+                      >
+                        <span className="av"><AgentFace seed={a.name || a.id} /></span>
+                        <span className="nm">@{a.name}</span>
+                        {a.description && <span className="ds">{a.description}</span>}
+                        <span className="pv"><ProviderLogo id={a.provider} mono /></span>
+                      </button>
+                    ))}
+                  </>
+                )}
+                {wiki.available && (
+                  <>
+                    <div className="v2-la-mention-hd">{tr('local.wiki.mentionHead')}</div>
+                    <WikiPicker items={mentionItems} loading={wiki.loading} activeIdx={mentionIdx - mentionAgents.length} onPick={(it) => void pickMention(it)} emptyHint={tr('local.wiki.empty')} />
+                  </>
+                )}
               </div>
             )}
             {/* 技能选择器：composer 技能按钮点开，跨 provider 一致地挑 Chaya 技能（选中插入 /名字）。 */}
@@ -1447,6 +2150,35 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                   >
                     <IconSkill /> {tr('local.slash.manageSkills')}
                   </button>
+                </div>
+              </>
+            )}
+            {mcpMenuOpen && (
+              <>
+                <div className="v2-la-skillpop-scrim" onMouseDown={() => setMcpMenuOpen(false)} />
+                <div className="v2-la-slash v2-la-skillpop" role="menu">
+                  <div className="v2-la-slash-hd">
+                    <span>{tr('local.cfg.mcpSource')}</span>
+                    {mcpLiveStatus && <button className="v2-la-probe" onMouseDown={(e) => { e.preventDefault(); la.refreshMcp(cwd); }} title={tr('local.cfg.probeStatus')}>{tr('local.cfg.probe')}</button>}
+                  </div>
+                  {!mcpLiveStatus && <div className="v2-la-cfg-foot">{tr('local.cfg.mcpAcpNote')}</div>}
+                  {!mcpList && <div className="v2-la-slash-empty">{tr('local.cfg.mcpLoading')}</div>}
+                  {mcpList && mcpList.length === 0 && <div className="v2-la-slash-empty">{tr('local.cfg.mcpEmpty')}</div>}
+                  {mcpList && mcpList.map((m) => {
+                    const on = (tab.mcp || []).includes(m.name);
+                    const st = tab.mcpStatus?.find((x) => x.name === m.name)?.status;
+                    return (
+                      <div key={m.name} className={`v2-la-mcprow${on ? ' on' : ''}`}>
+                        <button className="tog" onMouseDown={(e) => { e.preventDefault(); const cur = tab.mcp || []; la.setMcp(cwd, on ? cur.filter((n) => n !== m.name) : [...cur, m.name]); }}>
+                          <span className="nm">{m.name}{st && <span className={`v2-la-mcp-dot ${st}`} title={st} />}</span>
+                          <span className="ds">{m.scope === 'project' ? tr('local.scope.project') : tr('local.scope.global')} · {m.type}{st ? ` · ${st}` : ''}</span>
+                        </button>
+                        {mcpLiveStatus && on && st && st !== 'connected' && st !== 'pending' && (
+                          <button className="rc" title={tr('local.cfg.reconnect')} onMouseDown={(e) => { e.preventDefault(); la.reconnectMcp(cwd, m.name); }}>{tr('local.cfg.reconnect')}</button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </>
             )}
@@ -1532,26 +2264,64 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
               onKeyDown={onKeyDown}
               onPaste={onPaste}
             />
-            <div className="v2-row">
+            <div className="v2-row" ref={rowRef}>
               <div className="v2-l">
                 <ProviderBanner la={la} provider={tabProvider} />
+                {tabProvider === 'claude' && <PlanGauge plan={tab?.plan} />}
                 <WikiNotes wiki={wiki} onInsert={insertWikiRef} isActive={cwd === la.activeCwd} />
-                {current?.live && (
-                  <button
-                    className={`v2-la-attach${attachments.length ? ' on' : ''}`}
-                    onClick={() => la.pickAttachments(cwd)}
-                    title={tr('local.att.addHint')}
-                  ><IconPaperclip />{attachments.length > 0 && <span className="n">{attachments.length}</span>}</button>
+                {/* 工具组（附件/Skill/MCP）：宽度够时平铺；不够时整组收进右侧 + 溢出按钮，
+                    只剩一个图标不占横向空间（compactTools 由 ResizeObserver 驱动）。 */}
+                {current?.live && !compactTools && (
+                  <span className="v2-l-tools">
+                    <button
+                      className={`v2-la-attach${attachments.length ? ' on' : ''}`}
+                      onClick={() => la.pickAttachments(cwd)}
+                      title={tr('local.att.addHint')}
+                    ><IconPaperclip />{attachments.length > 0 && <span className="n">{attachments.length}</span>}</button>
+                    <button
+                      className={`v2-la-skillbtn${skillMenuOpen ? ' on' : ''}`}
+                      onClick={openSkillMenu}
+                      title={tr('local.skill.pick')}
+                    ><IconSkill /><span className="lb">{tr('local.skill.btn')}</span></button>
+                    {hasMcp && (
+                      <button
+                        className={`v2-la-skillbtn${mcpMenuOpen ? ' on' : ''}${(tab.mcp?.length ?? 0) > 0 ? ' has' : ''}`}
+                        onClick={openMcpMenu}
+                        title={tr('local.cfg.modalLabelMcp')}
+                      ><IconPlug /><span className="lb">MCP</span>{(tab.mcp?.length ?? 0) > 0 && <span className="n">{tab.mcp!.length}</span>}</button>
+                    )}
+                  </span>
                 )}
-                {current?.live && (
-                  <button
-                    className={`v2-la-skillbtn${skillMenuOpen ? ' on' : ''}`}
-                    onClick={openSkillMenu}
-                    title={tr('local.skill.pick')}
-                  ><IconSkill /><span className="lb">{tr('local.skill.btn')}</span></button>
+                {current?.live && compactTools && (
+                  <span className="v2-l-more-wrap">
+                    <button
+                      className={`v2-la-attach v2-l-more${toolsMenuOpen ? ' on' : ''}`}
+                      onClick={() => setToolsMenuOpen((o) => !o)}
+                      title={tr('local.skill.pick')}
+                    ><IconPlus /></button>
+                    {toolsMenuOpen && (
+                      <>
+                        <div className="v2-la-skillpop-scrim" onMouseDown={() => setToolsMenuOpen(false)} />
+                        <div className="v2-la-toolsmenu" role="menu">
+                          <button className="v2-la-toolsmenu-item" onMouseDown={(e) => { e.preventDefault(); setToolsMenuOpen(false); la.pickAttachments(cwd); }}>
+                            <IconPaperclip /><span>{tr('local.att.addHint')}</span>{attachments.length > 0 && <span className="n">{attachments.length}</span>}
+                          </button>
+                          <button className="v2-la-toolsmenu-item" onMouseDown={(e) => { e.preventDefault(); setToolsMenuOpen(false); openSkillMenu(); }}>
+                            <IconSkill /><span>{tr('local.skill.btn')}</span>
+                          </button>
+                          {hasMcp && (
+                            <button className="v2-la-toolsmenu-item" onMouseDown={(e) => { e.preventDefault(); setToolsMenuOpen(false); openMcpMenu(); }}>
+                              <IconPlug /><span>MCP</span>{(tab.mcp?.length ?? 0) > 0 && <span className="n">{tab.mcp!.length}</span>}
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </span>
                 )}
               </div>
-              <div className="v2-grow" />
+              {/* 右簇作为一个整体：窄宽时整体折到下一行右对齐，不把左侧 tag 留在半行。 */}
+              <div className="v2-r">
               {/* 权限档 + 模型 紧挨发送按钮左侧（高频切换手更近）；权限在模型左。 */}
               <button
                 className={`v2-la-mode tone-${pm.tone}`}
@@ -1562,11 +2332,10 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                 <span className="v2-la-mode-lb">{permLabel(tabProvider, effPerm)}</span>
               </button>
               {current?.live && (
-                <button className={`v2-la-cfg${la.modelsLoading && la.modelOptions.length === 0 ? ' loading' : ''}`} onClick={openCfg} title={tr('local.cfg.modelMcp')}>
+                <button className={`v2-la-cfg${la.modelsLoading && la.modelOptions.length === 0 ? ' loading' : ''}`} onClick={openCfg} title={tr('local.cfg.model')}>
                   <span className="tri" aria-hidden><IconModel /></span>
                   <span className="m">{selectedModel?.displayName || (tab.model || (la.modelsLoading && la.modelOptions.length === 0 ? tr('local.cfg.modelsLoading') : tr('local.cfg.defaultModel')))}</span>
                   {tab.reasoning && <span className="mcpn">{tab.reasoning}</span>}
-                  {(tab.mcp?.length ?? 0) > 0 && <span className="mcpn">MCP {tab.mcp!.length}</span>}
                 </button>
               )}
               {running ? (
@@ -1580,10 +2349,11 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                   <button className="v2-send stop" title={tr('local.composer.interrupt')} onClick={() => la.interrupt(cwd)}>■</button>
                 </>
               ) : (
-                <button className="v2-send" title={tr('local.composer.send')} onClick={() => la.send(cwd)} disabled={(!draft.trim() && attachments.length === 0 && !tab.skill) || !current?.live}>
+                <button className="v2-send" title={tr('local.composer.send')} onClick={handleSend} disabled={(!draft.trim() && attachments.length === 0 && !tab.skill) || !current?.live}>
                   <IconSend />
                 </button>
               )}
+              </div>
             </div>
           </div>
         </div>
@@ -1591,20 +2361,15 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
 
       {cfgOpen && (
         <div className="v2-modal-mask" onMouseDown={(e) => { if (e.target === e.currentTarget) setCfgOpen(false); }} style={{ zIndex: 120 }}>
-          <div className="v2-modal v2-la-cfgmodal" role="dialog" aria-modal="true" aria-label={hasMcp ? tr('local.cfg.modalLabelMcp') : tr('local.cfg.modalLabel')} onMouseDown={(e) => e.stopPropagation()}>
+          <div className="v2-modal v2-la-cfgmodal" role="dialog" aria-modal="true" aria-label={tr('local.cfg.modalLabel')} onMouseDown={(e) => e.stopPropagation()}>
             <div className="v2-modal-hd">
-              <h3>{hasMcp ? tr('local.cfg.modelMcp') : tr('local.cfg.model')}{proj ? ` · ${proj.name}` : ''}</h3>
+              <h3>{tr('local.cfg.model')}{proj ? ` · ${proj.name}` : ''}</h3>
               <button className="x" onClick={() => setCfgOpen(false)} aria-label={tr('common.close')}>✕</button>
             </div>
-            <div className="v2-la-cfgtabs" role="tablist">
-              <button role="tab" aria-selected={cfgTab === 'model'} className={cfgTab === 'model' ? 'on' : ''} onClick={() => setCfgTab('model')}>{tr('local.cfg.model')}</button>
-              {hasMcp && <button role="tab" aria-selected={cfgTab === 'mcp'} className={cfgTab === 'mcp' ? 'on' : ''} onClick={() => setCfgTab('mcp')}>MCP{(tab.mcp?.length ?? 0) > 0 ? ` · ${tab.mcp!.length}` : ''}</button>}
-            </div>
-            <div className="v2-la-cfgbody" role="tabpanel" key={cfgTab}>
-              {cfgTab === 'model' ? (
+            <div className="v2-la-cfgbody">
                 <>
                 {canLogin && (
-                  <button className="v2-la-login-row" onClick={() => setLoginOpen(true)}>
+                  <button className="v2-la-login-row" onClick={() => { setCfgOpen(false); setLoginOpen(true); }}>
                     <ProviderLogo id={tabProvider} />
                     <span>{tr('local.cfg.login', { provider: PROVIDER_LABELS[tabProvider] || tabProvider })}</span>
                   </button>
@@ -1613,10 +2378,26 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                   <div className="v2-la-slash-empty">{la.modelsLoading ? tr('local.cfg.modelsLoading') : tr('local.cfg.modelsAfterSend')}</div>
                 ) : (
                   <>
-                    <button className={`v2-la-model-item${!tab.model ? ' on' : ''}`} onClick={() => { la.setModel(cwd, ''); setCfgOpen(false); }}>
-                      <span className="nm">{tr('local.cfg.defaultModel')}</span><span className="ds">{tr('local.cfg.defaultModelDesc')}</span>
-                    </button>
-                    {groupModelsByVendor(la.modelOptions).map(([vendor, models]) => (
+                    {/* 模型多时（如 copilot）→ 顶部模糊搜索快速过滤。 */}
+                    {la.modelOptions.length > 6 && (
+                      <input
+                        autoFocus
+                        className="v2-la-model-search"
+                        value={modelQuery}
+                        placeholder={tr('local.cfg.modelSearch')}
+                        onChange={(e) => setModelQuery(e.target.value)}
+                        onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape' && modelQuery) { e.preventDefault(); setModelQuery(''); } }}
+                      />
+                    )}
+                    {!modelFilter && (
+                      <button className={`v2-la-model-item${!tab.model ? ' on' : ''}`} onClick={() => { la.setModel(cwd, ''); setCfgOpen(false); }}>
+                        <span className="nm">{tr('local.cfg.defaultModel')}</span><span className="ds">{tr('local.cfg.defaultModelDesc')}</span>
+                      </button>
+                    )}
+                    {modelFilter && filteredModelGroups.length === 0 && (
+                      <div className="v2-la-slash-empty">{tr('local.cfg.modelNoMatch')}</div>
+                    )}
+                    {filteredModelGroups.map(([vendor, models]) => (
                       <div key={vendor} className="v2-la-model-group">
                         <div className="v2-la-model-vendor">{VENDOR_I18N[vendor] ? tr(VENDOR_I18N[vendor]) : vendor}</div>
                         {models.map((m) => (
@@ -1627,7 +2408,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                         ))}
                       </div>
                     ))}
-                    {(tabProvider === 'codex' || tabProvider === 'claude') && reasoningOptions.length > 0 && (
+                    {!modelFilter && (tabProvider === 'codex' || tabProvider === 'claude') && reasoningOptions.length > 0 && (
                       <div className="v2-la-model-group">
                         <div className="v2-la-model-vendor">{tr('local.cfg.reasoning')}</div>
                         <button className={`v2-la-model-item${!tab.reasoning ? ' on' : ''}`} onClick={() => la.setReasoning(cwd, '')}>
@@ -1646,32 +2427,6 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                   </>
                 )}
                 </>
-              ) : (
-                <>
-                  <div className="v2-la-cfg-hd">
-                    <span>{tr('local.cfg.mcpSource')}</span>
-                    {mcpLiveStatus && <button className="v2-la-probe" onClick={() => la.refreshMcp(cwd)} title={tr('local.cfg.probeStatus')}>{tr('local.cfg.probe')}</button>}
-                  </div>
-                  {!mcpLiveStatus && <div className="v2-la-cfg-foot">{tr('local.cfg.mcpAcpNote')}</div>}
-                  {!mcpList && <div className="v2-la-slash-empty">{tr('local.cfg.mcpLoading')}</div>}
-                  {mcpList && mcpList.length === 0 && <div className="v2-la-slash-empty">{tr('local.cfg.mcpEmpty')}</div>}
-                  {mcpList && mcpList.map((m) => {
-                    const on = (tab.mcp || []).includes(m.name);
-                    const st = tab.mcpStatus?.find((x) => x.name === m.name)?.status;
-                    return (
-                      <div key={m.name} className={`v2-la-mcprow${on ? ' on' : ''}`}>
-                        <button className="tog" onClick={() => { const cur = tab.mcp || []; la.setMcp(cwd, on ? cur.filter((n) => n !== m.name) : [...cur, m.name]); }}>
-                          <span className="nm">{m.name}{st && <span className={`v2-la-mcp-dot ${st}`} title={st} />}</span>
-                          <span className="ds">{m.scope === 'project' ? tr('local.scope.project') : tr('local.scope.global')} · {m.type}{st ? ` · ${st}` : ''}</span>
-                        </button>
-                        {mcpLiveStatus && on && st && st !== 'connected' && st !== 'pending' && (
-                          <button className="rc" title={tr('local.cfg.reconnect')} onClick={() => la.reconnectMcp(cwd, m.name)}>{tr('local.cfg.reconnect')}</button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </>
-              )}
             </div>
           </div>
         </div>
@@ -2260,7 +3015,14 @@ const OutRow: React.FC<{ text: string; isError?: boolean }> = ({ text, isError }
   const [open, setOpen] = useState(false);
   const lines = text.split('\n');
   const long = lines.length > 12 || text.length > 1200;
-  const shown = open || !long ? text : lines.slice(0, 12).join('\n');
+  // 即便展开也封顶字符数：单行几 MB 的输出（压缩 JSON / base64 / 长日志）按行切片不起
+  // 作用（一行还是一行），整段 <pre> 会让渲染进程单次大分配 OOM。
+  const OUT_HARD_MAX = 200_000;
+  const collapsed = lines.slice(0, 12).join('\n');
+  const full = text.length > OUT_HARD_MAX
+    ? text.slice(0, OUT_HARD_MAX) + tr('local.out.truncated', { n: text.length - OUT_HARD_MAX })
+    : text;
+  const shown = open ? full : (long ? collapsed : full);
   return (
     <div className={`row out${isError ? ' err' : ''}`}>
       <span className="lbl">OUT</span>
@@ -2277,7 +3039,9 @@ export const CodePreview: React.FC<{ code: string; lang: string }> = ({ code, la
   const [open, setOpen] = useState(false);
   const lines = code.split('\n');
   const long = lines.length > 24;
-  const shown = open || !long ? code : lines.slice(0, 24).join('\n');
+  const CODE_HARD_MAX = 200_000;
+  const capped = code.length > CODE_HARD_MAX ? code.slice(0, CODE_HARD_MAX) : code;
+  const shown = open || !long ? capped : lines.slice(0, 24).join('\n');
   return (
     <div className="v2-la-code">
       <MD text={`\`\`\`${lang}\n${shown}\n\`\`\``} />

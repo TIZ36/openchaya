@@ -13,7 +13,7 @@
  *    与 Chaya 的请求/响应式聊天一致，也天然落盘成可读取的 transcript。
  *  - 权限策略：YOLO —— 传 --dangerously-skip-permissions，全自动执行。
  */
-const { spawn, execFile } = require('node:child_process');
+const { spawn, execFile, execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
@@ -36,14 +36,49 @@ const EXTRA_PATHS = [
   path.join(os.homedir(), '.npm-global', 'bin'),
 ];
 
-function augmentedPath() {
-  const cur = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
-  const merged = [...new Set([...cur, ...EXTRA_PATHS])];
-  return merged.join(path.delimiter);
+function augmentedPath(extraPath) {
+  const parts = [
+    ...(process.env.PATH || '').split(path.delimiter),
+    ...((extraPath || '').split(path.delimiter)),
+    ...EXTRA_PATHS,
+  ].filter(Boolean);
+  return [...new Set(parts)].join(path.delimiter);
+}
+
+/* GUI / 开发态启动的 Electron 不继承用户登录 shell 的环境变量 —— 用户在 ~/.zshrc /
+ * ~/.zprofile 里 export 的各类密钥（如 codex 自定义 model provider 的 CODEXPOOL_API_KEY、
+ * OPENAI_API_KEY 等）于是缺失，CLI 一跑就报「Missing environment variable」。这里跑一次
+ * 用户的登录 shell 把它的 env 抓出来缓存，合进每个子进程的环境。失败则静默退回 process.env。
+ * 用 sentinel 包住 env 输出，隔离 rc 脚本自身的打印（zsh instant-prompt / echo 等）。 */
+let _loginEnvCache = null;
+function loginShellEnv() {
+  if (_loginEnvCache) return _loginEnvCache;
+  _loginEnvCache = {};
+  if (process.platform === 'win32') return _loginEnvCache;
+  try {
+    const shell = process.env.SHELL || '/bin/zsh';
+    const DELIM = `__CHAYA_ENV_${process.pid}__`;
+    // -ilc：interactive login，读 .zprofile + .zshrc（很多人把 export 放 .zshrc，仅交互 shell 加载）。
+    const out = execFileSync(shell, ['-ilc', `echo ${DELIM}; env; echo ${DELIM}`], {
+      timeout: 6000, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const seg = out.split(DELIM)[1] || '';
+    for (const line of seg.split('\n')) {
+      const i = line.indexOf('=');
+      if (i <= 0) continue;
+      const k = line.slice(0, i);
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) continue;   // 跳过 env 里的多行值续行
+      _loginEnvCache[k] = line.slice(i + 1);
+    }
+  } catch { /* 抓不到（无登录 shell / 超时 / Windows）→ 退回 process.env */ }
+  return _loginEnvCache;
 }
 
 function childEnv() {
-  return { ...process.env, PATH: augmentedPath() };
+  const login = loginShellEnv();
+  // 登录 shell 变量打底，process.env 覆盖其上（保留 Electron 自身注入的）；PATH 取并集补强。
+  return { ...login, ...process.env, PATH: augmentedPath(login.PATH) };
 }
 
 /* ------------------------------------------------------------------ *
@@ -280,8 +315,54 @@ async function peekSession(jsonlPath) {
   return { title, firstPrompt, turns };
 }
 
+/** 单个 part 的文本硬上限。历史里偶有「读了个 50MB 文件 / 一行几 MB 的压缩 JSON」
+ *  之类的巨型 tool 输出，整段塞进渲染树会让渲染进程 Oilpan 单次大分配直接 OOM
+ *  （render-process-gone: Large allocation. Ran out of reservation）。在落历史的源头
+ *  截断（连 IPC 都不过），渲染层再加一道防护。256K ≈ 几千行，肉眼够看。 */
+const PART_TEXT_CAP = 256 * 1024;
+function capPartText(s) {
+  if (typeof s !== 'string' || s.length <= PART_TEXT_CAP) return s;
+  const dropped = s.length - PART_TEXT_CAP;
+  return s.slice(0, PART_TEXT_CAP) + `\n…[已截断 ${dropped} 个字符（共 ${s.length}），过长内容请直接打开源文件查看]`;
+}
+/** ACP(gemini/copilot) 的 fs/read_text_file：agent 可请求读任意文件，无上限会把几十 MB
+ *  整块经 ACP 喂进模型上下文（既爆 token 也涨内存）。封顶 1MB，超出截断并标注。 */
+const ACP_READ_CAP = 1024 * 1024;
+async function readTextCapped(filePath) {
+  try {
+    const buf = await fsp.readFile(filePath);
+    if (buf.length <= ACP_READ_CAP) return buf.toString('utf8');
+    return buf.subarray(0, ACP_READ_CAP).toString('utf8') + `\n…[已截断 ${buf.length - ACP_READ_CAP} 字节，文件过大]`;
+  } catch { return ''; }
+}
+
+/** 历史消息逐 part 截断超长文本，避免巨型 part 拖崩渲染进程。 */
+function capMessages(result) {
+  const msgs = result && Array.isArray(result.messages) ? result.messages : null;
+  if (!msgs) return result;
+  for (const m of msgs) {
+    if (!m || !Array.isArray(m.parts)) continue;
+    for (const p of m.parts) {
+      if (p && typeof p.text === 'string') p.text = capPartText(p.text);
+    }
+  }
+  return result;
+}
+
 /** 完整读取一个会话，归一化成可渲染的消息列表。 */
 async function readSession(provider, cwd, sessionId) {
+  return capMessages(await readSessionRaw(provider, cwd, sessionId));
+}
+
+/** 拍平 claude message.content 为纯文本（用于历史过滤判定）。 */
+function claudeFlatText(message) {
+  const c = message && message.content;
+  if (typeof c === 'string') return c;
+  if (Array.isArray(c)) return c.map((b) => (b && b.type === 'text' && b.text) ? b.text : '').join('');
+  return '';
+}
+
+async function readSessionRaw(provider, cwd, sessionId) {
   if (provider === 'cursor') return cursorReadSession(cwd, sessionId);
   if (provider === 'gemini') return geminiReadSession(cwd, sessionId);
   if (provider === 'codex') return codexReadSession(cwd, sessionId);
@@ -298,6 +379,10 @@ async function readSession(provider, cwd, sessionId) {
     let o;
     try { o = JSON.parse(line); } catch { continue; }
     if (o.type !== 'user' && o.type !== 'assistant') continue;
+    // 静默额度探针在会话里留下的 `/usage` 问答：不让它出现在重载的历史里（与「不进聊天」一致）。
+    const flat = claudeFlatText(o.message);
+    if (o.type === 'user' && flat.trim() === '/usage') continue;
+    if (o.type === 'assistant' && /Current (session|week)[^\n]*%\s*used/i.test(flat)) continue;
     const parts = normalizeParts(o.message);
     if (parts.length === 0) continue;
     messages.push({ role: o.type, parts, ts: o.timestamp || null, uuid: o.uuid || null });
@@ -857,6 +942,7 @@ async function scanCliSkills() {
  * ------------------------------------------------------------------ */
 const sessions = new Map();      // runKey -> { input, ac, query }
 const pendingPerms = new Map();  // permId -> { cwd: runKey, settle }
+const pendingElicits = new Map(); // elicitId -> { cwd: runKey, settle }  —— MCP elicitation/create 等用户填表
 // 正在跑回合的 runKey 集合 —— 渲染进程重载/重连后据此对账，把还在跑的会话状态点亮回来。
 // send 时置入；收到本回合终止事件(result 主回合/error/session_closed)时移除（见 makeBatchedEmit）。
 const busyKeys = new Set();
@@ -871,10 +957,92 @@ const PERM_MODES = ['default', 'plan', 'acceptEdits', 'bypassPermissions'];
  * 这样同一项目目录可并存「主会话」与「衍生会话」两条独立常驻进程，互不串台。 */
 function runKey(cwd, lane) { return lane ? `${cwd}#@#${lane}` : cwd; }
 
+/** 子进程优雅退出 → 兜底强杀。先 SIGTERM，宽限期后若仍未退出补 SIGKILL。
+ *  spawn-per-turn 的 codex/cursor 子进程可能忽略/拖延 SIGTERM（卡在网络/子孙进程），
+ *  只发 SIGTERM 是 best-effort，10+ 并发久跑会攒孤儿。exitCode/signalCode 都为 null
+ *  = 仍在跑。定时器 unref，不拖住事件循环退出。 */
+const CHILD_KILL_GRACE_MS = 3000;
+function killChild(child) {
+  if (!child) return;
+  try { child.kill('SIGTERM'); } catch { /* gone */ }
+  const t = setTimeout(() => {
+    if (child.exitCode == null && child.signalCode == null) {
+      try { child.kill('SIGKILL'); } catch { /* */ }
+    }
+  }, CHILD_KILL_GRACE_MS);
+  if (t.unref) t.unref();
+}
+
 let _sdkPromise = null;
 function getSdk() {
   if (!_sdkPromise) _sdkPromise = import('@anthropic-ai/claude-agent-sdk');
   return _sdkPromise;
+}
+
+/* ------------------------------------------------------------------ *
+ * 会话互问（Phase 2）：给 claude 会话挂一个进程内 SDK MCP 工具 `ask_session`，
+ * 让 agent 自主去问「用户在 Chaya 里打开的另一个会话」。工具处理器不在主进程重写
+ * 各 provider 的执行，而是把请求回传渲染层 —— 复用已经跑通的 sessionBridge（Phase 1），
+ * 跨 provider、且 agent 发起的提问也会出现在同一个「围观面板」里。
+ * ------------------------------------------------------------------ */
+let _bridgeSdk = null;
+async function getBridgeSdk() {
+  if (_bridgeSdk) return _bridgeSdk;
+  const sdk = await getSdk();
+  let z = null;
+  try {
+    const sdkPath = require.resolve('@anthropic-ai/claude-agent-sdk');
+    z = require(require.resolve('zod', { paths: [sdkPath] }));
+    if (z && z.z) z = z.z;   // 兼容 { z } 命名导出
+  } catch (e) { console.warn('[localAgent] ask_session: zod unavailable, tool disabled:', e && e.message); }
+  _bridgeSdk = { createSdkMcpServer: sdk.createSdkMcpServer, tool: sdk.tool, z };
+  return _bridgeSdk;
+}
+
+const agentAskPending = new Map();   // requestId -> { resolve, timer }
+function requestAgentAsk(sender, payload) {
+  return new Promise((resolve) => {
+    const requestId = `agask-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const timer = setTimeout(() => {
+      if (agentAskPending.has(requestId)) { agentAskPending.delete(requestId); resolve('（提问超时，未获得回答）'); }
+    }, 10 * 60_000);
+    agentAskPending.set(requestId, { resolve, timer });
+    try {
+      if (sender.isDestroyed()) throw new Error('renderer gone');
+      sender.send('localAgent:agentAskRequest', { requestId, ...payload });
+    } catch {
+      clearTimeout(timer); agentAskPending.delete(requestId); resolve('（无法发起提问：界面不可用）');
+    }
+  });
+}
+
+/** 为某个 claude 会话构造进程内 MCP server（闭包记住发起会话的身份）。失败返回 null。 */
+async function buildBridgeMcp(sender, fromRunKey, fromProvider) {
+  try {
+    const { createSdkMcpServer, tool, z } = await getBridgeSdk();
+    if (!createSdkMcpServer || !tool || !z) return null;
+    const askTool = tool(
+      'ask_session',
+      '向用户在 Chaya 里打开的「另一个会话」提问并取回它的完整回答。当你需要其它项目/会话所掌握的上下文、'
+        + '或想让另一个（可能是不同 AI 的）会话帮你判断时使用。返回该会话的回答文本。',
+      {
+        to: z.string().describe('目标会话：项目名 / 目录 / 会话标题的关键字，模糊匹配。留空或 ephemeral=true 时在当前项目临时起一个。'),
+        question: z.string().describe('要问目标会话的问题，需自包含、完整。'),
+        ephemeral: z.boolean().optional().describe('true=临时新起一个会话作答（不打扰已有会话），答完即关。'),
+      },
+      async (args) => {
+        const text = await requestAgentAsk(sender, {
+          fromRunKey, fromProvider,
+          to: String(args.to || ''), question: String(args.question || ''), ephemeral: !!args.ephemeral,
+        });
+        return { content: [{ type: 'text', text: text || '（无回答）' }] };
+      },
+    );
+    return createSdkMcpServer({ name: 'chaya-bridge', version: '1.0.0', tools: [askTool] });
+  } catch (e) {
+    console.warn('[localAgent] buildBridgeMcp failed:', e && e.message);
+    return null;
+  }
 }
 
 /** 可推送的异步迭代器，作为 SDK streaming-input 的 prompt。 */
@@ -905,6 +1073,9 @@ function makeInputQueue() {
 function clearPerms(cwd, message) {
   for (const [pid, e] of pendingPerms) {
     if (e.cwd === cwd) { pendingPerms.delete(pid); e.settle({ behavior: 'deny', message: message || '会话结束' }); }
+  }
+  for (const [eid, e] of pendingElicits) {
+    if (e.cwd === cwd) { pendingElicits.delete(eid); e.settle({ action: 'cancel' }); }
   }
 }
 
@@ -958,9 +1129,32 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, reaso
   // 避免对着死帧疯狂 send 刷屏报错、也让孤儿 SDK 进程及时收尾。
   const emit = makeBatchedEmit((ev) => {
     const s = sessions.get(key); if (s) s.touched = Date.now();   // 任意流量 = 活跃，重置闲置计时
+    // 静默额度探针：本轮注入的 `/usage` 事件一律吞掉（不进聊天），只累计 assistant 文本，
+    // 回合结束解析出订阅额度后，用专门的 'usage' 事件回推渲染层刷新额度条。仅 claude。
+    if (s && s._usageProbe) {
+      const p = s._usageProbe;
+      if (ev.type === 'assistant') {
+        const c = ev.message && ev.message.content; let txt = '';
+        if (Array.isArray(c)) { for (const b of c) if (b && b.type === 'text' && b.text) txt += b.text; }
+        else if (typeof c === 'string') txt = c;
+        if (txt) p.text = txt;
+      } else if (ev.type === 'result' || ev.type === 'error' || ev.type === 'session_closed') {
+        const data = parseUsageText(p.text);
+        s._usageProbe = null; _usageProbing = false;
+        if (data) {
+          _usageCache = { at: Date.now(), data };
+          try { if (!sender.isDestroyed()) sender.send('localAgent:event', { cwd: key, ev: { type: 'usage', data } }); } catch { /* */ }
+        }
+      }
+      return true;   // 探针事件不渲染到聊天
+    }
     if (sender.isDestroyed()) { try { ac.abort(); } catch { /* */ } return false; }
-    try { sender.send('localAgent:event', { cwd: key, ev }); return true; }
+    let ok;
+    try { sender.send('localAgent:event', { cwd: key, ev }); ok = true; }
     catch { try { ac.abort(); } catch { /* */ } return false; }
+    // 真实回合结束 → 懒探一次订阅额度：复用这条常驻会话注入 `/usage`，不新开会话。
+    if (s && (provider || 'claude') === 'claude' && ev.type === 'result') maybeStartUsageProbe(s, key);
+    return ok;
   }, key);
 
   const canUseTool = (toolName, toolInput, ctx) => new Promise((resolve) => {
@@ -981,10 +1175,36 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, reaso
       type: isQuestion ? 'question_request' : 'permission_request', permId, toolName, input: toolInput,
       title: ctx?.title || null, displayName: ctx?.displayName || null, description: ctx?.description || null,
       suggestions: ctx?.suggestions || null,
+      // 子 agent(Task worker) 发起的权限/选择请求：SDK 在 ctx.agentID 给出子 agent 标识（主线程时为空）。
+      // 透传给渲染层 → 在主会话界面把这条问答标注「来自子 agent」，别让用户以为是主 agent 在问。
+      agentId: ctx?.agentID || null,
     });
     if (ctx?.signal) ctx.signal.addEventListener('abort', () => {
       if (pendingPerms.has(permId)) { pendingPerms.delete(permId); settle({ behavior: 'deny', message: '已取消' }); }
     });
+  });
+
+  // MCP elicitation/create：服务端请求用户输入（表单 / URL 授权）。不接的话 SDK 默认自动 decline，
+  // 这里转成 elicitation_request 事件弹给用户填，再 resolve 回 {action, content}。
+  const onElicitation = (request, options) => new Promise((resolve) => {
+    const settle = (result) => resolve(result && result.action ? result : { action: 'decline' });
+    if (ac.signal.aborted || options?.signal?.aborted) { settle({ action: 'cancel' }); return; }
+    const elicitId = `elic-${Math.random().toString(36).slice(2, 10)}`;
+    pendingElicits.set(elicitId, { cwd: key, settle, at: Date.now() });
+    emit({
+      type: 'elicitation_request', elicitId,
+      serverName: request?.serverName || null,
+      message: request?.message || '',
+      mode: request?.mode || 'form',
+      url: request?.url || null,
+      schema: request?.requestedSchema || null,
+      title: request?.title || null,
+      displayName: request?.displayName || null,
+      description: request?.description || null,
+    });
+    const onAbort = () => { if (pendingElicits.has(elicitId)) { pendingElicits.delete(elicitId); settle({ action: 'cancel' }); } };
+    if (options?.signal) options.signal.addEventListener('abort', onAbort);
+    ac.signal.addEventListener('abort', onAbort);
   });
 
   const mcpServers = resolveMcp(cwd, mcp);
@@ -994,10 +1214,13 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, reaso
   (async () => {
     try {
       const { query } = await getSdk();
+      // 进程内「会话互问」工具：挂给每个 claude 会话，让 agent 能 ask_session 其它会话。
+      const bridge = await buildBridgeMcp(sender, key, provider || 'claude');
+      const mcpAll = { ...(mcpServers || {}), ...(bridge ? { 'chaya-bridge': bridge } : {}) };
       const q = query({
         prompt: input.iter,
         options: {
-          cwd, permissionMode: mode, canUseTool,
+          cwd, permissionMode: mode, canUseTool, onElicitation,
           // 让 bypassPermissions 真正生效（否则该模式仍会触发 canUseTool 询问）。
           // 只是「允许」选用 bypass，不强制——具体行为由 permissionMode 决定。
           allowDangerouslySkipPermissions: true,
@@ -1007,7 +1230,7 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, reaso
           // 不连 ~/.claude.json 的环境 MCP（feishu/gitlab/ruflo 等）——本地编码 agent 用不到，
           // 而连接它们会给每次冷启加好几秒。需要再单独配。
           strictMcpConfig: true,
-          ...(mcpServers ? { mcpServers } : {}),
+          ...(Object.keys(mcpAll).length ? { mcpServers: mcpAll } : {}),
           includePartialMessages: true,
           pathToClaudeCodeExecutable: bin,
           abortController: ac,
@@ -1085,11 +1308,35 @@ function buildClaudeContent(prompt, attachments) {
   return out;
 }
 
+/* ------------------------------------------------------------------ *
+ * 多 CLI 并发护栏。每条常驻会话 ~60–80MB（claude/gemini/copilot 子进程），
+ * 多 provider 并行是核心能力但不能无上限：脚本/误操作连发能瞬间起几十个进程，
+ * 撞 OS ulimit 或吃光内存 → 整个 app 卡死。这里给「新建会话」设硬上限（已存在
+ * 的 key 续接不受限），到顶就回 error 事件、拒绝新建。闲置回收(15min)会自然腾位。
+ * ------------------------------------------------------------------ */
+const MAX_LIVE_SESSIONS = 24;
+function liveSessionCount() {
+  return sessions.size + cursorSessions.size + codexSessions.size + geminiSessions.size + copilotSessions.size;
+}
+function sessionExists(key) {
+  return sessions.has(key) || cursorSessions.has(key) || codexSessions.has(key) || geminiSessions.has(key) || copilotSessions.has(key);
+}
+/** 新建会话前的容量检查。已存在的 key（续接/暖会话）放行；满了发 error 并返回 false。 */
+function atCapacity(sender, cwd, lane) {
+  const key = runKey(cwd, lane);
+  if (sessionExists(key) || liveSessionCount() < MAX_LIVE_SESSIONS) return false;
+  busyKeys.delete(key);
+  try { sender.send('localAgent:event', { cwd: key, ev: { type: 'error', error: `并发会话已达上限（${MAX_LIVE_SESSIONS} 条）。请先结束部分会话，或等待闲置会话自动回收后再发起。` } }); } catch { /* */ }
+  console.warn('[localAgent] capacity reached (%d) · reject new session %s', MAX_LIVE_SESSIONS, key);
+  return true;
+}
+
 /** 发一个回合：会话不存在则懒创建（带 resume），然后把用户消息推进流。
  *  模型在发送这一刻才应用：冷启已用 options.model 起；暖会话且模型变了才 setModel
  *  （setModel 会注入「Set model to …」回显，渲染层会过滤掉，不当对话显示）。
  *  attachments：拖入/选取的文件 + 粘贴的图片（见上方注入逻辑）。 */
 async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode, model, reasoning, mcp, apiKey, attachments, lane, steer }) {
+  if (!steer && atCapacity(sender, cwd, lane)) return { ok: false, error: 'too_many_sessions' };
   if (!steer) busyKeys.add(runKey(cwd, lane));   // 回合开始 → 标记 busy（steer 是已在跑的回合插话，不重复标记）
   if (provider === 'cursor') return cursorSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, apiKey });
   if (provider === 'codex') return codexSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, reasoning });
@@ -1128,6 +1375,7 @@ async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode,
 /** 预热：打开/聚焦会话时就起常驻进程（提前付冷启 + resume 读盘），
  *  等用户真正发送时已是暖的——首 token 从 ~10s 降到 ~2s。已有则不重起。 */
 function sessionWarm(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, apiKey, lane }) {
+  if (atCapacity(sender, cwd, lane)) return { ok: false, error: 'too_many_sessions' };
   if (provider === 'cursor') return cursorWarm(sender, { cwd, lane, sessionId, permMode, model, apiKey });
   if (provider === 'codex') return codexWarm(sender, { cwd, lane, sessionId, permMode, model, reasoning });
   if (provider === 'gemini') return geminiWarm(sender, { cwd, lane, sessionId, permMode, model, mcp });
@@ -1216,8 +1464,8 @@ async function sessionSetReasoning({ cwd, reasoning, lane }) {
 /** 中断当前回合，但保留常驻会话（可继续发）。 */
 async function sessionInterrupt({ cwd, lane }) {
   busyKeys.delete(runKey(cwd, lane));   // 中断 → 回合结束
-  { const cu = cursorSessions.get(runKey(cwd, lane)); if (cu) { try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ } return { ok: true }; } }
-  { const cx = codexSessions.get(runKey(cwd, lane)); if (cx) { try { if (cx.child) cx.child.kill('SIGTERM'); } catch { /* */ } return { ok: true }; } }
+  { const cu = cursorSessions.get(runKey(cwd, lane)); if (cu) { killChild(cu.child); return { ok: true }; } }
+  { const cx = codexSessions.get(runKey(cwd, lane)); if (cx) { killChild(cx.child); return { ok: true }; } }
   { const g = geminiSessions.get(runKey(cwd, lane)); if (g && g.conn) { try { g.conn.notify('session/cancel', { sessionId: g.sessionId }); } catch { /* */ } return { ok: true }; } }
   { const cp = copilotSessions.get(runKey(cwd, lane)); if (cp && cp.conn) { try { cp.conn.notify('session/cancel', { sessionId: cp.sessionId }); } catch { /* */ } return { ok: true }; } }
   const s = sessions.get(runKey(cwd, lane));
@@ -1246,7 +1494,7 @@ function sessionClose({ cwd, lane }) {
     if (cu) {
       cursorSessions.delete(runKey(cwd, lane));
       try { if (cu.ac) cu.ac.abort(); } catch { /* */ }
-      try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ }
+      killChild(cu.child);
       return { ok: true };
     }
   }
@@ -1256,7 +1504,7 @@ function sessionClose({ cwd, lane }) {
     if (cx) {
       codexSessions.delete(key);
       try { if (cx.ac) cx.ac.abort(); } catch { /* */ }
-      try { if (cx.child) cx.child.kill('SIGTERM'); } catch { /* */ }
+      killChild(cx.child);
       return { ok: true };
     }
   }
@@ -1276,12 +1524,12 @@ function killAllSessions() {
   for (const [cwd, cu] of [...cursorSessions]) {
     cursorSessions.delete(cwd);
     try { if (cu.ac) cu.ac.abort(); } catch { /* */ }
-    try { if (cu.child) cu.child.kill('SIGTERM'); } catch { /* */ }
+    killChild(cu.child);
   }
   for (const [key, cx] of [...codexSessions]) {
     codexSessions.delete(key);
     try { if (cx.ac) cx.ac.abort(); } catch { /* */ }
-    try { if (cx.child) cx.child.kill('SIGTERM'); } catch { /* */ }
+    killChild(cx.child);
   }
   for (const [key, g] of [...geminiSessions]) {
     geminiSessions.delete(key);
@@ -1318,7 +1566,7 @@ function reapIdleSessions() {
       console.log('[localAgent] reap idle codex · %s', key);
       codexSessions.delete(key);
       try { if (cx.ac) cx.ac.abort(); } catch { /* */ }
-      try { if (cx.child) cx.child.kill('SIGTERM'); } catch { /* */ }
+      killChild(cx.child);
     }
   }
   // 常驻 gemini ACP 进程同样闲置回收(下次发送 geminiEnsure 自动重建)。
@@ -1344,7 +1592,21 @@ function reapIdleSessions() {
       try { e.settle({ behavior: 'deny', message: '权限请求超时（无人应答）' }); } catch { /* */ }
     }
   }
+  for (const [eid, e] of pendingElicits) {
+    if (now - (e.at || 0) > PERM_MAX_AGE_MS) {
+      pendingElicits.delete(eid);
+      try { e.settle({ action: 'cancel' }); } catch { /* */ }
+    }
+  }
+  // 并发可观测性：会话数有变化才打一行（避免空载刷屏），便于排查内存/进程占用与逼近上限。
+  const total = liveSessionCount();
+  if (total !== _lastReportedSessions) {
+    _lastReportedSessions = total;
+    console.log('[localAgent] live sessions: %d/%d · claude=%d cursor=%d codex=%d gemini=%d copilot=%d · perms=%d',
+      total, MAX_LIVE_SESSIONS, sessions.size, cursorSessions.size, codexSessions.size, geminiSessions.size, copilotSessions.size, pendingPerms.size);
+  }
 }
+let _lastReportedSessions = -1;
 const PERM_MAX_AGE_MS = 30 * 60 * 1000;
 
 /** 会话进行中切换权限模式（Tab 切档即时生效）。 */
@@ -1364,6 +1626,14 @@ function permissionRespond(permId, decision) {
   if (!e) return { ok: false };
   pendingPerms.delete(permId);
   e.settle(decision);   // settle 规整 allow/deny 成 SDK 要求的形状
+  return { ok: true };
+}
+
+function elicitationRespond(elicitId, result) {
+  const e = pendingElicits.get(elicitId);
+  if (!e) return { ok: false };
+  pendingElicits.delete(elicitId);
+  e.settle(result);   // { action: 'accept'|'decline'|'cancel', content? }
   return { ok: true };
 }
 
@@ -1642,7 +1912,7 @@ function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model, reas
   const key = runKey(cwd, lane);
   if (!bin) { sender.send('localAgent:event', { cwd: key, ev: { type: 'error', error: '未找到 codex，请确认已安装 Codex CLI' } }); return { ok: false }; }
   const prev = codexSessions.get(key);
-  if (prev && prev.child) { try { if (prev.ac) prev.ac.abort(); } catch { /* */ } try { prev.child.kill('SIGTERM'); } catch { /* */ } }
+  if (prev && prev.child) { try { if (prev.ac) prev.ac.abort(); } catch { /* */ } killChild(prev.child); }
 
   const ac = new AbortController();
   const resumeId = (prev && prev.sessionId) || sessionId || null;
@@ -1699,7 +1969,7 @@ function codexSend(sender, { cwd, lane, sessionId, prompt, permMode, model, reas
 
   const session = { child, ac, sessionId: resumeId, model: wantModel, reasoning: wantReasoning, permMode: wantPerm, touched: Date.now() };
   codexSessions.set(key, session);
-  ac.signal.addEventListener('abort', () => { try { child.kill('SIGTERM'); } catch { /* */ } });
+  ac.signal.addEventListener('abort', () => { killChild(child); });
   if (resumeId) emit({ type: 'system', subtype: 'init', session_id: resumeId });
   fetchCodexModels(bin, emit);
 
@@ -1801,7 +2071,7 @@ function cursorSend(sender, { cwd, lane, sessionId, prompt, permMode, model, api
   const key = apiKey || (prev && prev.apiKey) || null;
   if (!key) { sender.send('localAgent:event', { cwd: rkey, ev: { type: 'error', error: '需要 Cursor API Key —— 请在设置里录入' } }); return { ok: false }; }
   // 防孤儿：上回合若有未退的子进程（异常路径，渲染层 running 已防双发），先收掉再起新的，避免事件串扰。
-  if (prev && prev.child) { try { prev.ac && prev.ac.abort(); } catch { /* */ } try { prev.child.kill('SIGTERM'); } catch { /* */ } prev.child = null; }
+  if (prev && prev.child) { try { prev.ac && prev.ac.abort(); } catch { /* */ } killChild(prev.child); prev.child = null; }
 
   const ac = new AbortController();
   const emit = makeBatchedEmit((ev) => {
@@ -1824,7 +2094,7 @@ function cursorSend(sender, { cwd, lane, sessionId, prompt, permMode, model, api
 
   const session = { child, ac, sessionId: resumeId, model: model || null, permMode: permMode || 'force', apiKey: key };
   cursorSessions.set(rkey, session);
-  ac.signal.addEventListener('abort', () => { try { child.kill('SIGTERM'); } catch { /* */ } });
+  ac.signal.addEventListener('abort', () => { killChild(child); });
 
   const ctx = cursorDriver.makeTurnState();
   let sawResult = false;
@@ -2085,7 +2355,7 @@ async function geminiEnsure(sender, { cwd, lane, sessionId, permMode, model, mcp
       bin, cwd: realCwd, env: childEnv(),
       onNotify: (m, p) => { if (m !== 'session/update') return; const cur = geminiSessions.get(key); if (!cur) return; cur.touched = Date.now(); if (cur.replaying) return; for (const ev of geminiAcp.normalizeUpdate(p, cur.turnCtx)) emit(ev); },
       onRequest: async (m, p) => {
-        if (m === 'fs/read_text_file') { try { return { content: await fsp.readFile(p.path, 'utf8') }; } catch { return { content: '' }; } }
+        if (m === 'fs/read_text_file') { return { content: await readTextCapped(p.path) }; }
         if (m === 'fs/write_text_file') { try { await fsp.mkdir(path.dirname(p.path), { recursive: true }); await fsp.writeFile(p.path, p.content ?? ''); } catch { /* */ } return null; }
         if (m === 'session/request_permission') return geminiPermission(geminiSessions.get(key), p);
         return {};
@@ -2182,7 +2452,7 @@ async function copilotEnsure(sender, { cwd, lane, sessionId, permMode, model, mc
       // 否则会和已显示的历史重复成两遍。只渲染 load 完成后的「新」活动。
       onNotify: (m, p) => { if (m !== 'session/update') return; const cur = copilotSessions.get(key); if (!cur) return; cur.touched = Date.now(); if (cur.replaying) return; for (const ev of geminiAcp.normalizeUpdate(p, cur.turnCtx)) emit(ev); },
       onRequest: async (m, p) => {
-        if (m === 'fs/read_text_file') { try { return { content: await fsp.readFile(p.path, 'utf8') }; } catch { return { content: '' }; } }
+        if (m === 'fs/read_text_file') { return { content: await readTextCapped(p.path) }; }
         if (m === 'fs/write_text_file') { try { await fsp.mkdir(path.dirname(p.path), { recursive: true }); await fsp.writeFile(p.path, p.content ?? ''); } catch { /* */ } return null; }
         if (m === 'session/request_permission') return geminiPermission(copilotSessions.get(key), p);
         return {};
@@ -2582,10 +2852,10 @@ async function openInEditor(editor, dir) {
 // GUI Electron 的 PATH 解析不可靠 → 解析 git 全路径再 exec（同 resolveBin 惯例）。
 let _gitBin;
 function gitBin() { if (_gitBin === undefined) _gitBin = resolveBin('git') || 'git'; return _gitBin; }
-function runGit(cwd, args) {
+function runGit(cwd, args, timeout = 15000) {
   return new Promise((resolve) => {
     try {
-      execFile(gitBin(), args, { cwd, env: childEnv(), maxBuffer: 64 * 1024 * 1024, timeout: 15000 },
+      execFile(gitBin(), args, { cwd, env: childEnv(), maxBuffer: 64 * 1024 * 1024, timeout },
         (err, stdout, stderr) => resolve({ ok: !err, stdout: stdout || '', stderr: stderr || '', enoent: !!(err && err.code === 'ENOENT') }));
     } catch (e) { resolve({ ok: false, stdout: '', stderr: String(e && e.message || e), enoent: true }); }
   });
@@ -2624,7 +2894,52 @@ async function gitStatus(dir) {
       files.push({ path: p, abs: path.join(root, p), x, y, untracked, adds: s ? s.adds : 0, dels: s ? s.dels : 0, binary: s ? s.binary : false, renamedFrom });
     }
   }
-  return { ok: true, repo: true, root, files };
+  // 当前分支名 + 相对 upstream 的 ahead/behind（无 upstream 则 hasUpstream=false）。
+  const br = await runGit(root, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const branch = br.ok ? br.stdout.trim() : '';   // 'HEAD' = detached
+  let ahead = 0, behind = 0, hasUpstream = false;
+  const ab = await runGit(root, ['rev-list', '--left-right', '--count', '@{u}...HEAD']);
+  if (ab.ok && ab.stdout.trim()) {
+    const m = ab.stdout.trim().split(/\s+/);
+    behind = parseInt(m[0], 10) || 0; ahead = parseInt(m[1], 10) || 0; hasUpstream = true;
+  }
+  return { ok: true, repo: true, root, files, branch, ahead, behind, hasUpstream };
+}
+
+/** 手动提交：git add -A + commit -m。返回 ok / error（空消息、无身份配置、无改动等）。 */
+async function gitCommit(dir, message) {
+  if (!dir) return { ok: false, error: 'no dir' };
+  const top = await runGit(dir, ['rev-parse', '--show-toplevel']);
+  if (!top.ok) return { ok: false, error: 'not a repo' };
+  const root = top.stdout.trim();
+  const msg = String(message || '').trim();
+  if (!msg) return { ok: false, error: 'empty message' };
+  const add = await runGit(root, ['add', '-A']);
+  if (!add.ok) return { ok: false, error: (add.stderr || 'git add failed').trim() };
+  const c = await runGit(root, ['commit', '-m', msg]);
+  if (!c.ok) return { ok: false, error: (c.stderr || c.stdout || 'git commit failed').trim() };
+  return { ok: true };
+}
+
+/** 手动推送：有 upstream → git push；否则 push -u origin <branch>。push 走 60s 超时（网络）。 */
+async function gitPush(dir) {
+  if (!dir) return { ok: false, error: 'no dir' };
+  const top = await runGit(dir, ['rev-parse', '--show-toplevel']);
+  if (!top.ok) return { ok: false, error: 'not a repo' };
+  const root = top.stdout.trim();
+  const up = await runGit(root, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  let args;
+  if (up.ok && up.stdout.trim()) {
+    args = ['push'];
+  } else {
+    const br = await runGit(root, ['rev-parse', '--abbrev-ref', 'HEAD']);
+    const branch = br.ok ? br.stdout.trim() : '';
+    if (!branch || branch === 'HEAD') return { ok: false, error: 'detached HEAD，无法推送' };
+    args = ['push', '-u', 'origin', branch];
+  }
+  const p = await runGit(root, args, 60000);
+  if (!p.ok) return { ok: false, error: (p.stderr || p.stdout || 'git push failed').trim() };
+  return { ok: true };
 }
 
 async function gitDiffFile(dir, file, untracked) {
@@ -2738,6 +3053,9 @@ function runHeadless({ provider = 'claude', cwd, sessionId = null, prompt, permM
           case 'question_request':     // 无人值守：按默认继续，不挂起
             try { permissionRespond(ev.permId, { behavior: 'deny', message: '自动化任务（无人值守）：请按默认/最稳妥方式继续，不要等待用户选择。' }); } catch { /* */ }
             break;
+          case 'elicitation_request':  // 无人值守：无法填表 → 直接 decline，不挂起
+            try { elicitationRespond(ev.elicitId, { action: 'decline' }); } catch { /* */ }
+            break;
           case 'error':
             finish({ ok: false, error: String(ev.error || 'error'), output: lastAssistant });
             break;
@@ -2759,6 +3077,43 @@ function runHeadless({ provider = 'claude', cwd, sessionId = null, prompt, permM
       .then((r) => { if (!r || r.ok === false) finish({ ok: false, error: 'start failed', output: '' }); })
       .catch((e) => finish({ ok: false, error: String(e && e.message || e), output: '' }));
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * 订阅额度（claude /usage）：侧路跑本地命令 `/usage`（不走模型、很快），解析文本里的
+ *   「Current session / Current week」百分比。账号级、与会话无关 → 全局缓存 ~45s，避免
+ *   每回合都冷启一个 claude。rate_limit_event 在低占用时不带 utilization，故走这条更稳。
+ * ------------------------------------------------------------------ */
+let _usageCache = { at: 0, data: null };
+let _usageProbing = false;   // 全局单飞：额度是账号级，多会话只需一条探针在跑
+function parseUsageText(txt) {
+  if (!txt) return null;
+  const out = {};
+  const s = /Current session:\s*(\d+)%\s*used(?:\s*·\s*resets\s*([^\n]+))?/i.exec(txt);
+  if (s) { out.session = Number(s[1]); if (s[2]) out.sessionReset = s[2].trim(); }
+  const w = /Current week \(all models\):\s*(\d+)%\s*used(?:\s*·\s*resets\s*([^\n]+))?/i.exec(txt);
+  if (w) { out.week = Number(w[1]); if (w[2]) out.weekReset = w[2].trim(); }
+  const ws = /Current week \(Sonnet only\):\s*(\d+)%\s*used/i.exec(txt);
+  if (ws) out.weekSonnet = Number(ws[1]);
+  // 「What's contributing」往后的分解文本（Last 24h / Last 7d 等）整段保留，供浮层展示。
+  const m = /What's contributing[\s\S]*/i.exec(txt);
+  if (m) out.breakdown = m[0].trim();
+  return (out.session !== undefined || out.week !== undefined) ? out : null;
+}
+// 不再侧路新开会话探额度（那样会让一次性 `call back/…` 会话泛滥）。改为：真实回合结束时
+// 往用户那条常驻会话懒注入一条 `/usage`（见 startSession 的 maybeStartUsageProbe + 静默捕获）。
+// 这里只把已解析的缓存值返回给渲染层（挂载/切换时同步初值），永不触发取数。
+function probeUsage() { return _usageCache.data; }
+
+/** 真实回合结束后触发：往同一条常驻 claude 会话注入静默 `/usage`。账号级单飞 + 45s 缓存。 */
+function maybeStartUsageProbe(s, key) {
+  if (!s || s._usageProbe || _usageProbing) return;
+  if (Date.now() - _usageCache.at < 45_000) return;   // 缓存还新鲜
+  try {
+    s._usageProbe = { text: '' };
+    _usageProbing = true;
+    s.input.push({ type: 'user', message: { role: 'user', content: '/usage' }, parent_tool_use_id: null });
+  } catch { s._usageProbe = null; _usageProbing = false; }
 }
 
 /* ------------------------------------------------------------------ *
@@ -2876,11 +3231,21 @@ function registerLocalAgent(ipcMain, dialog) {
   ipcMain.handle('localAgent:readSession', (_e, { provider, cwd, sessionId }) => readSession(provider, cwd, sessionId));
   ipcMain.handle('localAgent:deleteSession', (_e, { provider, cwd, sessionId }) => deleteSession(provider, cwd, sessionId));
   ipcMain.handle('localAgent:listCommands', (_e, { provider, cwd }) => listCommands(provider, cwd));
+  ipcMain.handle('localAgent:usage', (_e, { cwd } = {}) => probeUsage(cwd));
   ipcMain.handle('localAgent:scanCliSkills', () => scanCliSkills());
   ipcMain.handle('localAgent:busyKeys', () => [...busyKeys]);   // 重连对账：当前在跑回合的 runKey 列表
   ipcMain.handle('localAgent:send', (e, payload) => sessionSend(e.sender, payload));
   ipcMain.handle('localAgent:warm', (e, payload) => sessionWarm(e.sender, payload));
+  // 会话互问：渲染层把 agent 发起的 ask_session 跑完后回传答复，解开对应的 pending 工具调用。
+  ipcMain.handle('localAgent:agentAskResult', (_e, { requestId, text }) => {
+    const p = agentAskPending.get(requestId);
+    if (!p) return { ok: false };
+    clearTimeout(p.timer); agentAskPending.delete(requestId);
+    p.resolve(typeof text === 'string' ? text : '（无结果）');
+    return { ok: true };
+  });
   ipcMain.handle('localAgent:permissionRespond', (_e, { permId, decision }) => permissionRespond(permId, decision));
+  ipcMain.handle('localAgent:elicitationRespond', (_e, { elicitId, result }) => elicitationRespond(elicitId, result));
   ipcMain.handle('localAgent:interrupt', (_e, { cwd, lane }) => sessionInterrupt({ cwd, lane }));
   ipcMain.handle('localAgent:sessionClose', (_e, { cwd, lane }) => sessionClose({ cwd, lane }));
   ipcMain.handle('localAgent:setPermMode', (_e, { cwd, permMode, lane }) => sessionSetPermMode({ cwd, permMode, lane }));
@@ -2896,6 +3261,8 @@ function registerLocalAgent(ipcMain, dialog) {
   ipcMain.handle('localAgent:gitDiffFile', (_e, { dir, file, untracked }) => gitDiffFile(dir, file, untracked));
   ipcMain.handle('localAgent:gitRevertFile', (_e, { dir, file, untracked }) => gitRevertFile(dir, file, untracked));
   ipcMain.handle('localAgent:gitRevertAll', (_e, { dir }) => gitRevertAll(dir));
+  ipcMain.handle('localAgent:gitCommit', (_e, { dir, message }) => gitCommit(dir, message));
+  ipcMain.handle('localAgent:gitPush', (_e, { dir }) => gitPush(dir));
   // CLI 登录 pty
   ipcMain.handle('localAgent:loginStart', (e, { provider, cols, rows }) => loginStart(e.sender, { provider, cols, rows }));
   ipcMain.handle('localAgent:loginInput', (_e, { id, data }) => loginInput({ id, data }));

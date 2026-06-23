@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { CodeBlock, PreBlock, mdRehypePlugins } from './codeBlock';
@@ -55,7 +55,10 @@ import { getLLMConfigs, type LLMConfigFromDB } from '../services/llmApi';
 import { updateSessionLLMConfig, getSessionMessages } from '../services/chat';
 import { updateRoleProfile } from '../services/roleApi';
 import { mcpApi, type MCPServer } from '../services/integrationsApi';
-import { LocalAgentTree, LocalAgentConversation, ForeignPaneContext, ProviderRail } from './LocalAgentView';
+import { LocalAgentTree, LocalAgentConversation, ForeignPaneContext, ProviderRail, ProviderLogo, PROVIDER_LABELS, AgentAskController, AgentMemoryController, AgentSummonReportController } from './LocalAgentView';
+import { AgentsManagerHost } from './AgentsManager';
+import { SessionBridgePanel } from './SessionBridgePanel';
+import { getAsks, onAsksChange } from './services/sessionBridge';
 import { useLocalAgent, realDir } from './useLocalAgent';
 import { CodeEditorLayer } from './CodeEditorLayer';
 import { InspectorColumn } from './InspectorColumn';
@@ -156,11 +159,50 @@ const ShellInner: React.FC = () => {
   const closeEditor = useCallback(() => setEditorOpen(false), []);
   // wiki 抽屉开关也移到右上角（与代码列同区）：状态由激活窗格的 WikiNotes 回报，这里只做镜像 + 触发。
   const [wikiOpen, setWikiOpen] = useState(false);
+  // 轻量全局 toast：任意处 dispatch `chaya:toast` {text} 即弹一条短提示（如「会话已绑定 Agent」）。
+  const [toast, setToast] = useState('');
+  useEffect(() => {
+    let timer = 0;
+    const on = (e: Event) => {
+      const text = (e as CustomEvent).detail?.text;
+      if (!text) return;
+      setToast(String(text));
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setToast(''), 4200);
+    };
+    window.addEventListener('chaya:toast', on as EventListener);
+    return () => { window.clearTimeout(timer); window.removeEventListener('chaya:toast', on as EventListener); };
+  }, []);
   useEffect(() => {
     const onWikiState = (e: Event) => { const d = (e as CustomEvent).detail; if (d?.active) setWikiOpen(!!d.open); };
     window.addEventListener('chaya:wiki-open', onWikiState as EventListener);
     return () => window.removeEventListener('chaya:wiki-open', onWikiState as EventListener);
   }, []);
+  // 「会话互问」右侧检视列：与 wiki/代码列共用第二列。作为右栏书签可点开/收起；新提问发起时
+  // 自动展开。订阅 sessionBridge 的提问数，决定书签是否出现 + 自动展开。
+  const bridgeAsks = useSyncExternalStore(onAsksChange, getAsks, getAsks);
+  const bridgeCount = bridgeAsks.length;
+  const [bridgeOpen, setBridgeOpen] = useState(false);
+  // 初值=挂载时的数量（含从快照恢复的历史），这样「恢复历史」不会在启动时误触自动展开。
+  const prevBridgeCount = useRef(bridgeCount);
+  // 收起 wiki + 代码列（让出第二列给互问列，避免叠盖）。wiki-toggle{open:false} 幂等。
+  const closeInspectors = useCallback(() => {
+    setEditorOpen(false);
+    setWikiOpen(false);
+    window.dispatchEvent(new CustomEvent('chaya:wiki-toggle', { detail: { open: false } }));
+  }, []);
+  useEffect(() => {
+    // 不变量：绝不抢视口。只有用户没在看检视栏(wiki/code)时才自动展开互问/召唤列；否则只更新
+    // 书签计数(badge)，等用户主动点开——修旧版「新提问就强关你正在看的检视栏」的不可控行为。
+    if (bridgeCount > prevBridgeCount.current && !editorOpen && !wikiOpen) setBridgeOpen(true);
+    prevBridgeCount.current = bridgeCount;
+  }, [bridgeCount, editorOpen, wikiOpen]);
+  // 「管理本地 Agent」(左树 Agents ★)：用户主动打开 Agent 面板（占用第二列，可关检视栏）。
+  useEffect(() => {
+    const on = () => { closeInspectors(); setBridgeOpen(true); };
+    window.addEventListener('chaya:openAgents', on as EventListener);
+    return () => window.removeEventListener('chaya:openAgents', on as EventListener);
+  }, [closeInspectors]);
   useEffect(() => {
     if (activeNav !== 'local') {
       setEditorOpen(false);
@@ -305,6 +347,14 @@ const ShellInner: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signalsFingerprint, la.activeCwd]);
 
+  // ----- 发起提问才置左：用户在某 local 会话发出消息时，把它对应的顶栏 tab 提到最左
+  //   （点击 tab 本身不再 promote）。只认 lastSend.tick 变化，不随流式 chunk 抖动。
+  useEffect(() => {
+    const cwd = la.lastSend.cwd;
+    if (cwd) topTabs.promote(localTabId(cwd));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [la.lastSend.tick]);
+
   // ----- 打开 / 激活 / 关闭。
   // 侧栏点击 chat / agent 会话 → 加到 topTabs（重复点击会被 topTabs.add 的短路过滤掉）
   // + setActiveSessionId 触发 chat backend 切换。
@@ -345,7 +395,9 @@ const ShellInner: React.FC = () => {
   const activateTopTab = useCallback((t: TopTab) => {
     topTabs.setActiveId(t.id);
     topTabs.clearUnread(t.id);
-    topTabs.promote(t.id);   // MRU：点击即提到 tab 栏最左（CLI 会话保持分组/邻接，不参与）
+    // 点击 tab 只聚焦、不置左（求稳：tab 不再因点击而跳位）。置左改由「发起提问」触发，
+    // 见下方监听 la.lastSend 的 effect。非 local 类（gallery/kb/chat）仍可点击即提左。
+    if (t.kind !== 'local') topTabs.promote(t.id);
 
     if (t.kind === 'gallery') setActiveNav('gallery');
     else if (t.kind === 'kb') setActiveNav('kb');
@@ -586,6 +638,19 @@ const ShellInner: React.FC = () => {
    *      的顶部（旧 bug）。等会话内有消息真正渲染完才把 ref 推进。 */
   const streamRef = useRef<HTMLDivElement | null>(null);
   const composerWrapRef = useRef<HTMLDivElement | null>(null);
+  // chat keep-alive：hidden(display:none) 会把 scrollTop 丢成 0，恢复显示时按这份
+  // 持续追踪的记忆复位 —— 之前贴底就继续贴底（吃掉隐藏期间的新消息），否则回原位。
+  const chatScrollMemRef = useRef<{ top: number; nearBottom: boolean }>({ top: 0, nearBottom: true });
+  useEffect(() => {
+    if (activeNav !== 'chat') return;
+    const id = requestAnimationFrame(() => {
+      const el = streamRef.current;
+      if (!el) return;
+      const m = chatScrollMemRef.current;
+      el.scrollTop = m.nearBottom ? el.scrollHeight : m.top;
+    });
+    return () => cancelAnimationFrame(id);
+  }, [activeNav]);
   const scrollRafRef = useRef<number | null>(null);
   const lastScrolledSidRef = useRef<string | null>(null);
   // The composer floats (position:absolute) over the bottom of the stream, and
@@ -1191,6 +1256,7 @@ const ShellInner: React.FC = () => {
     <div className="chaya-v2" data-mode={resolvedMode} data-theme={theme} data-glass={glassAttr} data-glass-i={glassIntensity} onDragOver={swallowDragOver} onDrop={onDrop}>
       {/* L0 底层壁纸：固定铺满、置于内容之后（Pure 三层结构的最底层透明玻璃面） */}
       <div id="v2-wall" aria-hidden />
+      {toast && <div className="v2-global-toast" role="status">{toast}</div>}
       {/* ===== 全宽统一顶栏：红绿灯 + 图标导航 + 置顶 + tab + 折叠，全在这一行（跨整窗宽） ===== */}
       <div className="v2-titlebar">
         <div className="v2-dots" aria-hidden><i /><i /><i /></div>
@@ -1261,24 +1327,7 @@ const ShellInner: React.FC = () => {
           onLocalTogglePin={(cwd) => topTabs.togglePin(localTabId(cwd))}
         />
         {/* code 视图的 wiki 笔记 / 代码改动开关已移到右侧 provider 书签栏底部（反向书签，见 ProviderRail footer）。 */}
-        {/* 全局运行指示：任何视图都常驻显示「有几个本地 CLI 任务在跑」，点击跳回 code 并聚焦一个在跑的会话。
-            解决「切到 chat/wiki 后看不到 code 里还在跑」。 */}
-        {isLocalAgentAvailable() && (() => {
-          const rbp = la.runningByProvider || {};
-          const total = Object.values(rbp).reduce((a, b) => a + (b || 0), 0);
-          if (!total) return null;
-          return (
-            <button
-              className="v2-run-pill"
-              title={tr('local.run.pill', { n: total })}
-              aria-label={tr('local.run.pill', { n: total })}
-              onClick={() => { const r = la.tabs.find((t) => t.running); enterLocal(); if (r) la.setActiveTab(r.cwd); }}
-            >
-              <span className="v2-run-dot" aria-hidden />
-              <span className="v2-run-n">{total}</span>
-            </button>
-          );
-        })()}
+        {/* 顶栏全局运行指示已移除：运行中会话数只在右侧 provider 书签栏的计数气泡上显示，单一来源不重复。 */}
         {/* 知识库下侧栏本就收起，此按钮改为「展开/收起 KB 停靠列表栏」（复用同一个右上角按钮）。 */}
         {activeNav === 'kb' ? (
           <button
@@ -1431,7 +1480,7 @@ const ShellInner: React.FC = () => {
                 title={tr('local.wiki.openTitle')}
                 aria-label={tr('local.wiki.pill')}
                 aria-pressed={wikiOpen}
-                onClick={() => window.dispatchEvent(new CustomEvent('chaya:wiki-toggle'))}
+                onClick={() => { setBridgeOpen(false); window.dispatchEvent(new CustomEvent('chaya:wiki-toggle')); }}
               >
                 <span className="v2-prov-bm-glyph">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="16" height="16" aria-hidden><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>
@@ -1443,11 +1492,25 @@ const ShellInner: React.FC = () => {
                 title={tr('local.editor.openTitle')}
                 aria-label={tr('local.editor.title')}
                 aria-pressed={editorOpen}
-                onClick={() => setEditorOpen((o) => !o)}
+                onClick={() => { setBridgeOpen(false); setEditorOpen((o) => !o); }}
               >
                 <span className="v2-prov-bm-glyph">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="16" height="16" aria-hidden><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>
                 </span>
+              </button>
+              {/* Agents 书签：常驻（与 wiki/代码列互斥）；点开/收起 Agent 管理面板。有召唤进行中时带呼吸点。 */}
+              <button
+                type="button"
+                className={`v2-prov-bm insp${bridgeOpen ? ' active' : ''}`}
+                title="Agents"
+                aria-label="Agents"
+                aria-pressed={bridgeOpen}
+                onClick={() => { if (!bridgeOpen) closeInspectors(); setBridgeOpen((o) => !o); }}
+              >
+                <span className="v2-prov-bm-glyph">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="16" height="16" aria-hidden><rect x="4.5" y="7.5" width="15" height="12" rx="3.4" /><path d="M12 7.5V4" /><circle cx="12" cy="3" r="1.4" /><path d="M2.6 12v3M21.4 12v3" /><path d="M9 13h.01M15 13h.01" /></svg>
+                </span>
+                {bridgeAsks.some((a) => a.phase === 'pending' || a.phase === 'running') && <span className="v2-prov-bm-dot" aria-hidden />}
               </button>
             </>}
           />
@@ -1480,15 +1543,38 @@ const ShellInner: React.FC = () => {
                       <LocalAgentConversation la={la} />
                     </ForeignPaneContext.Provider>
                   </ChatPaneContext.Provider>
+                  {/* 会话互问：agent 端控制器（ask_session 工具回传）+ 围观面板（portal 到 body）。 */}
+                  <AgentAskController la={la} />
+                  <AgentSummonReportController la={la} />
+                  <AgentMemoryController />
+                  <AgentsManagerHost />
+                  <SessionBridgePanel
+                    open={bridgeOpen && activeNav === 'local'}
+                    dir={la.activeCwd ? realDir(la.activeCwd) : null}
+                    onAdopt={(fromCwd, text) => { la.setActiveTab(fromCwd); la.appendDraft(fromCwd, text); }}
+                    onOpenAgent={(a) => { if (a.provider !== la.activeProvider) la.switchActiveProvider(a.provider); void la.openSession(a.dir, a.sessionId, a.description || `@${a.name}`); }}
+                    logo={(p) => <ProviderLogo id={p} mono />}
+                    labelFor={(p) => PROVIDER_LABELS[p] || p}
+                  />
                 </div>
               </div>
             </div>
           )}
 
-          {activeNav === 'chat' && (
+          {/* chat 也走 keep-alive：历史一长，重挂载（全部消息 markdown 重渲）让 code→chat
+              切换明显卡一拍。首访挂载一次，之后 hidden 切显隐瞬时；切回时下方 effect 重新贴底。 */}
+          {visitedNav.has('chat') && (
+          <div className="v2-view-slot" hidden={activeNav !== 'chat'}>
           <div className="v2-feat">
             <div className="v2-feat-main">
-          <section className="v2-stream" ref={streamRef}>
+          <section
+            className="v2-stream"
+            ref={streamRef}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              chatScrollMemRef.current = { top: el.scrollTop, nearBottom: el.scrollHeight - el.scrollTop - el.clientHeight < 200 };
+            }}
+          >
             <div className="v2-msgs">
               {messages.length === 0 && activeBatches.length === 0 && !stream && !thinking && (
                 <EmptyState title={activeTitle} />
@@ -1696,6 +1782,7 @@ const ShellInner: React.FC = () => {
             </div>
           </div>
             </div>
+          </div>
           </div>
           )}
           </KbListContext.Provider>

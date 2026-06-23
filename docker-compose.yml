@@ -1,22 +1,11 @@
+# PostgreSQL / Redis / MySQL 已迁到「本地共享基础设施」(~/docker-shared, name: shared-infra)。
+# 本项目不再自带 pg/redis —— 它们与共享实例端口/账号一致，直接连 localhost 即可：
+#   PG    shared-postgres  localhost:5432  postgres/postgres  db=chaya
+#   Redis shared-redis     localhost:6379  password=123456    db=1
+# 启动共享实例：  cd ~/docker-shared && docker compose up -d
+# 详见 ~/docker-shared/README.md。本文件只保留项目专属的 ML sidecar。
 services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: chaya-postgres
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: chaya
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
-  # docker compose --profile ml up -d
+  # 项目专属 RAG 向量服务（sentence-transformers，384 维）：docker compose --profile ml up -d
   chaya-ml:
     profiles:
       - ml
@@ -29,6 +18,3 @@ services:
     environment:
       CHAYA_ML_HOST: "0.0.0.0"
       CHAYA_ML_PORT: "8100"
-
-volumes:
-  pgdata:

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Chaya 茶 — cup + single steam curl, monoline. Mono treatment: warm off-white
+     paper tile (no pure white), deep neutral ink, subtle letterpress deboss
+     (paper highlight offset under the ink, NO glow). Fits the ChatGPT-mono default. -->
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f6f3ee"/><stop offset="1" stop-color="#ece7df"/>
+    </linearGradient>
+  </defs>
+  <!-- paper tile -->
+  <rect width="64" height="64" rx="14" fill="url(#paper)"/>
+  <rect x="2.5" y="2.5" width="59" height="59" rx="11.5" fill="none" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <!-- letterpress deboss: paper-light copy, offset down -->
+    <g stroke="#ffffff" stroke-opacity="0.7" transform="translate(0 0.8)">
+      <path d="M20.5 31 L43.5 31" stroke-width="3"/>
+      <path d="M21 31 C21 41 25.5 45.5 32 45.5 C38.5 45.5 43 41 43 31" stroke-width="3"/>
+      <path d="M43 33 C49.5 32 49.5 40 43 39" stroke-width="3"/>
+      <path d="M28 25.5 C24.5 21.5 31 19.5 27.8 15" stroke-width="2.4"/>
+      <path d="M36 25.5 C32.5 21.5 39 19.5 35.8 15" stroke-width="2.4"/>
+    </g>
+    <!-- ink mark -->
+    <g stroke="#232020">
+      <path d="M20.5 31 L43.5 31" stroke-width="3"/>
+      <path d="M21 31 C21 41 25.5 45.5 32 45.5 C38.5 45.5 43 41 43 31" stroke-width="3"/>
+      <path d="M43 33 C49.5 32 49.5 40 43 39" stroke-width="3"/>
+      <path d="M28 25.5 C24.5 21.5 31 19.5 27.8 15" stroke-width="2.4" stroke-opacity="0.85"/>
+      <path d="M36 25.5 C32.5 21.5 39 19.5 35.8 15" stroke-width="2.4" stroke-opacity="0.85"/>
+    </g>
+  </g>
+</svg>

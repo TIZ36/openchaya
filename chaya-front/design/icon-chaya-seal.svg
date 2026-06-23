@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Chaya 茶 — "pressed seal" hero. A hand-drawn imperfect ink ring (slightly
+     uneven, letterpress) with the cup+steam pressed inside. Strongest handmade
+     read; deboss via inner shadow on the ring, no glow. Neutral so it can take
+     any theme accent if desired. -->
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+  <defs>
+    <linearGradient id="paper2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f5f1ea"/><stop offset="1" stop-color="#e9e3d9"/>
+    </linearGradient>
+    <filter id="press" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="0.6" stdDeviation="0.5" flood-color="#ffffff" flood-opacity="0.7"/>
+    </filter>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#paper2)"/>
+  <g fill="none" stroke="#2a2422" stroke-linecap="round" stroke-linejoin="round" filter="url(#press)">
+    <!-- imperfect hand-drawn ring: not a perfect circle, slight wobble -->
+    <path d="M32 11.5 C44 11 53.2 20.4 52.5 32.3 C53 44 43.5 52.8 31.8 52.5
+             C20.2 52.8 11 43.6 11.5 31.7 C11.1 20.1 20.3 11.2 32 11.5 Z"
+          stroke-width="2.2" stroke-opacity="0.9"/>
+    <!-- cup + steam inside -->
+    <path d="M24 33.5 L40 33.5" stroke-width="2.4"/>
+    <path d="M24.3 33.5 C24.3 40.5 27.6 43.8 32 43.8 C36.4 43.8 39.7 40.5 39.7 33.5" stroke-width="2.4"/>
+    <path d="M39.7 35 C44 34.3 44 39.5 39.7 38.8" stroke-width="2.4"/>
+    <path d="M29.5 28.8 C26.8 26 31 24.6 28.8 21.5" stroke-width="1.9" stroke-opacity="0.8"/>
+    <path d="M35 28.8 C32.3 26 36.5 24.6 34.3 21.5" stroke-width="1.9" stroke-opacity="0.8"/>
+  </g>
+</svg>

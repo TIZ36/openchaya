@@ -875,6 +875,38 @@ html:not([data-vibrancy="on"]) .chaya-v2[data-theme="codex"] .v2-titlebar {
   box-shadow: var(--lq-card-shadow);
 }
 
+/* Agent 配置弹窗：Pure 下用户要求「实底」——不走玻璃半透，免得系统提示词那种大段编辑
+   透底看不清。亮/暗各给一档从桌面抬起的不透明面板（无 backdrop-filter）。 */
+.chaya-v2[data-theme="codex"] .v2-agent-modal {
+  background: oklch(0.988 0.003 250);   /* Pure 亮：抬起的近白纸面 */
+  border-color: var(--c-rule);
+  box-shadow: var(--lq-card-shadow);
+}
+.chaya-v2[data-theme="codex"] .v2-agent-modal-bd input,
+.chaya-v2[data-theme="codex"] .v2-agent-modal-bd textarea {
+  background: oklch(0.998 0.001 250);   /* 输入域纯净实底 */
+  border-color: var(--c-rule);
+}
+.chaya-v2[data-theme="codex"] .v2-agent-mem {
+  background: oklch(0.972 0.004 250);   /* 记忆区轻微凹陷的实底 */
+  border-color: var(--c-rule);
+}
+.chaya-v2[data-theme="codex"][data-mode="dark"] .v2-agent-modal {
+  background: oklch(0.255 0.009 262);   /* Pure 暗：从 ~0.21 桌面抬起一档的实底面板 */
+}
+.chaya-v2[data-theme="codex"][data-mode="dark"] .v2-agent-modal-bd input,
+.chaya-v2[data-theme="codex"][data-mode="dark"] .v2-agent-modal-bd textarea {
+  background: oklch(0.200 0.008 262);   /* 输入域更深一档=凹陷可编辑感 */
+}
+.chaya-v2[data-theme="codex"][data-mode="dark"] .v2-agent-mem {
+  background: oklch(0.225 0.009 262);
+}
+/* Pure 暗色遮罩：基底用 --c-ink(暗色翻成近白)会变成发白纱罩，专门压成深色 dim，
+   让实底弹窗有正常的「聚焦变暗」背景（亮色 Pure 的 --c-ink 本就是深的，不用改）。 */
+.chaya-v2[data-theme="codex"][data-mode="dark"] .v2-agent-scrim {
+  background: color-mix(in oklab, oklch(0.12 0.01 262) 54%, transparent);
+}
+
 /* ── Pure 按钮：液态折射，不是灰阶斜面 ───────────────────────────────────────
    关键：liquid 的立体感来自「折射」——半透明材质 + backdrop 把背后的内容糊+提亮，
    再加一道镜面受光 + 玻璃缘，而不是上亮下暗的灰阶渐变(那是旧式拟物 gel/斜面)。
@@ -1591,23 +1623,6 @@ html[data-electron-platform="darwin"] .chaya-v2 .v2-titlebar { padding-left: 78p
 .chaya-v2 .v2-titlebar-collapse { flex: 0 0 auto; margin-left: 4px; color: var(--c-ink-4); }
 .chaya-v2 .v2-titlebar-collapse:hover { color: var(--c-ink); }
 /* 全局运行指示：常驻顶栏，琥珀呼吸点 + 在跑任务数，任何视图可见。 */
-.chaya-v2 .v2-run-pill {
-  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px;
-  height: 24px; margin: 0 2px; padding: 0 9px 0 8px;
-  border-radius: var(--c-radius-pill);
-  background: color-mix(in oklab, var(--c-warn) 12%, var(--c-bg));
-  border: 1px solid color-mix(in oklab, var(--c-warn) 28%, var(--c-rule));
-  color: color-mix(in oklab, var(--c-warn) 72%, var(--c-ink-2));
-  font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums;
-  transition: background var(--m-fast) var(--c-ease), border-color var(--m-fast) var(--c-ease);
-}
-.chaya-v2 .v2-run-pill:hover { background: color-mix(in oklab, var(--c-warn) 18%, var(--c-bg)); }
-.chaya-v2 .v2-run-pill .v2-run-dot {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: color-mix(in oklab, var(--c-warn) 72%, var(--c-ink-3));
-  animation: v2-la-breathe 1.4s var(--c-ease) infinite;
-}
-@media (prefers-reduced-motion: reduce) { .chaya-v2 .v2-run-pill .v2-run-dot { animation: none; } }
 /* 常驻拖窗手柄：重新开启拖窗(覆盖 .v2-titlebar>* 的 no-drag)，给一块明确可抓的小区域 */
 .chaya-v2 .v2-titlebar-drag {
   -webkit-app-region: drag;
@@ -2591,21 +2606,42 @@ html[data-electron="true"] .chaya-v2 .v2-msgs { max-width: 920px; }
 .chaya-v2 .v2-shimmer-tile { display: block; width: 100%; height: 100%; background: linear-gradient(90deg, var(--c-surface), var(--c-hover-soft), var(--c-surface)); background-size: 200% 100%; animation: v2-shimmer 1.4s linear infinite; }
 
 /* ---- CLI 登录终端浮层（claude/copilot/gemini）：主题化、portal 进 body ---- */
-.chaya-v2 .v2-login-mask { position: fixed; inset: 0; z-index: 95; background: rgba(0,0,0,0.34); display: grid; place-items: center; backdrop-filter: blur(2px); }
+/* z-index 130：高于配置面板模态（z120）——登录从配置面板里点出，必须叠在它之上，
+ *  否则登录浮层被配置模态盖住、其遮罩还吃掉鼠标事件 → 终端里的确认码选不中/复制不了。 */
+.chaya-v2 .v2-login-mask { position: fixed; inset: 0; z-index: 130; background: rgba(0,0,0,0.34); display: grid; place-items: center; backdrop-filter: blur(2px); }
 .chaya-v2 .v2-login {
-  width: min(620px, calc(100vw - 48px)); max-height: min(78vh, 680px);
+  width: min(820px, calc(100vw - 48px)); max-height: min(80vh, 700px);
   display: flex; flex-direction: column;
   background: var(--c-bg); border: 1px solid var(--c-rule); border-radius: var(--c-radius-xl);
   box-shadow: var(--c-shadow-menu); padding: 16px; gap: 10px;
   animation: v2-fadeUp 180ms var(--c-ease-spring) both;
 }
+/* 双栏体：左终端弹性占主，右确认面板定宽。窄屏（<640px）退化为上下堆叠。 */
+.chaya-v2 .v2-login-body { flex: 1; min-height: 0; display: flex; gap: 12px; }
+.chaya-v2 .v2-login-aside { flex: 0 0 248px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
+.chaya-v2 .v2-login-aside-sec { display: flex; flex-direction: column; gap: 8px; }
+.chaya-v2 .v2-login-aside-ttl { font-size: 11px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; color: var(--c-ink-4); }
+.chaya-v2 .v2-login-aside-wait { font-size: 12px; color: var(--c-ink-4); font-style: italic; line-height: 1.5; }
+.chaya-v2 .v2-login-code {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%;
+  padding: 10px 12px; border: 1px solid color-mix(in oklab, var(--c-accent) 35%, var(--c-rule));
+  border-radius: var(--c-radius-md); background: var(--c-accent-bg, var(--c-surface)); cursor: pointer;
+  transition: background 120ms var(--c-ease), border-color 120ms var(--c-ease);
+}
+.chaya-v2 .v2-login-code:hover { border-color: var(--c-accent-strong); }
+.chaya-v2 .v2-login-code .code { font-family: var(--c-font-mono, ui-monospace, Menlo, monospace); font-size: 20px; font-weight: 650; letter-spacing: 0.08em; color: var(--c-ink); user-select: all; }
+.chaya-v2 .v2-login-code .cp { font-size: 11px; color: var(--c-accent-strong); white-space: nowrap; }
+.chaya-v2 .v2-login-urlrow { display: flex; align-items: center; gap: 6px; }
+.chaya-v2 .v2-login-urlcopy { flex: 0 0 auto; font-size: 12px; padding: 4px 8px; border: 1px solid var(--c-rule); border-radius: var(--c-radius-sm); color: var(--c-ink-3); cursor: pointer; }
+.chaya-v2 .v2-login-urlcopy:hover { background: var(--c-hover); color: var(--c-ink); }
+@media (max-width: 640px) { .chaya-v2 .v2-login-body { flex-direction: column; } .chaya-v2 .v2-login-aside { flex: 0 0 auto; } }
 .chaya-v2 .v2-login-hd { display: flex; align-items: center; gap: 8px; }
 .chaya-v2 .v2-login-hd .ttl { font-size: 14px; font-weight: 650; color: var(--c-ink); flex: 1; }
 .chaya-v2 .v2-login-hd .x { width: 26px; height: 26px; border-radius: var(--c-radius-md); color: var(--c-ink-3); display: grid; place-items: center; }
 .chaya-v2 .v2-login-hd .x:hover { background: var(--c-hover); color: var(--c-ink); }
 .chaya-v2 .v2-login-sub { font-size: 12px; color: var(--c-ink-3); line-height: 1.55; }
 .chaya-v2 .v2-login-out {
-  flex: 1; min-height: 220px; overflow: auto; margin: 0;
+  flex: 1; min-width: 0; min-height: 220px; overflow: auto; margin: 0;
   background: var(--c-surface); border: 1px solid var(--c-rule); border-radius: var(--c-radius-md);
   padding: 10px 12px; font-family: var(--c-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 12px; line-height: 1.5; color: var(--c-ink); white-space: pre-wrap; word-break: break-word;
@@ -3957,6 +3993,38 @@ html[data-electron="true"] .chaya-v2 .v2-composer { max-width: 940px; }
 .chaya-v2 .v2-row .v2-ib:hover { background: var(--c-hover); color: var(--c-ink); }
 .chaya-v2 .v2-row .v2-ib:active { transform: scale(0.92); }
 .chaya-v2 .v2-row .v2-ib svg { width: 18px; height: 18px; }
+
+/* Composer toolbar responsiveness: when the box is too narrow for every tag,
+   the right controls (perm / model / send) stay one group and drop to their own
+   right-aligned line, instead of staying mid-row while the left tags wrap under
+   them (which left an orphaned MCP pill + a floating right cluster). Bottom
+   alignment keeps the controls level with the last wrapped tag line. */
+.chaya-v2 .v2-composer .v2-row { flex-wrap: wrap; align-items: flex-end; row-gap: 8px; }
+.chaya-v2 .v2-composer .v2-row .v2-l { flex: 1 1 auto; min-width: 0; align-self: flex-end; }
+.chaya-v2 .v2-composer .v2-row .v2-r { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-left: auto; align-self: flex-end; }
+
+/* Attach / Skill / MCP cluster: inline when there's room; collapses behind a
+   single "+" overflow icon (no labels) when the toolbar is too narrow. The
+   inline-vs-collapsed switch is driven by a ResizeObserver (compact state) in
+   JSX rather than a container query — a container would become the containing
+   block for ProviderBanner's position:fixed menu and misplace it. */
+.chaya-v2 .v2-l-tools { display: inline-flex; align-items: center; gap: 6px; }
+.chaya-v2 .v2-l-more-wrap { display: inline-flex; position: relative; }
+.chaya-v2 .v2-la-toolsmenu {
+  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 40;
+  background: var(--c-bg); border: 1px solid var(--c-rule);
+  border-radius: var(--c-radius-lg); box-shadow: var(--c-shadow-menu);
+  padding: 4px; min-width: 168px; display: flex; flex-direction: column; gap: 2px;
+  animation: v2-popUp 160ms var(--c-ease) both;
+}
+.chaya-v2 .v2-la-toolsmenu-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 10px; border-radius: var(--c-radius-sm);
+  font-size: 13px; color: var(--c-ink); cursor: pointer; white-space: nowrap;
+}
+.chaya-v2 .v2-la-toolsmenu-item:hover { background: var(--c-hover); }
+.chaya-v2 .v2-la-toolsmenu-item svg { width: 16px; height: 16px; flex: 0 0 auto; }
+.chaya-v2 .v2-la-toolsmenu-item .n { margin-left: auto; font-size: 11px; color: var(--c-ink-3); }
 
 .chaya-v2 .v2-modepills { position: relative; display: inline-flex; padding: 2px; background: var(--c-surface); border-radius: var(--c-radius-pill); }
 /* Above the box (prototype layout): a standalone toggle hugging the left edge,
@@ -5969,6 +6037,13 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .v2-la-skillbtn .lb { font-size: 11.5px; font-weight: 600; letter-spacing: 0.01em; }
 .chaya-v2 .v2-la-skillbtn:hover { color: var(--c-ink-1); background: var(--c-hover); }
 .chaya-v2 .v2-la-skillbtn.on { color: var(--c-accent); background: var(--c-accent-bg); }
+/* MCP 按钮：已启用时（.has）点亮 accent + 数量徽标，和「问会话/技能」一排但能看出在用。 */
+.chaya-v2 .v2-la-skillbtn.has { color: var(--c-accent); }
+.chaya-v2 .v2-la-skillbtn .n {
+  font-size: 10px; font-weight: 700; line-height: 1; min-width: 14px; height: 14px; padding: 0 3px;
+  display: inline-flex; align-items: center; justify-content: center; border-radius: 7px;
+  background: var(--c-accent); color: var(--c-on-accent, #fff);
+}
 /* 技能过滤框：弹出即聚焦，敲字过滤列表；嵌在弹层顶部，与列表项同宽。 */
 .chaya-v2 .v2-la-skillfilter {
   display: block; width: calc(100% - 16px); margin: 2px 8px 6px;
@@ -6015,6 +6090,22 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .v2-la-perm-hd .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c-accent); align-self: center; flex: 0 0 auto; }
 .chaya-v2 .v2-la-perm-hd b { font-weight: 600; color: var(--c-ink); }
 .chaya-v2 .v2-la-perm-hd .t { color: var(--c-ink-2); }
+/* 「来自子 agent」标记：权限/选择请求由 Task 子 agent 发起时挂在标题上，紫调小胶囊，与主 agent 区分。 */
+.chaya-v2 .v2-la-subagent-tag {
+  flex: 0 0 auto; align-self: center; margin-left: auto;
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 7px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.01em; line-height: 1.5;
+  color: color-mix(in oklab, var(--c-accent) 78%, var(--c-ink));
+  background: color-mix(in oklab, var(--c-accent) 14%, var(--c-bg));
+  border: 1px solid color-mix(in oklab, var(--c-accent) 38%, var(--c-rule));
+}
+.chaya-v2 .v2-la-subagent-tag::before {
+  content: ""; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--c-accent);
+}
+.chaya-v2 .v2-la-q-from { display: flex; margin-bottom: 8px; }
+.chaya-v2 .v2-la-q-from .v2-la-subagent-tag { margin-left: 0; }
 .chaya-v2 .v2-la-perm-body { margin: 8px 0 10px; }
 .chaya-v2 .v2-la-perm-body .cmd { font-family: var(--c-mono); font-size: 12px; color: var(--c-ink); background: var(--c-bg); border: 1px solid var(--c-rule); border-radius: var(--c-radius-md); padding: 8px 10px; white-space: pre-wrap; word-break: break-word; margin: 0; }
 .chaya-v2 .v2-la-perm-body .file { font-family: var(--c-mono); font-size: 12px; color: var(--c-ink-2); }
@@ -6028,6 +6119,25 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .v2-la-perm-acts .always:hover { background: var(--c-accent-bg); }
 .chaya-v2 .v2-la-perm-acts .deny { background: transparent; color: var(--c-ink-3); }
 .chaya-v2 .v2-la-perm-acts .deny:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-la-perm-acts .cancel { background: transparent; color: var(--c-ink-4); }
+.chaya-v2 .v2-la-perm-acts .cancel:hover { background: var(--c-hover); color: var(--c-ink); }
+.chaya-v2 .v2-la-perm-acts .allow:disabled { opacity: 0.45; cursor: default; }
+
+/* MCP elicitation 表单字段 */
+.chaya-v2 .v2-la-elicit .v2-la-perm-body { display: flex; flex-direction: column; gap: 10px; }
+.chaya-v2 .v2-la-elicit-field { display: flex; flex-direction: column; gap: 4px; }
+.chaya-v2 .v2-la-elicit-field .lab { font-size: 12px; font-weight: 600; color: var(--c-ink-2); }
+.chaya-v2 .v2-la-elicit-field .lab .req { color: var(--c-danger, #c0392b); margin-left: 3px; }
+.chaya-v2 .v2-la-elicit-field .fdesc { font-size: 11px; color: var(--c-ink-4); line-height: 1.4; }
+.chaya-v2 .v2-la-elicit-field input[type="text"],
+.chaya-v2 .v2-la-elicit-field input[type="number"],
+.chaya-v2 .v2-la-elicit-field select {
+  font: inherit; font-size: 13px; padding: 6px 9px; border: 1px solid var(--c-rule); border-radius: var(--c-radius-md);
+  background: var(--c-surface, var(--c-bg)); color: var(--c-ink); width: 100%; box-sizing: border-box;
+}
+.chaya-v2 .v2-la-elicit-field input:focus, .chaya-v2 .v2-la-elicit-field select:focus { border-color: var(--c-accent); outline: none; }
+.chaya-v2 .v2-la-elicit-field input[type="checkbox"] { width: 16px; height: 16px; align-self: flex-start; accent-color: var(--c-accent); }
+.chaya-v2 .v2-la-elicit-url { font-size: 12px; font-family: var(--c-mono); color: var(--c-accent-strong); word-break: break-all; }
 
 /* AskUserQuestion 选择卡片（仿 VSCode 插件：单选/多选 + 描述 + 提交） */
 .chaya-v2 .v2-la-q { margin: 6px 0 14px; border: 1px solid var(--c-accent); border-radius: var(--c-radius-lg); background: var(--c-bg); padding: 14px 16px; box-shadow: var(--c-shadow-card); animation: v2-fadeUp 200ms var(--c-ease) both; }
@@ -6261,6 +6371,19 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .v2-la-login-row { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 11px; margin-bottom: 4px; border: 1px solid var(--c-rule); border-radius: var(--c-radius-md); cursor: pointer; text-align: left; color: var(--c-ink-2); font-size: 12.5px; font-weight: 550; transition: background 120ms var(--c-ease), border-color 120ms var(--c-ease); }
 .chaya-v2 .v2-la-login-row:hover { background: var(--c-hover); border-color: var(--c-accent-strong); color: var(--c-ink); }
 .chaya-v2 .v2-la-login-row svg { width: 15px; height: 15px; flex: 0 0 auto; }
+/* 模型选择弹框顶部模糊搜索框（贴顶 sticky，模型多时快速过滤）。 */
+.chaya-v2 .v2-la-model-search {
+  position: sticky; top: 0; z-index: 1;
+  width: 100%; box-sizing: border-box;
+  margin: 0 0 6px; padding: 7px 11px;
+  font-size: 13px; color: var(--c-ink);
+  background: var(--c-bg);
+  border: 1px solid var(--c-rule); border-radius: var(--c-radius-md);
+  outline: none;
+  transition: border-color var(--m-fast) var(--c-ease);
+}
+.chaya-v2 .v2-la-model-search:focus { border-color: var(--c-ink-4); }
+.chaya-v2 .v2-la-model-search::placeholder { color: var(--c-ink-4); }
 .chaya-v2 .v2-la-model-item { position: relative; width: 100%; display: flex; flex-direction: column; gap: 2px; padding: 8px 28px 8px 11px; border-radius: var(--c-radius-md); cursor: pointer; text-align: left; transition: background 120ms var(--c-ease); }
 .chaya-v2 .v2-la-model-item:hover { background: rgba(var(--glass-hairline), 0.055); }
 .chaya-v2 .v2-la-model-item.on { background: var(--c-accent-bg); }
@@ -6305,6 +6428,52 @@ body.v2-la-resizing { user-select: none; }
   background: var(--c-surface); color: var(--c-ink-2); font-size: 12px; line-height: 1; user-select: none;
 }
 .chaya-v2 .v2-la-prov-banner .v2-la-prov-nm { font-weight: 600; }
+/* 订阅额度条（仅 claude）：composer 左下细条 + 百分比小字。点击展开多维度浮层。 */
+.chaya-v2 .v2-la-ctx-wrap { position: relative; display: inline-flex; flex: 0 0 auto; }
+.chaya-v2 .v2-la-ctx {
+  display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
+  height: 26px; padding: 0 8px; color: var(--c-ink-3); font-size: 11px; line-height: 1;
+  user-select: none; cursor: pointer; border: none; background: none; border-radius: var(--c-radius-pill);
+  transition: background 140ms var(--c-ease);
+}
+.chaya-v2 .v2-la-ctx:hover, .chaya-v2 .v2-la-ctx.open { background: var(--c-surface); }
+.chaya-v2 .v2-la-ctx-bar {
+  position: relative; width: 44px; height: 4px; border-radius: 999px; overflow: hidden; flex: 0 0 auto;
+  background: color-mix(in oklab, var(--c-ink) 12%, transparent);
+}
+.chaya-v2 .v2-la-ctx-bar.full { width: 100%; }
+.chaya-v2 .v2-la-ctx-bar i {
+  position: absolute; inset: 0 auto 0 0; height: 100%; border-radius: inherit;
+  background: var(--c-ink-4); transition: width 280ms var(--c-ease), background 200ms var(--c-ease);
+}
+.chaya-v2 .v2-la-ctx-bar i.warm { background: #b8862f; }
+.chaya-v2 .v2-la-ctx-bar i.hot { background: #c2562f; }
+.chaya-v2 .v2-la-ctx-pct { font-variant-numeric: tabular-nums; font-weight: 600; }
+.chaya-v2 .v2-la-ctx.warm .v2-la-ctx-bar i { background: #b8862f; }
+.chaya-v2 .v2-la-ctx.hot .v2-la-ctx-bar i { background: #c2562f; }
+.chaya-v2 .v2-la-ctx.hot .v2-la-ctx-pct { color: #c2562f; }
+/* 多维度浮层：从额度条向上弹出，绝对定位（不嵌 fixed，避开玻璃盒定位坑）。 */
+.chaya-v2 .v2-la-ctx-pop {
+  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 40;
+  width: 300px; max-width: min(360px, 80vw); padding: 12px 14px;
+  background: var(--c-bg); border: 1px solid var(--c-ink-5, var(--c-line, rgba(0,0,0,.12)));
+  border-radius: 12px; box-shadow: 0 12px 36px rgba(0,0,0,.18);
+  display: flex; flex-direction: column; gap: 10px;
+  animation: v2-prov-fade var(--m-base, 160ms) var(--ease-out, ease-out);
+}
+.chaya-v2 .v2-la-ctx-pop-hd { font-size: 12px; font-weight: 700; color: var(--c-ink-2); }
+.chaya-v2 .v2-la-ctx-dim { display: flex; flex-direction: column; gap: 4px; }
+.chaya-v2 .v2-la-ctx-dim-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.chaya-v2 .v2-la-ctx-dim-nm { font-size: 12px; color: var(--c-ink-3); }
+.chaya-v2 .v2-la-ctx-dim-pct { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--c-ink-2); }
+.chaya-v2 .v2-la-ctx-dim-pct.warm { color: #b8862f; }
+.chaya-v2 .v2-la-ctx-dim-pct.hot { color: #c2562f; }
+.chaya-v2 .v2-la-ctx-dim-reset { font-size: 10.5px; color: var(--c-ink-4); }
+.chaya-v2 .v2-la-ctx-pop-bd {
+  margin: 2px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--c-surface);
+  font-size: 10.5px; line-height: 1.5; color: var(--c-ink-3); white-space: pre-wrap;
+  font-family: inherit; max-height: 220px; overflow: auto;
+}
 .chaya-v2 .v2-la-prov.open .v2-la-prov-btn { border-color: var(--c-ink-4); }
 .chaya-v2 .v2-la-prov-nm { font-weight: 600; white-space: nowrap; }
 .chaya-v2 .v2-la-prov-btn svg { width: 12px; height: 12px; color: var(--c-ink-4); transition: transform 160ms var(--c-ease); }
@@ -6427,6 +6596,8 @@ body.v2-la-resizing { user-select: none; }
   transform: translateX(-2px);
   box-shadow: 3px 0 6px -4px color-mix(in oklab, var(--c-ink) 30%, transparent);
 }
+/* 互问书签：有进行中提问时右上角呼吸点。 */
+.chaya-v2 .v2-prov-bm-dot { position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent); animation: v2-xs-pulse 1s var(--c-ease) infinite; }
 .chaya-v2 .v2-prov-bm-glyph { width: 17px; height: 17px; display: grid; place-items: center; }
 .chaya-v2 .v2-prov-bm-glyph .v2-la-prov-logo, .chaya-v2 .v2-prov-bm-glyph svg { width: 15px; height: 15px; }
 /* logo 一律 mono（currentColor）：静止态走墨灰（克制用色），激活态显该 provider 品牌色。 */
@@ -6448,34 +6619,50 @@ body.v2-la-resizing { user-select: none; }
   transform: translateX(2px);
   box-shadow: -3px 0 6px -4px color-mix(in oklab, var(--c-ink) 30%, transparent);
 }
-/* 状态徽标：右上角小胶囊，三态优先级 attn > run > done。
-   run = 琥珀色活跃会话数(呼吸)；done = 绿色打勾；attn = accent 惊叹号(整书签跳跃)。 */
+/* 状态徽标：右上角实心计数气泡，三态优先级 attn > run > done。
+   run = 琥珀实心活跃会话数；done = 绿色打勾；attn = accent 惊叹号(整书签跳跃)。
+   关键：实心填色 + 与卡同色的外描边环 → 与底下 logo 干净分离、边缘锐利；
+   呼吸用「缩放」而非淡入淡出 opacity，气泡边缘始终清晰不发虚。 */
 .chaya-v2 .v2-prov-bm-badge {
-  position: absolute; top: -3px; right: -3px; left: auto;
-  min-width: 14px; height: 14px; padding: 0 3px;
+  position: absolute; top: -5px; right: -5px; left: auto;
+  min-width: 16px; height: 16px; padding: 0 4px;
   border-radius: 999px;
   display: grid; place-items: center;
   background: var(--c-bg);
   border: 1px solid var(--c-rule);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
-  font-size: 9.5px; line-height: 1; font-weight: 700;
-  font-variant-numeric: tabular-nums;
+  /* 双重 box-shadow：内圈与卡/栏同色把气泡从 logo 上「抠」出来(锐边)，外圈一层投影托起。 */
+  box-shadow: 0 0 0 1.5px var(--c-bg), 0 1px 2.5px rgba(0,0,0,0.22);
+  font-size: 10px; line-height: 1; font-weight: 800;
+  font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
 }
 .chaya-v2 .v2-prov-bm-badge.run {
-  color: color-mix(in oklab, var(--c-warn) 72%, var(--c-ink-3));
-  animation: v2-la-breathe 1.4s var(--c-ease) infinite;
+  color: #fff;
+  background: var(--c-warn);
+  border-color: color-mix(in oklab, var(--c-warn) 58%, #000);
+  box-shadow: 0 0 0 1.5px var(--c-bg), 0 1px 3px color-mix(in oklab, var(--c-warn) 45%, transparent);
+  transform-origin: center;
+  animation: v2-badge-pulse 1.5s var(--c-ease) infinite;
 }
 .chaya-v2 .v2-prov-bm-badge.done {
   color: #fff;
   background: var(--c-success);
-  border-color: var(--c-success);
+  border-color: color-mix(in oklab, var(--c-success) 58%, #000);
+  box-shadow: 0 0 0 1.5px var(--c-bg), 0 1px 2.5px rgba(0,0,0,0.22);
   animation: v2-prov-pop var(--m-base) var(--ease-emphasis);
 }
 .chaya-v2 .v2-prov-bm-badge.attn {
   color: #fff;
   background: var(--c-accent-strong, var(--c-accent));
-  border-color: var(--c-accent-strong, var(--c-accent));
+  border-color: color-mix(in oklab, var(--c-accent-strong, var(--c-accent)) 58%, #000);
+  box-shadow: 0 0 0 1.5px var(--c-bg), 0 1px 3px color-mix(in oklab, var(--c-accent) 45%, transparent);
+  transform-origin: center;
+  animation: v2-badge-pulse 1.1s var(--c-ease) infinite;
 }
+/* 缩放呼吸：只动 scale、不动 opacity → 边缘永远是实边。 */
+@keyframes v2-badge-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.14); } }
+/* 运行中的书签本体也给一点琥珀暗示(logo 微暖)，不用看徽标也知道这家在跑。 */
+.chaya-v2 .v2-prov-bm.running { color: color-mix(in oklab, var(--c-warn) 52%, var(--c-ink-2)); }
+.chaya-v2 .v2-prov-bm.running:hover { color: color-mix(in oklab, var(--c-warn) 68%, var(--c-ink)); }
 /* 需要介入：整枚书签轻轻上下跳，把视线引过去（calm 一档：幅度小、间歇停顿）。 */
 .chaya-v2 .v2-prov-bm.attn { animation: v2-prov-jump 1.6s var(--ease-emphasis) infinite; }
 @keyframes v2-prov-jump {
@@ -6648,6 +6835,114 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .v2-la-slash-item .ds { font-size: 12px; color: var(--c-ink-4); flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chaya-v2 .v2-la-slash-item .sc { font-size: 10px; color: var(--c-ink-4); background: var(--c-surface); border-radius: 999px; padding: 1px 6px; flex: 0 0 auto; }
 .chaya-v2 .v2-la-slash-item .sc.chaya { color: var(--c-accent-strong); background: var(--c-accent-bg); }
+
+/* ── 会话互问：# 呼出的目标选择器（分组 + 目录前缀 + 模糊搜索）─────── */
+.chaya-v2 .v2-la-slash-hd.flash { color: var(--c-warn, #c08a2b); }
+.chaya-v2 .v2-la-ask-grp + .v2-la-ask-grp { margin-top: 2px; }
+.chaya-v2 .v2-la-ask-sec { display: flex; align-items: baseline; gap: 6px; font-size: 10px; color: var(--c-ink-4); padding: 6px 8px 3px; letter-spacing: 0.02em; }
+.chaya-v2 .v2-la-ask-sec .pj { font-weight: 600; color: var(--c-ink-3); }
+.chaya-v2 .v2-la-ask-sec .pa { flex: 1 1 auto; min-width: 0; font-family: var(--c-mono); font-size: 9.5px; opacity: 0.7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+.chaya-v2 .v2-la-ask-ic { display: inline-flex; width: 15px; height: 15px; align-items: center; justify-content: center; flex: 0 0 auto; }
+.chaya-v2 .v2-la-ask-ic svg { width: 14px; height: 14px; }
+.chaya-v2 .v2-la-askpop .v2-la-slash-item { align-items: center; }
+.chaya-v2 .v2-la-ask-pre { font-family: var(--c-mono); font-size: 11px; color: var(--c-ink-4); flex: 0 0 auto; }
+.chaya-v2 .v2-la-askpop .v2-la-slash-item .nm { font-family: inherit; flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chaya-v2 .v2-la-askpop .v2-la-slash-item .sc.chaya { color: var(--c-accent-strong); background: var(--c-accent-bg); }
+/* 提问浮层：固定头/问题框/搜索框，仅会话列表内滚（上下键丝滑滚入视口）。 */
+.chaya-v2 .v2-la-askpop { position: relative; z-index: 61; display: flex; flex-direction: column; max-height: 360px; overflow: visible; }
+.chaya-v2 .v2-la-askq { width: 100%; box-sizing: border-box; resize: none; margin: 0 2px 6px; padding: 7px 9px; border: 1px solid var(--c-rule); border-radius: var(--c-radius-md); background: var(--c-surface, var(--c-bg)); color: var(--c-ink); font: inherit; font-size: 13px; line-height: 1.5; }
+.chaya-v2 .v2-la-askq:focus { border-color: var(--c-accent); outline: none; }
+.chaya-v2 .v2-la-askq::placeholder { color: var(--c-ink-4); }
+.chaya-v2 .v2-la-askpop .v2-la-skillfilter { margin: 0 2px 6px; }
+.chaya-v2 .v2-la-ask-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+/* ── 会话互问：右侧围观面板（portal 到 body）──────────────────── */
+/* 「会话互问」围观窗 —— 一个 mini monitor 悬浮窗：右下角落座、内容自适应高度（封顶后
+ *  内部滚动），避开右缘 36px 的 provider 书签栏。信纸压印质感：奶白纸面 + 一线细描边框 +
+ *  极轻的内凹高光（像纸被压过），不用玻璃/发光/重投影（impeccable：calm / 手作 / paper）。 */
+/* 会话互问内容（外壳复用 .v2-wiki-drawer / .v2-bridge-drawer，见上方检视列规则）。 */
+.v2-xs-top { display: flex; align-items: center; gap: 8px; padding: 2px 2px 6px; border-bottom: 1px solid var(--c-rule); }
+.v2-xs-top b { font-size: 12.5px; }
+.v2-xs-top .v2-grow { flex: 1 1 auto; }
+/* 多问答 tab 条：每个 tab 一个外部问答，点击切前台；尾随 ✕ 单独移除。 */
+.v2-xs-tabs { display: flex; gap: 4px; overflow-x: auto; padding: 1px 0 2px; margin: 0 -1px; scrollbar-width: none; }
+.v2-xs-tabs::-webkit-scrollbar { display: none; }
+.v2-xs-tab { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; max-width: 150px; padding: 3px 6px 3px 7px; border: 1px solid var(--c-rule); border-radius: var(--c-radius-sm); background: var(--c-bg); color: var(--c-ink-3); font-size: 11px; cursor: pointer; transition: background 120ms var(--c-ease), border-color 120ms var(--c-ease); }
+.v2-xs-tab:hover { background: var(--c-hover); }
+.v2-xs-tab.active { background: var(--c-accent-bg); color: var(--c-ink); border-color: color-mix(in oklab, var(--c-accent) 45%, var(--c-rule)); font-weight: 600; }
+.chaya-v2[data-theme="codex"] .v2-xs-tab { background: var(--glass-chip); }
+.chaya-v2[data-theme="codex"] .v2-xs-tab.active { background: var(--c-accent-bg); }
+.v2-xs-tab.phase-error.active { border-color: color-mix(in oklab, var(--c-danger, #c0392b) 55%, var(--c-rule)); }
+.v2-xs-tablogo { display: inline-flex; width: 13px; height: 13px; align-items: center; justify-content: center; flex: 0 0 auto; }
+.v2-xs-tablogo svg { width: 12px; height: 12px; }
+.v2-xs-tab .nm { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v2-xs-tab .x { flex: 0 0 auto; color: var(--c-ink-4); font-size: 10px; padding: 0 1px; opacity: 0.7; }
+.v2-xs-tab .x:hover { color: var(--c-ink); opacity: 1; }
+.v2-xs-count { font-size: 10px; color: var(--c-accent-strong); background: var(--c-accent-bg); border-radius: 999px; padding: 1px 7px; }
+.v2-xs-clear { font-size: 11px; color: var(--c-ink-4); padding: 2px 6px; border-radius: var(--c-radius-sm); cursor: pointer; }
+.v2-xs-clear:hover { background: var(--c-hover); color: var(--c-ink); }
+.v2-xs-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin: 0 -2px; padding: 0 2px; }
+.v2-xs-empty { margin: auto 6px; padding: 16px 4px; font-size: 12px; line-height: 1.6; color: var(--c-ink-4); text-align: center; }
+.v2-xs-empty b { color: var(--c-ink-2); font-family: var(--c-mono); }
+.v2-xs-empty svg { width: 14px; height: 14px; vertical-align: -2px; }
+
+/* Agent 面板：分段标题 + 角色行 */
+.chaya-v2 .v2-ag-sec { font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--c-ink-4); padding: 8px 2px 3px; }
+.chaya-v2 .v2-ag-sec:first-child { padding-top: 2px; }
+.chaya-v2 .v2-ag-row { display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding: 9px 10px; border: 1.5px solid color-mix(in oklab, var(--c-ink) 16%, var(--c-bg)); border-radius: var(--c-radius-md); background: var(--c-bg); box-shadow: var(--c-shadow-card); transition: border-color 120ms; }
+.chaya-v2 .v2-ag-row:hover { border-color: color-mix(in oklab, var(--c-accent) 40%, var(--c-rule)); }
+.chaya-v2 .v2-ag-row.busy { border-color: color-mix(in oklab, var(--c-accent) 55%, var(--c-rule)); }
+.chaya-v2 .v2-ag-row .main { display: flex; align-items: center; gap: 10px; }
+.chaya-v2 .v2-ag-row .summoned { font-size: 11px; line-height: 1.4; color: var(--c-accent-strong); background: color-mix(in oklab, var(--c-accent) 8%, var(--c-bg)); border-radius: var(--c-radius-sm); padding: 4px 9px; display: flex; align-items: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-ag-row .summoned .dot { flex: 0 0 auto; display: inline-block; width: 5px; height: 5px; border-radius: 999px; background: var(--c-accent-strong); margin-right: 6px; animation: v2-agentPulse 1.2s ease-in-out infinite; }
+.chaya-v2 .v2-ag-row .av { flex: 0 0 auto; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: #f6f3ec; border: 1px solid color-mix(in oklab, var(--c-accent) 20%, var(--c-bg)); overflow: hidden; }
+.chaya-v2 .v2-ag-row .meta { flex: 1 1 auto; min-width: 0; }
+.chaya-v2 .v2-ag-row .meta .nm { font-weight: 600; font-size: 12.5px; color: var(--c-ink-1); }
+.chaya-v2 .v2-ag-row .meta .nm .mem { font-size: 9px; padding: 1px 4px; border-radius: 5px; background: color-mix(in oklab, var(--c-accent) 12%, var(--c-bg)); color: var(--c-accent-strong); margin-left: 5px; vertical-align: middle; letter-spacing: 0.04em; }
+.chaya-v2 .v2-ag-row .meta .ds { font-size: 11px; color: var(--c-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-ag-row .meta .bind { font-size: 10px; color: var(--c-ink-4); display: flex; align-items: center; gap: 4px; margin-top: 1px; }
+.chaya-v2 .v2-ag-row .meta .bind .lg { width: 12px; height: 12px; display: inline-flex; }
+.chaya-v2 .v2-ag-row .meta .bind .lg svg { width: 12px; height: 12px; }
+.chaya-v2 .v2-ag-row .acts { display: flex; flex-direction: row; align-items: center; gap: 5px; flex: 0 0 auto; }
+.chaya-v2 .v2-ag-row .acts button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; padding: 0 10px; font-size: 11.5px; border: 1px solid var(--c-rule); border-radius: var(--c-radius-md); background: var(--c-bg); color: var(--c-ink-2); cursor: pointer; transition: background 120ms, color 120ms, border-color 120ms; }
+.chaya-v2 .v2-ag-row .acts button svg { width: 14px; height: 14px; }
+.chaya-v2 .v2-ag-row .acts button.icon { padding: 0; width: 28px; }
+.chaya-v2 .v2-ag-row .acts button:hover { color: var(--c-ink-1); border-color: color-mix(in oklab, var(--c-ink) 24%, var(--c-bg)); background: var(--c-hover); }
+.chaya-v2 .v2-ag-row .acts button.open { color: var(--c-accent-strong); border-color: color-mix(in oklab, var(--c-accent) 40%, var(--c-rule)); font-weight: 600; }
+.chaya-v2 .v2-ag-row .acts button.open:hover { background: color-mix(in oklab, var(--c-accent) 11%, var(--c-bg)); border-color: var(--c-accent); }
+.chaya-v2 .v2-ag-row .acts button.danger:hover { color: var(--c-danger, #c0392b); border-color: color-mix(in oklab, var(--c-danger, #c0392b) 50%, var(--c-rule)); background: color-mix(in oklab, var(--c-danger, #c0392b) 8%, var(--c-bg)); }
+.chaya-v2 .v2-ag-row .acts button:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in oklab, var(--c-accent) 20%, transparent); }
+.v2-xs-card { border: 1px solid var(--c-rule); border-radius: var(--c-radius-md); background: var(--c-bg); padding: 8px 9px; display: flex; flex-direction: column; gap: 6px; }
+.chaya-v2[data-theme="codex"] .v2-xs-card { background: var(--glass-matte-strong); }
+.v2-xs-card.phase-error { border-color: color-mix(in oklab, var(--c-danger, #c0392b) 55%, var(--c-rule)); }
+.v2-xs-hd { display: flex; align-items: center; gap: 7px; }
+.v2-xs-logo { display: inline-flex; width: 16px; height: 16px; align-items: center; justify-content: center; flex: 0 0 auto; }
+.v2-xs-logo svg { width: 15px; height: 15px; }
+.v2-xs-to { font-size: 12px; font-weight: 600; flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v2-xs-eph { font-size: 9px; color: var(--c-ink-4); background: var(--c-bg); border: 1px solid var(--c-rule); border-radius: 999px; padding: 0 5px; margin-left: 5px; }
+.v2-xs-by { font-size: 9px; color: var(--c-accent-strong); background: var(--c-accent-bg); border-radius: 999px; padding: 0 5px; margin-right: 5px; vertical-align: middle; }
+.v2-xs-phase { font-size: 10px; color: var(--c-ink-4); display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.v2-xs-phase.answered { color: var(--c-accent-strong); }
+.v2-xs-phase.error { color: var(--c-danger, #c0392b); }
+.v2-xs-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent); animation: v2-xs-pulse 1s var(--c-ease) infinite; }
+@keyframes v2-xs-pulse { 0%,100% { opacity: 0.35; } 50% { opacity: 1; } }
+.v2-xs-x { font-size: 11px; color: var(--c-ink-4); padding: 0 3px; cursor: pointer; flex: 0 0 auto; }
+.v2-xs-x:hover { color: var(--c-ink); }
+.v2-xs-q { font-size: 11.5px; color: var(--c-ink-3); line-height: 1.45; max-height: 3.9em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.v2-xs-body { border-top: 1px dashed var(--c-rule); padding-top: 6px; }
+.v2-xs-stream { font-size: 12px; line-height: 1.5; color: var(--c-ink); white-space: pre-wrap; word-break: break-word; max-height: min(46vh, 380px); overflow-y: auto; }
+.v2-xs-wait { font-size: 11px; color: var(--c-ink-4); font-style: italic; }
+.v2-xs-caret { display: inline-block; width: 6px; height: 12px; margin-left: 1px; background: var(--c-accent); vertical-align: text-bottom; animation: v2-xs-blink 1s steps(2) infinite; }
+@keyframes v2-xs-blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+.v2-xs-err { margin-top: 5px; font-size: 11px; color: var(--c-danger, #c0392b); }
+.v2-xs-acts { display: flex; gap: 6px; justify-content: flex-end; }
+.v2-xs-acts button { font-size: 11px; padding: 3px 10px; border-radius: var(--c-radius-sm); border: 1px solid var(--c-rule); cursor: pointer; transition: background 120ms var(--c-ease); }
+.v2-xs-acts button:hover:not(:disabled) { background: var(--c-hover); }
+.v2-xs-adopt { color: var(--c-accent-strong); border-color: color-mix(in oklab, var(--c-accent) 45%, var(--c-rule)) !important; }
+.v2-xs-adopt:disabled { color: var(--c-ink-4); cursor: default; opacity: 0.7; }
+.v2-xs-stop { color: var(--c-danger, #c0392b); }
+.v2-xs-redo { color: var(--c-ink-2); }
+.v2-xs-redo:hover:not(:disabled) { color: var(--c-ink); }
 
 /* 设置里的 provider 小圆点：seg 和卡片两处通用 */
 .chaya-v2 .v2-la-setdot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; display: inline-block; box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--c-bg) 80%, transparent); }
@@ -7364,6 +7659,10 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2[data-editor-right] .v2-app { --insp-w: var(--wiki-w); }
 /* 「自动化」检视列同样共用第二列（与 wiki / 代码列互斥）。 */
 .chaya-v2[data-automation-right] .v2-app { --insp-w: var(--wiki-w); }
+/* 「会话互问」检视列：有提问时展开第二列；复用 .v2-wiki-drawer 外壳，绝对铺满整列并叠在
+   其它面板之上（顶替 wiki/代码列）；补内边距给 v2-xs-* 内容。 */
+.chaya-v2[data-bridge-right] .v2-app { --insp-w: var(--wiki-w); }
+.chaya-v2 .v2-bridge-drawer { z-index: 8; padding: 10px 11px 11px; gap: 7px; }
 /* 自动化抽屉：复用 .v2-wiki-drawer 外壳；内容区独立滚动。 */
 .chaya-v2 .v2-auto-drawer .v2-auto-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px; scrollbar-width: none; }
 .chaya-v2 .v2-auto-drawer .v2-auto-scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
@@ -7737,6 +8036,36 @@ body.v2-la-resizing { user-select: none; }
   mask-image: linear-gradient(180deg, transparent 0, #000 16px, #000 calc(100% - 10px), transparent 100%);
 }
 .chaya-v2 .v2-editor-changes::-webkit-scrollbar { width: 0; height: 0; display: none; }
+/* worktree 顶栏：分支名 + 手动 commit/push。 */
+.chaya-v2 .v2-editor-gitbar { padding: 2px 2px 8px; display: flex; flex-direction: column; gap: 7px; border-bottom: 1px solid var(--c-rule); margin-bottom: 8px; }
+.chaya-v2 .v2-editor-gitbar .branchrow { display: flex; align-items: center; gap: 6px; }
+.chaya-v2 .v2-editor-gitbar .bic { color: var(--c-ink-3); flex: 0 0 auto; }
+.chaya-v2 .v2-editor-gitbar .branch { font-family: var(--c-mono); font-size: 12px; font-weight: 600; color: var(--c-ink); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-editor-gitbar .ab { font-family: var(--c-mono); font-size: 11px; color: var(--c-note); flex: 0 0 auto; }
+.chaya-v2 .v2-editor-gitbar .grow { flex: 1 1 auto; }
+.chaya-v2 .v2-editor-gitbar .push {
+  font-size: 12px; padding: 4px 11px; border-radius: var(--c-radius-sm);
+  border: 1px solid var(--c-rule); background: var(--c-bg); color: var(--c-ink-2); font-weight: 550;
+  transition: background var(--m-instant) var(--c-ease), border-color var(--m-instant) var(--c-ease);
+}
+.chaya-v2 .v2-editor-gitbar .push:hover:not(:disabled) { background: var(--c-hover-soft); border-color: #ddd; }
+.chaya-v2 .v2-editor-gitbar .push:disabled { opacity: 0.5; cursor: default; }
+.chaya-v2 .v2-editor-gitbar .push.busy { opacity: 0.7; }
+.chaya-v2 .v2-editor-gitbar .commitrow { display: flex; gap: 6px; }
+.chaya-v2 .v2-editor-gitbar .commitrow .msg {
+  flex: 1 1 auto; min-width: 0; font-size: 12.5px; color: var(--c-ink);
+  background: var(--c-bg); border: 1px solid var(--c-rule); border-radius: var(--c-radius-sm);
+  padding: 5px 9px; outline: none; transition: border-color var(--m-fast) var(--c-ease);
+}
+.chaya-v2 .v2-editor-gitbar .commitrow .msg:focus { border-color: var(--c-ink-4); }
+.chaya-v2 .v2-editor-gitbar .commitrow .msg::placeholder { color: var(--c-ink-4); }
+.chaya-v2 .v2-editor-gitbar .commit {
+  flex: 0 0 auto; font-size: 12px; padding: 5px 12px; border-radius: var(--c-radius-sm);
+  border: 1px solid var(--c-accent); background: var(--c-accent); color: #fff; font-weight: 550;
+  transition: background var(--m-instant) var(--c-ease);
+}
+.chaya-v2 .v2-editor-gitbar .commit:hover:not(:disabled) { background: #000; }
+.chaya-v2 .v2-editor-gitbar .commit:disabled { opacity: 0.45; cursor: default; }
 .chaya-v2 .v2-editor-count { font-size: 11px; color: var(--c-ink-4); font-family: var(--c-mono); padding: 4px 4px 8px; display: flex; align-items: center; gap: 8px; }
 .chaya-v2 .v2-editor-count > span { flex: 1 1 auto; }
 .chaya-v2 .v2-editor-revertall {
@@ -7984,6 +8313,135 @@ body.v2-la-resizing { user-select: none; }
   animation: v2-popUp 160ms var(--c-ease) both;
 }
 .chaya-v2 .v2-la-mention-hd { padding: 7px 12px 5px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--c-ink-4); }
+
+/* @ 下拉里的「本地 Agent」召唤行 */
+.chaya-v2 .v2-la-mention-agent {
+  width: 100%; display: flex; align-items: center; gap: 8px; padding: 7px 10px; margin: 0 5px;
+  border: 0; background: transparent; border-radius: var(--c-radius); cursor: pointer; text-align: left;
+  font-size: 12.5px; color: var(--c-ink-1);
+}
+.chaya-v2 .v2-la-mention-agent:hover, .chaya-v2 .v2-la-mention-agent.active { background: color-mix(in oklab, var(--c-accent) 8%, var(--c-bg)); }
+.chaya-v2 .v2-la-mention-agent .av { flex: 0 0 auto; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: #f6f3ec; border: 1px solid color-mix(in oklab, var(--c-accent) 20%, var(--c-bg)); overflow: hidden; }
+.chaya-v2 .v2-la-mention-agent .nm { flex: 0 0 auto; font-weight: 600; }
+.chaya-v2 .v2-la-mention-agent .ds { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-ink-4); font-size: 11.5px; }
+.chaya-v2 .v2-la-mention-agent .pv { flex: 0 0 auto; width: 14px; height: 14px; opacity: 0.7; display: inline-flex; }
+.chaya-v2 .v2-la-mention-agent .pv svg { width: 14px; height: 14px; }
+
+/* 会话行：升格按钮 + 已绑定 Agent 徽标 */
+.chaya-v2 .v2-la-sess-promote { border: 0; background: transparent; cursor: pointer; color: var(--c-ink-4); line-height: 1; padding: 2px 4px; opacity: 0; transition: opacity 120ms, color 120ms; display: inline-flex; align-items: center; }
+.chaya-v2 .v2-la-sess-promote svg { width: 14px; height: 14px; }
+.chaya-v2 .v2-la-sess:hover .v2-la-sess-promote { opacity: 0.7; }
+.chaya-v2 .v2-la-sess-promote:hover, .chaya-v2 .v2-la-sess-promote:focus-visible { opacity: 1; color: var(--c-accent-strong); }
+.chaya-v2 .v2-la-sess-promote.on { opacity: 1; color: var(--c-accent-strong); }
+.chaya-v2 .v2-la-sess-agent { margin-left: 6px; font-size: 10px; padding: 1px 5px; border-radius: 6px; background: color-mix(in oklab, var(--c-accent) 12%, var(--c-bg)); color: var(--c-accent-strong); font-weight: 600; vertical-align: middle; }
+
+/* 本地 Agent 升格 / 编辑弹层 */
+.chaya-v2 .v2-agent-scrim { position: fixed; inset: 0; z-index: 380; background: color-mix(in oklab, var(--c-ink) 34%, transparent); display: flex; align-items: center; justify-content: center; animation: v2-fadeIn 140ms var(--c-ease) both; }
+.chaya-v2 .v2-agent-modal { width: 460px; max-width: calc(100vw - 48px); max-height: calc(100vh - 80px); display: flex; flex-direction: column; background: var(--c-bg); border: 1px solid var(--c-rule); border-radius: var(--c-radius-lg); box-shadow: var(--c-shadow-menu); overflow: hidden; animation: v2-agentRise 200ms var(--c-ease) both; }
+.chaya-v2 .v2-agent-modal-hd { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--c-rule); font-weight: 600; font-size: 14px; color: var(--c-ink-1); }
+.chaya-v2 .v2-agent-modal-hd .bind { font-weight: 400; font-size: 11.5px; color: var(--c-ink-4); display: inline-flex; align-items: center; gap: 5px; }
+.chaya-v2 .v2-agent-modal-hd .bind svg { width: 13px; height: 13px; }
+.chaya-v2 .v2-agent-modal-bd { padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.chaya-v2 .v2-agent-modal-bd label { display: flex; flex-direction: column; gap: 5px; font-size: 11.5px; color: var(--c-ink-3); }
+.chaya-v2 .v2-agent-modal-bd label.row { flex-direction: row; align-items: center; gap: 8px; font-size: 12.5px; color: var(--c-ink-1); cursor: pointer; }
+.chaya-v2 .v2-agent-modal-bd label.row input { width: auto; }
+.chaya-v2 .v2-agent-modal-bd input, .chaya-v2 .v2-agent-modal-bd textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--c-rule); border-radius: var(--c-radius); background: var(--c-bg-2, var(--c-bg)); color: var(--c-ink-1); font-size: 12.5px; font-family: inherit; resize: vertical; transition: border-color 120ms, box-shadow 120ms; }
+.chaya-v2 .v2-agent-modal-bd input::placeholder, .chaya-v2 .v2-agent-modal-bd textarea::placeholder { color: var(--c-ink-4); }
+.chaya-v2 .v2-agent-modal-bd input:focus, .chaya-v2 .v2-agent-modal-bd textarea:focus { outline: none; border-color: var(--c-accent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--c-accent) 18%, transparent); }
+.chaya-v2 .v2-agent-mem { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px dashed var(--c-rule); border-radius: var(--c-radius); background: color-mix(in oklab, var(--c-accent) 4%, var(--c-bg)); }
+.chaya-v2 .v2-agent-modal-ft { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--c-rule); }
+.chaya-v2 .v2-agent-modal-ft button { padding: 7px 16px; border-radius: var(--c-radius); border: 1px solid var(--c-rule); background: var(--c-bg); color: var(--c-ink-1); font-size: 12px; cursor: pointer; transition: background 120ms, color 120ms, border-color 120ms; }
+.chaya-v2 .v2-agent-modal-ft .primary { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-bg); }
+.chaya-v2 .v2-agent-modal-ft .primary:hover { background: var(--c-accent-strong); border-color: var(--c-accent-strong); }
+.chaya-v2 .v2-agent-modal-ft .ghost { color: var(--c-ink-3); }
+.chaya-v2 .v2-agent-modal-ft .ghost:hover { color: var(--c-ink-1); background: color-mix(in oklab, var(--c-ink) 5%, var(--c-bg)); }
+.chaya-v2 .v2-agent-modal-ft button:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in oklab, var(--c-accent) 22%, transparent); }
+
+/* Agent 身份条：升格会话对话区顶部 */
+.chaya-v2 .v2-la-agentbar { display: flex; align-items: center; gap: 11px; padding: 9px 14px; margin: 0 0 2px; border-bottom: 1px solid var(--c-rule); background: linear-gradient(to bottom, color-mix(in oklab, var(--c-accent) 7%, var(--c-bg)), transparent); }
+.chaya-v2 .v2-la-agentbar .av { flex: 0 0 auto; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: #f6f3ec; border: 1px solid color-mix(in oklab, var(--c-accent) 20%, var(--c-bg)); overflow: hidden; }
+.chaya-v2 .v2-la-agentbar .meta { flex: 1 1 auto; min-width: 0; }
+.chaya-v2 .v2-la-agentbar .meta .nm { font-weight: 600; font-size: 13px; color: var(--c-ink-1); display: flex; align-items: center; gap: 6px; }
+.chaya-v2 .v2-la-agentbar .meta .nm .mem, .chaya-v2 .v2-la-agentbar .meta .nm .sp { font-size: 9.5px; font-weight: 600; padding: 1px 5px; border-radius: 5px; background: color-mix(in oklab, var(--c-accent) 12%, var(--c-bg)); color: var(--c-accent-strong); letter-spacing: 0.03em; }
+.chaya-v2 .v2-la-agentbar .meta .ds { font-size: 11.5px; color: var(--c-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-la-agentbar .edit { flex: 0 0 auto; padding: 4px 11px; font-size: 11.5px; border: 1px solid var(--c-rule); border-radius: var(--c-radius); background: var(--c-bg); color: var(--c-ink-2); cursor: pointer; transition: color 120ms; }
+.chaya-v2 .v2-la-agentbar .edit:hover { color: var(--c-ink-1); }
+
+/* 轻量联想 chip：composer 上方一条不抢焦点的「让 @X 来看看?」提示 */
+.chaya-v2 .v2-la-assoc { display: flex; align-items: center; gap: 6px; margin: 0 2px 7px; animation: v2-agentRise 200ms var(--c-ease) both; }
+.chaya-v2 .v2-la-assoc .hit { display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; border-radius: 999px; border: 1px solid color-mix(in oklab, var(--c-accent) 45%, var(--c-bg)); background: color-mix(in oklab, var(--c-accent) 9%, var(--c-bg)); color: var(--c-ink-1); font-size: 12px; cursor: pointer; transition: background 120ms; }
+.chaya-v2 .v2-la-assoc .hit:hover { background: color-mix(in oklab, var(--c-accent) 16%, var(--c-bg)); }
+.chaya-v2 .v2-la-assoc .hit b { color: var(--c-accent-strong); font-weight: 600; }
+.chaya-v2 .v2-la-assoc .hit .ic { display: inline-flex; color: var(--c-accent-strong); }
+.chaya-v2 .v2-la-assoc .hit .ic svg { width: 14px; height: 14px; }
+.chaya-v2 .v2-la-assoc .x { border: 0; background: transparent; color: var(--c-ink-4); cursor: pointer; font-size: 12px; padding: 2px 4px; line-height: 1; }
+.chaya-v2 .v2-la-assoc .x:hover { color: var(--c-ink-2); }
+
+/* 召唤演出：卡片淡入上浮（贴合「纸上落墨」，不从远处滑入）+ 召唤态字母章轻脉冲 */
+@keyframes v2-agentRise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes v2-agentPulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.78; transform: scale(1.06); } }
+.v2-xs-card { animation: v2-agentRise 220ms var(--c-ease) both; }
+.v2-xs-card.phase-pending .v2-xs-logo[data-agent], .v2-xs-card.phase-running .v2-xs-logo[data-agent] { animation: v2-agentPulse 1.6s ease-in-out infinite; }
+.v2-xs-logo[data-agent] { width: 22px; height: 22px; background: #f6f3ec; border: 1px solid color-mix(in oklab, var(--c-accent) 20%, var(--c-bg)); border-radius: 999px; overflow: hidden; }
+/* Notion Faces 头像：铺满各处 chip（脸自带内边距，无需再缩） */
+.chaya-v2 .v2-ag-row .av svg, .chaya-v2 .v2-la-mention-agent .av svg, .chaya-v2 .v2-la-agentbar .av svg, .v2-xs-logo[data-agent] svg { width: 100%; height: 100%; display: block; }
+@media (prefers-reduced-motion: reduce) {
+  .chaya-v2 .v2-agent-modal, .chaya-v2 .v2-la-assoc, .v2-xs-card { animation: none; }
+  .v2-xs-card.phase-pending .v2-xs-logo[data-agent], .v2-xs-card.phase-running .v2-xs-logo[data-agent] { animation: none; }
+}
+
+/* 会话内联「被分配 Agent」小卡片：一行、不全宽、可多个堆叠（仿原生子 agent）；点击开大弹框看详情 */
+.chaya-v2 .v2-la-summons { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; margin: 6px 0 4px; }
+.chaya-v2 .v2-la-sline { display: inline-flex; align-items: center; gap: 7px; max-width: min(560px, 100%); padding: 5px 10px 5px 6px; border: 1px solid var(--c-rule); border-radius: 999px; background: var(--c-bg); cursor: pointer; font-size: 12px; color: var(--c-ink-3); transition: border-color 120ms, background 120ms; animation: v2-agentRise 180ms var(--c-ease) both; }
+.chaya-v2 .v2-la-sline:hover { border-color: color-mix(in oklab, var(--c-accent) 35%, var(--c-rule)); background: color-mix(in oklab, var(--c-accent) 4%, var(--c-bg)); }
+.chaya-v2 .v2-la-sline.busy { border-color: color-mix(in oklab, var(--c-accent) 30%, var(--c-rule)); }
+.chaya-v2 .v2-la-sline.attn { border-color: var(--c-accent); background: color-mix(in oklab, var(--c-accent) 8%, var(--c-bg)); }
+.chaya-v2 .v2-la-sline.phase-error { border-color: color-mix(in oklab, var(--c-danger, #c0392b) 40%, var(--c-rule)); }
+.chaya-v2 .v2-la-sline .face { flex: 0 0 auto; width: 20px; height: 20px; display: inline-flex; border-radius: 999px; background: #f6f3ec; border: 1px solid color-mix(in oklab, var(--c-accent) 20%, var(--c-bg)); overflow: hidden; }
+.chaya-v2 .v2-la-sline .face svg { width: 100%; height: 100%; display: block; }
+.chaya-v2 .v2-la-sline .who { flex: 0 0 auto; font-weight: 600; color: var(--c-accent-strong); }
+.chaya-v2 .v2-la-sline .act { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-ink-4); }
+.chaya-v2 .v2-la-sline .ph { flex: 0 0 auto; font-size: 10px; color: var(--c-ink-4); display: inline-flex; align-items: center; gap: 4px; }
+.chaya-v2 .v2-la-sline.attn .ph { color: var(--c-accent-strong); font-weight: 600; }
+.chaya-v2 .v2-la-sline .ph .dot { width: 5px; height: 5px; border-radius: 999px; background: var(--c-accent-strong); animation: v2-agentPulse 1.2s ease-in-out infinite; }
+.chaya-v2 .v2-la-sline .chev { flex: 0 0 auto; color: var(--c-ink-4); font-size: 12px; }
+
+/* 召唤详情大弹框（点击小卡片打开）：满血流式 markdown + 权限/AskUser 交互 */
+.chaya-v2 .v2-summon-scrim { position: fixed; inset: 0; z-index: 380; background: color-mix(in oklab, var(--c-ink) 34%, transparent); display: flex; align-items: center; justify-content: center; animation: v2-fadeIn 140ms var(--c-ease) both; }
+.chaya-v2 .v2-summon-modal { width: 760px; max-width: calc(100vw - 56px); max-height: calc(100vh - 96px); display: flex; flex-direction: column; background: var(--c-bg); border: 1px solid var(--c-rule); border-radius: var(--c-radius-lg); box-shadow: var(--c-shadow-menu); overflow: hidden; animation: v2-agentRise 200ms var(--c-ease) both; }
+.chaya-v2 .v2-summon-modal .hd { display: flex; align-items: center; gap: 9px; padding: 13px 16px; border-bottom: 1px solid var(--c-rule); }
+.chaya-v2 .v2-summon-modal .hd .face { flex: 0 0 auto; width: 26px; height: 26px; display: inline-flex; border-radius: 999px; background: #f6f3ec; border: 1px solid color-mix(in oklab, var(--c-accent) 20%, var(--c-bg)); overflow: hidden; }
+.chaya-v2 .v2-summon-modal .hd .face svg { width: 100%; height: 100%; display: block; }
+.chaya-v2 .v2-summon-modal .hd .who { font-size: 13.5px; color: var(--c-ink-2); }
+.chaya-v2 .v2-summon-modal .hd .who b { color: var(--c-accent-strong); font-weight: 600; }
+.chaya-v2 .v2-summon-modal .hd .ph { font-size: 11px; color: var(--c-ink-4); display: inline-flex; align-items: center; gap: 5px; background: color-mix(in oklab, var(--c-ink) 5%, var(--c-bg)); border-radius: 999px; padding: 2px 9px; }
+.chaya-v2 .v2-summon-modal .hd .ph.busy { color: var(--c-accent-strong); background: color-mix(in oklab, var(--c-accent) 12%, var(--c-bg)); }
+.chaya-v2 .v2-summon-modal .hd .ph .dot { width: 5px; height: 5px; border-radius: 999px; background: var(--c-accent-strong); animation: v2-agentPulse 1.2s ease-in-out infinite; }
+.chaya-v2 .v2-summon-modal .hd .x { border: 0; background: transparent; color: var(--c-ink-4); cursor: pointer; font-size: 14px; padding: 2px 6px; }
+.chaya-v2 .v2-summon-modal .hd .x:hover { color: var(--c-ink-1); }
+.chaya-v2 .v2-summon-modal .q { padding: 10px 16px 0; font-size: 12.5px; font-weight: 600; color: var(--c-ink-1); }
+.chaya-v2 .v2-summon-modal .bd { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 16px; }
+.chaya-v2 .v2-summon-modal .bd .ask { margin: 4px 0 12px; }
+.chaya-v2 .v2-summon-modal .bd .body { font-size: 13px; line-height: 1.65; color: var(--c-ink-1); }
+.chaya-v2 .v2-summon-modal .bd .body .v2-md table { display: block; max-width: 100%; overflow-x: auto; }
+.chaya-v2 .v2-summon-modal .bd .body .v2-md pre { max-width: 100%; overflow-x: auto; }
+.chaya-v2 .v2-summon-modal .bd .body .caret { display: inline-block; width: 6px; height: 14px; margin-left: 1px; background: var(--c-accent-strong); vertical-align: text-bottom; animation: v2-agentPulse 1s steps(2) infinite; }
+.chaya-v2 .v2-summon-modal .bd .wait { font-size: 12px; color: var(--c-ink-4); }
+.chaya-v2 .v2-summon-modal .bd .err { font-size: 12px; color: var(--c-danger, #c0392b); margin-top: 8px; }
+.chaya-v2 .v2-summon-modal .ft { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-top: 1px solid var(--c-rule); }
+.chaya-v2 .v2-summon-modal .ft button { font-size: 12px; padding: 6px 13px; border-radius: var(--c-radius); border: 1px solid var(--c-rule); background: var(--c-bg); color: var(--c-ink-2); cursor: pointer; transition: background 120ms, color 120ms; }
+.chaya-v2 .v2-summon-modal .ft button:hover { background: var(--c-hover); color: var(--c-ink-1); }
+.chaya-v2 .v2-summon-modal .ft .adopt { color: var(--c-accent-strong); border-color: color-mix(in oklab, var(--c-accent) 40%, var(--c-rule)); }
+.chaya-v2 .v2-summon-modal .ft .handed { font-size: 12px; color: var(--c-accent-strong); }
+.chaya-v2 .v2-la-summon .acts button:disabled { opacity: 0.6; cursor: default; }
+
+/* 轻量全局 toast（右下角，自动消失） */
+.chaya-v2 .v2-global-toast {
+  position: fixed; right: 18px; bottom: 18px; z-index: 400; max-width: 360px;
+  padding: 10px 14px; border-radius: var(--c-radius-lg); border: 1px solid var(--c-rule);
+  background: var(--c-bg); box-shadow: var(--c-shadow-menu); color: var(--c-ink-1);
+  font-size: 12.5px; line-height: 1.45; animation: v2-popUp 180ms var(--c-ease) both;
+}
 
 /* 共用列表行 */
 .chaya-v2 .v2-wiki-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 5px; display: flex; flex-direction: column; gap: 1px; }

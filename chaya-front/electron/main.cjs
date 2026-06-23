@@ -10,6 +10,9 @@ const { registerReview } = require('./review.cjs');
 const { registerFbot, stop: stopFbot } = require('./fbot.cjs');
 
 const isDev = !app.isPackaged;
+// Dev 下 Electron 默认把应用名(dock hover 提示、菜单)显示成 "Electron"。锁成产品名，
+// 让 dock 悬停/关于面板都显示 "Chaya"。打包版由 Info.plist 的 productName 决定，不受影响。
+try { app.setName('Chaya'); } catch { /* */ }
 // Vite dev 服务器需要 inline/eval 脚本与 ws HMR，无法配严格 CSP；Electron 因此打印
 // "Insecure Content-Security-Policy" 警告（仅开发期，打包版用 file:// 不触发）。关掉这条
 // 噪声警告，避免和真实日志混淆。打包版本不受影响。
@@ -24,6 +27,18 @@ const UI_ZOOM = Number(process.env.CHAYA_UI_ZOOM || 0.9);
 // macOS builds use build/icon.icns via electron-builder; this drives the dev
 // dock icon and the win/linux window icon.
 const ICON_PNG = path.join(__dirname, '../build/icon.png');
+const ICON_PNG_DARK = path.join(__dirname, '../build/icon-dark.png');
+
+// macOS dock 图标无法随系统主题自动切换(静态 icns)，但运行期可以用 setIcon 主动换。
+// 按 nativeTheme 的明暗挑 light/dark 两张，避免奶白图标在 dark dock 里发白。
+function applyDockIcon() {
+  if (!(IS_MAC && isDev && app.dock)) return;   // 打包版用 bundle 内 icns
+  try {
+    const p = nativeTheme.shouldUseDarkColors ? ICON_PNG_DARK : ICON_PNG;
+    const img = nativeImage.createFromPath(p);
+    if (!img.isEmpty()) app.dock.setIcon(img);
+  } catch { /* non-fatal */ }
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -146,12 +161,9 @@ ipcMain.handle('appearance:set', (_e, mode) => {
 
 app.whenReady().then(() => {
   // Dev dock icon (packaged macOS uses build/icon.icns from the bundle).
-  if (IS_MAC && isDev && app.dock) {
-    try {
-      const img = nativeImage.createFromPath(ICON_PNG);
-      if (!img.isEmpty()) app.dock.setIcon(img);
-    } catch { /* non-fatal */ }
-  }
+  // 跟随系统/应用外观切换 light/dark 图标(themeSource 变化也会触发 'updated')。
+  applyDockIcon();
+  nativeTheme.on('updated', applyDockIcon);
   createWindow();
 });
 

@@ -65,6 +65,16 @@ export function permHint(provider: ProviderId, mode: PermMode): string {
 }
 
 /** CC 斜杠命令（权威名单来自 system/init.slash_commands，描述从 .claude/commands 补）。 */
+/** claude 订阅额度（/usage 文本解析）：百分比 0..100。 */
+export interface UsageInfo {
+  session?: number;       // 当前会话窗口（5h）已用百分比
+  sessionReset?: string;  // 会话窗口重置时间（人类可读，原样透传）
+  week?: number;          // 当前周（全模型）已用百分比
+  weekReset?: string;     // 周窗口重置时间
+  weekSonnet?: number;    // 当前周（仅 Sonnet）已用百分比
+  breakdown?: string;     // 「What's contributing」往后的分解文本（原样）
+}
+
 export interface SlashCommand {
   name: string;            // 形如 /commit、/git:push、/compact
   description: string;
@@ -81,6 +91,7 @@ export interface PermissionRequest {
   displayName: string | null;
   description: string | null;
   suggestions: any[] | null;   // “始终允许”用：作为 updatedPermissions 回填
+  agentId?: string | null;     // 非空 = 该请求来自子 agent(Task worker)；UI 据此标注「来自子 agent」
 }
 /** 用户对权限请求的决定（= SDK PermissionResult）。 */
 export type PermissionDecision =
@@ -90,7 +101,25 @@ export type PermissionDecision =
 /** agent 用 AskUserQuestion 抛给用户的选择题。 */
 export interface QuestionOption { label: string; description?: string }
 export interface Question { question: string; header?: string; multiSelect?: boolean; options: QuestionOption[] }
-export interface QuestionRequest { permId: string; questions: Question[] }
+export interface QuestionRequest { permId: string; questions: Question[]; agentId?: string | null }
+
+/** MCP 服务端 elicitation/create 请求用户输入（表单 / URL 授权）。 */
+export interface ElicitRequest {
+  elicitId: string;
+  serverName: string | null;
+  message: string;
+  mode: 'form' | 'url';
+  url: string | null;
+  schema: Record<string, any> | null;   // JSON Schema（form 模式），渲染字段用
+  title: string | null;
+  displayName: string | null;
+  description: string | null;
+}
+/** 用户对 elicitation 的回应（= MCP ElicitResult）。 */
+export type ElicitResult =
+  | { action: 'accept'; content?: Record<string, any> }
+  | { action: 'decline' }
+  | { action: 'cancel' };
 
 export interface DetectedProvider {
   id: ProviderId;
@@ -189,7 +218,7 @@ export interface GitFile {
   binary: boolean;
   renamedFrom?: string;
 }
-export interface GitStatusResult { ok: boolean; repo?: boolean; gitMissing?: boolean; root?: string; files?: GitFile[]; error?: string }
+export interface GitStatusResult { ok: boolean; repo?: boolean; gitMissing?: boolean; root?: string; files?: GitFile[]; branch?: string; ahead?: number; behind?: number; hasUpstream?: boolean; error?: string }
 export interface GitDiffResult { ok: boolean; diff?: string; untracked?: boolean; content?: string; error?: string }
 
 /** 主进程扫到的一条 CLI 安装技能（claude skill / 各家自定义命令），body 已归一 {{input}} 占位。 */
@@ -213,10 +242,12 @@ interface LocalAgentBridge {
   deleteSession(provider: ProviderId, cwd: string, sessionId: string): Promise<{ ok: boolean; trashed?: boolean; error?: string }>;
   listCommands(provider: ProviderId, cwd: string): Promise<SlashCommand[]>;
   scanCliSkills(): Promise<CliSkillEntry[]>;
+  usage(cwd?: string): Promise<UsageInfo | null>;
   busyKeys(): Promise<string[]>;
   send(payload: SendPayload): Promise<{ ok: boolean }>;
   warm(payload: WarmPayload): Promise<{ ok: boolean }>;
   permissionRespond(permId: string, decision: PermissionDecision): Promise<{ ok: boolean }>;
+  elicitationRespond(elicitId: string, result: ElicitResult): Promise<{ ok: boolean }>;
   interrupt(cwd: string, lane?: string): Promise<{ ok: boolean }>;
   sessionClose(cwd: string, lane?: string): Promise<{ ok: boolean }>;
   setPermMode(cwd: string, permMode: PermMode, lane?: string): Promise<{ ok: boolean }>;
@@ -232,6 +263,8 @@ interface LocalAgentBridge {
   gitDiffFile(dir: string, file: string, untracked: boolean): Promise<GitDiffResult>;
   gitRevertFile(dir: string, file: string, untracked: boolean): Promise<{ ok: boolean; error?: string }>;
   gitRevertAll(dir: string): Promise<{ ok: boolean; trashed?: number; error?: string }>;
+  gitCommit(dir: string, message: string): Promise<{ ok: boolean; error?: string }>;
+  gitPush(dir: string): Promise<{ ok: boolean; error?: string }>;
   loginStart(provider: ProviderId, cols?: number, rows?: number): Promise<{ ok: boolean; id?: string; error?: string }>;
   loginInput(id: string, data: string): Promise<{ ok: boolean }>;
   loginResize(id: string, cols: number, rows: number): Promise<{ ok: boolean }>;
@@ -239,6 +272,18 @@ interface LocalAgentBridge {
   loginStatus(provider: ProviderId): Promise<{ loggedIn: boolean | null; email?: string | null }>;
   onLogin(cb: (data: LoginEvent) => void): () => void;
   onEvent(cb: (data: LocalAgentEvent) => void): () => void;
+  onAgentAsk(cb: (req: AgentAskRequest) => void): () => void;
+  agentAskResult(requestId: string, text: string): Promise<{ ok: boolean }>;
+}
+
+/** agent 通过 ask_session 工具发起的「问另一个会话」请求（主进程 → 渲染层）。 */
+export interface AgentAskRequest {
+  requestId: string;
+  fromRunKey: string;        // 发起会话的 runKey（paneKey）
+  fromProvider: ProviderId;
+  to: string;                // 目标会话关键字（模糊匹配）
+  question: string;
+  ephemeral?: boolean;
 }
 
 /** 登录 pty 的输出/退出事件（按 id 路由）。 */
@@ -272,12 +317,15 @@ export const localAgent = {
     bridge()?.deleteSession(provider, cwd, sessionId) ?? Promise.resolve({ ok: false }),
   listCommands: (provider: ProviderId, cwd: string) =>
     bridge()?.listCommands(provider, cwd) ?? Promise.resolve([] as SlashCommand[]),
+  usage: (cwd?: string) => bridge()?.usage(cwd) ?? Promise.resolve(null),
   scanCliSkills: () => bridge()?.scanCliSkills() ?? Promise.resolve([] as CliSkillEntry[]),
   busyKeys: () => bridge()?.busyKeys() ?? Promise.resolve([] as string[]),
   send: (payload: SendPayload) => bridge()?.send(payload) ?? Promise.resolve({ ok: false }),
   warm: (payload: WarmPayload) => bridge()?.warm(payload) ?? Promise.resolve({ ok: false }),
   permissionRespond: (permId: string, decision: PermissionDecision) =>
     bridge()?.permissionRespond(permId, decision) ?? Promise.resolve({ ok: false }),
+  elicitationRespond: (elicitId: string, result: ElicitResult) =>
+    bridge()?.elicitationRespond(elicitId, result) ?? Promise.resolve({ ok: false }),
   interrupt: (cwd: string, lane?: string) => bridge()?.interrupt(cwd, lane) ?? Promise.resolve({ ok: false }),
   sessionClose: (cwd: string, lane?: string) => bridge()?.sessionClose(cwd, lane) ?? Promise.resolve({ ok: false }),
   setPermMode: (cwd: string, permMode: PermMode, lane?: string) => bridge()?.setPermMode(cwd, permMode, lane) ?? Promise.resolve({ ok: false }),
@@ -293,6 +341,8 @@ export const localAgent = {
   gitDiffFile: (dir: string, file: string, untracked: boolean) => bridge()?.gitDiffFile(dir, file, untracked) ?? Promise.resolve({ ok: false } as GitDiffResult),
   gitRevertFile: (dir: string, file: string, untracked: boolean) => bridge()?.gitRevertFile(dir, file, untracked) ?? Promise.resolve({ ok: false, error: 'no bridge' }),
   gitRevertAll: (dir: string) => bridge()?.gitRevertAll(dir) ?? Promise.resolve({ ok: false, error: 'no bridge' }),
+  gitCommit: (dir: string, message: string) => bridge()?.gitCommit(dir, message) ?? Promise.resolve({ ok: false, error: 'no bridge' }),
+  gitPush: (dir: string) => bridge()?.gitPush(dir) ?? Promise.resolve({ ok: false, error: 'no bridge' }),
   loginStart: (provider: ProviderId, cols?: number, rows?: number) => bridge()?.loginStart(provider, cols, rows) ?? Promise.resolve({ ok: false, error: 'no bridge' }),
   loginInput: (id: string, data: string) => bridge()?.loginInput(id, data) ?? Promise.resolve({ ok: false }),
   loginResize: (id: string, cols: number, rows: number) => bridge()?.loginResize(id, cols, rows) ?? Promise.resolve({ ok: false }),
@@ -300,6 +350,8 @@ export const localAgent = {
   loginStatus: (provider: ProviderId) => bridge()?.loginStatus(provider) ?? Promise.resolve({ loggedIn: null }),
   onLogin: (cb: (data: LoginEvent) => void) => bridge()?.onLogin(cb) ?? (() => {}),
   onEvent: (cb: (data: LocalAgentEvent) => void) => bridge()?.onEvent(cb) ?? (() => {}),
+  onAgentAsk: (cb: (req: AgentAskRequest) => void) => bridge()?.onAgentAsk(cb) ?? (() => {}),
+  agentAskResult: (requestId: string, text: string) => bridge()?.agentAskResult(requestId, text) ?? Promise.resolve({ ok: false }),
 };
 
 /** 生成一次回合的 runId。 */

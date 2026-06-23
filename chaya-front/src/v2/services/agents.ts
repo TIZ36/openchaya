@@ -1,0 +1,225 @@
+/* ------------------------------------------------------------------ *
+ * Local Agent —— 「本地 Agent」注册表（把一个会话升格成有身份的常驻角色）。纯本地存 localStorage。
+ *
+ * 与 sessionBridge 的「会话互问」是同一套召唤内核（askSession），但语义升级：
+ *   - 旧：现场 fuzzy 猜一个目标会话来问（无身份、易选错、价值薄）；
+ *   - 新：agent = 一个被升格的会话 + 系统提示词 + 能力描述 + 两层记忆。
+ *         召唤目标永远来自 agent 绑定（消除选错风险），天然跨 provider。
+ *
+ * 记忆两层：
+ *   1) 续接绑定会话（基线）—— 召唤时 resume agent.sessionId，带其原生 transcript 上下文作答；
+ *   2) smartnote-cloud 外置 RAG（可选）—— 配了 memory 就先检索 workspace，把命中片段随问题注入。
+ *
+ * agent 只能从「现有会话」升格（promotion-only），保证它真有上下文/记忆。
+ * 绑定期间底层 session 不可删（守卫在 useLocalAgent.deleteSession）。
+ * ------------------------------------------------------------------ */
+import type { ProviderId } from './localAgent';
+
+/** agent 的可选外置记忆（smartnote-cloud RAG）。 */
+export interface AgentMemory {
+  provider: 'smartnote-cloud';
+  apiKey?: string;        // 绑定 workspace 的 key（不填则用全局已连的）
+  workspaceTag?: string;  // 检索范围
+  topK?: number;          // 注入片段数，默认 5
+  autoDistill?: boolean;  // 每次回答完把问答存为记忆（默认开）
+  autoCalibrate?: boolean; // 闲时基于工作目录自动蒸馏/校准（默认关，待接 LLM 后端）
+}
+
+/** 记忆台账（本地，不进配置对象）：上次写入/校准时间 + 计数，给 UI 展示。 */
+export interface AgentMemoryLedger {
+  lastWriteAt?: number;
+  writeCount?: number;
+  lastCalibrateAt?: number;
+}
+
+export interface LocalAgent {
+  id: string;
+  name: string;            // @-handle，如 "backend-expert"（头像走名字字母章，不用 emoji）
+  description: string;     // 能力摘要 —— 驱动 @ 下拉与联想索引
+  tags?: string[];         // 关键词（参与联想匹配）
+  systemPrompt?: string;   // 强化提示词，召唤时前置到只读 prompt 头部
+  // 绑定（升格而来，promotion-only）
+  provider: ProviderId;
+  dir: string;             // realDir(绑定会话)，不带 lane 后缀
+  sessionId: string;       // 绑定会话 = 记忆来源
+  model?: string;
+  mcp?: string[];
+  memory?: AgentMemory;    // 可选外置记忆
+  ledger?: AgentMemoryLedger;  // 记忆写入/校准台账
+  createdAt: number;
+  updatedAt: number;
+  lastUsedAt?: number;
+}
+
+const AGENTS_KEY = 'chaya.localAgent.agents';
+export const AGENTS_CHANGED_EVENT = 'chaya:localAgentsChanged';
+
+/** 归一 agent 名（@-handle）：去 @/空白，小写，非法字符换连字符。 */
+export function normalizeAgentName(raw: string): string {
+  return String(raw || '').trim().replace(/^@+/, '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+export function loadAgents(): LocalAgent[] {
+  try {
+    const raw = localStorage.getItem(AGENTS_KEY);
+    if (raw) { const arr = JSON.parse(raw); if (Array.isArray(arr)) return arr; }
+  } catch { /* ignore */ }
+  return [];
+}
+
+function persist(list: LocalAgent[]): void {
+  try { localStorage.setItem(AGENTS_KEY, JSON.stringify(list)); } catch { /* quota */ }
+  try { window.dispatchEvent(new CustomEvent(AGENTS_CHANGED_EVENT)); } catch { /* non-browser */ }
+}
+
+export function listAgents(): LocalAgent[] { return loadAgents(); }
+export function getAgent(id: string): LocalAgent | undefined { return loadAgents().find((a) => a.id === id); }
+
+/** 某 sessionId 是否已被某个 agent 绑定（删除守卫用）。返回该 agent 或 undefined。 */
+export function agentBySession(sessionId: string | null | undefined): LocalAgent | undefined {
+  if (!sessionId) return undefined;
+  return loadAgents().find((a) => a.sessionId === sessionId);
+}
+
+/** 名字是否已被占用（升格表单去重；可排除自身 id）。 */
+export function agentNameTaken(name: string, exceptId?: string): boolean {
+  const n = normalizeAgentName(name);
+  return loadAgents().some((a) => a.name === n && a.id !== exceptId);
+}
+
+/** 新建或更新（按 id；无 id 视为新建）。返回最新列表。 */
+export function upsertAgent(a: Partial<LocalAgent> & { name: string; provider: ProviderId; dir: string; sessionId: string }): LocalAgent[] {
+  const list = loadAgents();
+  const now = Date.now();
+  const name = normalizeAgentName(a.name);
+  if (a.id) {
+    const i = list.findIndex((x) => x.id === a.id);
+    if (i >= 0) {
+      list[i] = {
+        ...list[i],
+        name,
+        description: a.description ?? list[i].description,
+        tags: a.tags ?? list[i].tags,
+        systemPrompt: a.systemPrompt ?? list[i].systemPrompt,
+        provider: a.provider, dir: a.dir, sessionId: a.sessionId,
+        model: a.model ?? list[i].model,
+        mcp: a.mcp ?? list[i].mcp,
+        memory: a.memory !== undefined ? a.memory : list[i].memory,
+        updatedAt: now,
+      };
+      persist(list); return list;
+    }
+  }
+  list.unshift({
+    id: `agt-${now}-${Math.random().toString(36).slice(2, 6)}`,
+    name, description: a.description || '', tags: a.tags,
+    systemPrompt: a.systemPrompt, provider: a.provider, dir: a.dir, sessionId: a.sessionId,
+    model: a.model, mcp: a.mcp, memory: a.memory,
+    createdAt: now, updatedAt: now,
+  });
+  persist(list);
+  return list;
+}
+
+/** 解绑/删除 agent（不动底层会话）。 */
+export function deleteAgent(id: string): LocalAgent[] {
+  const list = loadAgents().filter((a) => a.id !== id);
+  persist(list);
+  return list;
+}
+
+/** 标记最近召唤时间（列表排序用，不强制）。 */
+export function touchAgent(id: string): void {
+  const list = loadAgents();
+  const i = list.findIndex((a) => a.id === id);
+  if (i < 0) return;
+  list[i] = { ...list[i], lastUsedAt: Date.now() };
+  persist(list);
+}
+
+/** 记一次记忆写入（更新台账 ts + 计数）。 */
+export function markMemoryWritten(id: string, at = Date.now()): void {
+  const list = loadAgents();
+  const i = list.findIndex((a) => a.id === id);
+  if (i < 0) return;
+  const led = list[i].ledger || {};
+  list[i] = { ...list[i], ledger: { ...led, lastWriteAt: at, writeCount: (led.writeCount || 0) + 1 } };
+  persist(list);
+}
+
+/** 记一次闲时校准（更新台账 ts）。 */
+export function markMemoryCalibrated(id: string, at = Date.now()): void {
+  const list = loadAgents();
+  const i = list.findIndex((a) => a.id === id);
+  if (i < 0) return;
+  const led = list[i].ledger || {};
+  list[i] = { ...list[i], ledger: { ...led, lastCalibrateAt: at } };
+  persist(list);
+}
+
+/* ------------------------------------------------------------------ *
+ * 召唤前的外置记忆检索（smartnote-cloud RAG）。
+ *   memories（smartnoteRetrieve）+ doc chunks（smartnoteChunks.search）并检，
+ *   按 workspaceTag 限定范围（tags / dimension `wiki:<tag>`），拼成可注入的片段块。
+ * 注：Phase 1 走全局已连的 smartnote 连接 + tag 限定；agent.memory.apiKey
+ *     （独立 workspace key）留作后续按需启用。失败/无配置 → 返回 ''（静默降级）。
+ * ------------------------------------------------------------------ */
+export async function retrieveAgentMemory(agent: LocalAgent, query: string): Promise<string> {
+  if (!agent.memory || agent.memory.provider !== 'smartnote-cloud') return '';
+  const q = (query || '').trim();
+  if (!q) return '';
+  const topK = agent.memory.topK ?? 5;
+  const tag = agent.memory.workspaceTag?.trim() || undefined;
+  try {
+    const { smartnoteRetrieve, smartnoteChunks } = await import('../../services/smartnoteApi');
+    const [mem, chunks] = await Promise.all([
+      smartnoteRetrieve({ query: q, topk: topK, tags: tag ? [tag] : undefined }).catch(() => null),
+      smartnoteChunks.search(q, { topk: topK, dimension: tag ? `wiki:${tag}` : undefined }).catch(() => null),
+    ]);
+    const parts: string[] = [];
+    for (const m of (mem?.results || []).slice(0, topK)) {
+      if (m.content) parts.push(`- ${String(m.content).slice(0, 500)}`);
+    }
+    for (const c of (chunks?.results || []).slice(0, topK)) {
+      if (c.text) parts.push(`- [${c.document_name}] ${String(c.text).slice(0, 500)}`);
+    }
+    return parts.slice(0, topK * 2).join('\n');
+  } catch { return ''; }
+}
+
+/* ------------------------------------------------------------------ *
+ * 答完写入记忆（混合策略的「便宜半」）：把一次问答原样存为一条 episode 记忆，
+ *   带 workspaceTag + source_refs；created_at 由服务端记 ts（即「记忆 ts」）。
+ *   不跑 LLM、不额外花 token。闲时的 LLM 蒸馏/去重/校准（supersedes 替旧）是「贵半」，待接。
+ * 返回是否写成功（用于更新本地台账）。无配置 / autoDistill 关 / 答复太短 → 跳过。
+ * ------------------------------------------------------------------ */
+export async function recordMemoryOnAnswer(agent: LocalAgent, question: string, answer: string): Promise<boolean> {
+  if (!agent.memory || agent.memory.provider !== 'smartnote-cloud') return false;
+  if (agent.memory.autoDistill === false) return false;
+  const q = (question || '').trim();
+  const a = (answer || '').trim();
+  if (a.length < 24) return false;   // 太短（寒暄/报错）不值得存
+  const tag = agent.memory.workspaceTag?.trim();
+  try {
+    const { smartnoteMemories } = await import('../../services/smartnoteApi');
+    await smartnoteMemories.create({
+      kind: 'episode',
+      content: `【问】${q}\n【答】${a.slice(0, 4000)}`,
+      tags: tag ? [tag] : undefined,
+      source_refs: [{ kind: 'agent-summon', agent: agent.name, session: agent.sessionId, dir: agent.dir }],
+      confidence: 0.5,
+    });
+    return true;
+  } catch { return false; }
+}
+
+/** 订阅 agent 列表变化（跨标签/组件同步）。 */
+export function subscribeAgents(cb: () => void): () => void {
+  const handler = () => cb();
+  try { window.addEventListener(AGENTS_CHANGED_EVENT, handler); } catch { /* non-browser */ }
+  try { window.addEventListener('storage', handler); } catch { /* non-browser */ }
+  return () => {
+    try { window.removeEventListener(AGENTS_CHANGED_EVENT, handler); } catch { /* ignore */ }
+    try { window.removeEventListener('storage', handler); } catch { /* ignore */ }
+  };
+}
