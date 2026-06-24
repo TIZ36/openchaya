@@ -85,56 +85,95 @@ function childEnv() {
  * MCP：读 ~/.claude.json（Claude Code CLI 配置）里的 MCP server，
  * 让用户在本地 agent 里按需启用（默认全关，保持冷启快）。
  * ------------------------------------------------------------------ */
-function readClaudeJson() {
-  try { return JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8')); }
-  catch { return {}; }
-}
-/** 列出某 cwd 可用的 MCP server（全局 + 该项目级），返回 [{name, scope, type}]（不含密钥）。 */
-function listMcpConfigs(cwd) {
-  const j = readClaudeJson();
-  const out = [];
-  const seen = new Set();
-  const add = (m, scope) => {
-    for (const name in (m || {})) {
-      if (seen.has(name)) continue;
-      seen.add(name);
-      const c = m[name] || {};
-      out.push({ name, scope, type: c.type || (c.command ? 'stdio' : 'http') });
-    }
-  };
-  const proj = (j.projects && cwd && j.projects[cwd]) ? j.projects[cwd].mcpServers : null;
-  add(proj, 'project');
-  add(j.mcpServers, 'global');
+/* ── MCP：各 provider 各自维护自己的配置（文件/格式不同），列表与加载都按 provider 走自己的源。
+ *    跨 provider 互通 = listAllMcp 看别家装了啥 + getMcpConfig 取其配置发进会话让当前 agent 照装。
+ *    canonical 形：{transport:'stdio'|'http', command, args, env, url, headers}                  ── */
+const MCP_FILES = {
+  claude: () => path.join(os.homedir(), '.claude.json'),
+  cursor: () => path.join(os.homedir(), '.cursor', 'mcp.json'),
+  gemini: () => path.join(os.homedir(), '.gemini', 'settings.json'),
+  copilot: () => path.join(os.homedir(), '.config', 'github-copilot', 'intellij', 'mcp.json'),
+  opencode: () => path.join(os.homedir(), '.config', 'opencode', 'opencode.json'),
+  codex: () => path.join(os.homedir(), '.codex', 'config.toml'),
+};
+const MCP_PROVIDERS = ['claude', 'codex', 'cursor', 'gemini', 'copilot', 'opencode'];
+
+function readClaudeJson() { try { return JSON.parse(fs.readFileSync(MCP_FILES.claude(), 'utf8')); } catch { return {}; } }
+/** 读 JSON，容忍整行 // 注释（copilot 的 mcp.json 带注释）。 */
+function readMcpJson(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8').replace(/^\s*\/\/.*$/gm, '')); } catch { return null; } }
+/** 极简 TOML：抽 [mcp_servers.NAME] / [mcp_servers.NAME.env] 块（codex 用）。 */
+function parseCodexMcp(p) {
+  let s; try { s = fs.readFileSync(p, 'utf8'); } catch { return {}; }
+  const out = {}; let cur = null, inEnv = false;
+  const unq = (v) => { v = v.trim(); return (/^".*"$/.test(v) || /^'.*'$/.test(v)) ? v.slice(1, -1) : v; };
+  for (const ln of s.split(/\r?\n/)) {
+    const h = /^\s*\[mcp_servers\.([^\].]+)(\.env)?\]\s*$/.exec(ln);
+    if (h) { const n = h[1]; cur = out[n] || (out[n] = { env: {} }); inEnv = !!h[2]; continue; }
+    if (/^\s*\[/.test(ln)) { cur = null; inEnv = false; continue; }
+    if (!cur) continue;
+    const kv = /^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*$/.exec(ln); if (!kv) continue;
+    const k = kv[1], v = kv[2];
+    if (inEnv) cur.env[k] = unq(v);
+    else if (k === 'command') cur.command = unq(v);
+    else if (k === 'url') cur.url = unq(v);
+    else if (k === 'args') { try { cur.args = JSON.parse(v); } catch { cur.args = []; } }
+  }
   return out;
 }
-/** 把启用的 MCP 名字解析成 SDK options.mcpServers（从 ~/.claude.json 取真实配置含密钥）。 */
-function resolveMcp(cwd, names) {
+/** 某 provider 配置里的原始 MCP map（{name: rawConfig}，含密钥）。 */
+function rawMcpMap(provider, cwd) {
+  const f = MCP_FILES[provider]; if (!f) return {};
+  const p = f();
+  if (provider === 'codex') return parseCodexMcp(p);
+  const j = readMcpJson(p); if (!j) return {};
+  if (provider === 'copilot') return j.servers || {};
+  if (provider === 'opencode') return j.mcp || {};
+  const proj = (provider === 'claude' && cwd && j.projects && j.projects[cwd]) ? (j.projects[cwd].mcpServers || {}) : {};
+  return { ...(j.mcpServers || {}), ...proj };
+}
+/** 原始配置 → canonical。 */
+function normMcp(raw) {
+  const c = raw || {};
+  const t = c.type || (c.command ? 'stdio' : ((c.url || c.httpUrl) ? 'http' : 'stdio'));
+  if (t === 'http' || t === 'sse' || t === 'remote') {
+    return { transport: 'http', url: c.url || c.httpUrl || '', headers: c.headers || (c.requestInit && c.requestInit.headers) || {} };
+  }
+  let command = c.command, args = Array.isArray(c.args) ? c.args : [];
+  if (Array.isArray(c.command)) { command = c.command[0]; args = c.command.slice(1); }   // opencode command 是数组
+  return { transport: 'stdio', command: command || '', args, env: c.env || c.environment || {} };
+}
+/** 列某 provider 自己的 MCP（[{name, scope, type}]，不含密钥）。 */
+function listMcpConfigs(cwd, provider) {
+  const m = rawMcpMap(provider || 'claude', cwd);
+  return Object.keys(m).map((name) => ({ name, scope: 'global', type: normMcp(m[name]).transport }));
+}
+/** 跨 provider 总览：每家装了哪些 MCP（[{provider, name, type}]，不含密钥）。 */
+function listAllMcp(cwd) {
+  const out = [];
+  for (const prov of MCP_PROVIDERS) { const m = rawMcpMap(prov, cwd); for (const name in m) out.push({ provider: prov, name, type: normMcp(m[name]).transport }); }
+  return out;
+}
+/** 取某 provider 某 MCP 的 canonical 配置（含密钥）——发进会话让当前 agent 照装。 */
+function getMcpConfig(provider, name, cwd) {
+  const m = rawMcpMap(provider, cwd); if (!m[name]) return null;
+  return { name, provider, ...normMcp(m[name]) };
+}
+/** canonical → claude SDK options.mcpServers（按 provider 自己的配置取，默认 claude）。 */
+function resolveMcp(cwd, names, provider) {
   if (!Array.isArray(names) || names.length === 0) return undefined;
-  const j = readClaudeJson();
-  const proj = (j.projects && cwd && j.projects[cwd]) ? (j.projects[cwd].mcpServers || {}) : {};
-  const glob = j.mcpServers || {};
-  const out = {};
-  for (const name of names) { const c = proj[name] || glob[name]; if (c) out[name] = c; }
+  const m = rawMcpMap(provider || 'claude', cwd); const out = {};
+  for (const name of names) { if (!m[name]) continue; const n = normMcp(m[name]); out[name] = n.transport === 'http' ? { type: 'http', url: n.url, headers: n.headers } : { command: n.command, args: n.args, env: n.env }; }
   return Object.keys(out).length ? out : undefined;
 }
-/** 把启用的 MCP 名字解析成 ACP `session/new` 的 mcpServers 数组（Zed Agent-Client-Protocol 格式）。
- *  ~/.claude.json 用「对象」存 env/headers，ACP 用「数组」（[{name,value}]），这里转一道；
- *  stdio →{name,command,args,env[]}；http/sse →{type,name,url,headers[]}。gemini/copilot 同吃这套。 */
-function resolveMcpAcp(cwd, names) {
-  const obj = resolveMcp(cwd, names);
-  if (!obj) return [];
+/** canonical → ACP session/new mcpServers 数组（gemini/copilot 各按自己配置）。 */
+function resolveMcpAcp(cwd, names, provider) {
+  const m = rawMcpMap(provider || 'gemini', cwd);
   const kv = (o) => Object.entries(o || {}).map(([name, value]) => ({ name, value: String(value) }));
   const out = [];
-  for (const name in obj) {
-    const c = obj[name] || {};
-    const type = c.type || (c.command ? 'stdio' : (c.url ? 'http' : 'stdio'));
-    if (type === 'http' || type === 'sse') {
-      if (!c.url) continue;
-      out.push({ type, name, url: c.url, headers: kv(c.headers) });
-    } else {
-      if (!c.command) continue;
-      out.push({ name, command: c.command, args: Array.isArray(c.args) ? c.args : [], env: kv(c.env) });
-    }
+  for (const name of (names || [])) {
+    if (!m[name]) continue; const n = normMcp(m[name]);
+    if (n.transport === 'http') { if (n.url) out.push({ type: 'http', name, url: n.url, headers: kv(n.headers) }); }
+    else { if (n.command) out.push({ name, command: n.command, args: n.args, env: kv(n.env) }); }
   }
   return out;
 }
@@ -1114,7 +1153,7 @@ function makeBatchedEmit(emitNow, key) {
   };
 }
 
-function startSession(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, lane }) {
+function startSession(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, lane, appendSystemPrompt }) {
   const key = runKey(cwd, lane);   // Map 键 / 事件路由键（SDK 仍用真实 cwd）
   if (lane) console.log('[localAgent] start derive session · key=%s · dir=%s', key, cwd);
   const def = PROVIDERS[provider || 'claude'];
@@ -1208,7 +1247,8 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, reaso
   });
 
   const mcpServers = resolveMcp(cwd, mcp);
-  const session = { input, ac, query: null, model: model || null, reasoning: reasoning || null, mcp: Array.isArray(mcp) ? mcp.slice() : [], touched: Date.now() };
+  const sysAppend = (typeof appendSystemPrompt === 'string' && appendSystemPrompt.trim()) ? appendSystemPrompt.trim() : null;
+  const session = { input, ac, query: null, model: model || null, reasoning: reasoning || null, mcp: Array.isArray(mcp) ? mcp.slice() : [], appendSystemPrompt: sysAppend, touched: Date.now() };
   sessions.set(key, session);
 
   (async () => {
@@ -1238,6 +1278,9 @@ function startSession(sender, { cwd, provider, sessionId, permMode, model, reaso
           stderr: (data) => emit({ type: 'stderr', text: String(data) }),
           ...(model ? { model } : {}),
           ...(reasoning ? { effort: reasoning } : {}),   // claude 思考强度：low/medium/high/xhigh/max（SDK Options.effort）
+          // agent 人设 = 真·系统提示：附加到 Claude Code 默认系统提示之后（保留原生行为）。
+          // 直接对话 / 召唤都经此会话，故两边都生效、每轮都在（不是消息前缀）。
+          ...(sysAppend ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: sysAppend } } : {}),
           ...(sessionId ? { resume: sessionId } : {}),
         },
       });
@@ -1335,7 +1378,7 @@ function atCapacity(sender, cwd, lane) {
  *  模型在发送这一刻才应用：冷启已用 options.model 起；暖会话且模型变了才 setModel
  *  （setModel 会注入「Set model to …」回显，渲染层会过滤掉，不当对话显示）。
  *  attachments：拖入/选取的文件 + 粘贴的图片（见上方注入逻辑）。 */
-async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode, model, reasoning, mcp, apiKey, attachments, lane, steer }) {
+async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode, model, reasoning, mcp, apiKey, attachments, lane, steer, appendSystemPrompt }) {
   if (!steer && atCapacity(sender, cwd, lane)) return { ok: false, error: 'too_many_sessions' };
   if (!steer) busyKeys.add(runKey(cwd, lane));   // 回合开始 → 标记 busy（steer 是已在跑的回合插话，不重复标记）
   if (provider === 'cursor') return cursorSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, apiKey });
@@ -1345,7 +1388,7 @@ async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode,
   if (provider === 'copilot') return copilotSend(sender, { cwd, lane, sessionId, prompt: fileRefsText(prompt, attachments, true), permMode, model, mcp });
   const key = runKey(cwd, lane);
   let s = sessions.get(key);
-  if (!s) s = startSession(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, lane });
+  if (!s) s = startSession(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, lane, appendSystemPrompt });
   if (!s) return { ok: false };
   // steering（运行中插话）：只往输入流推消息，绝不动会话配置——effort 重建/切模型都
   // 会打断正在跑的回合（abort 重建 = 直接杀掉进行中的 CLI）。配置变更等下一轮正常 send 再生效。
@@ -1353,13 +1396,14 @@ async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode,
     s.input.push({ type: 'user', message: { role: 'user', content: buildClaudeContent(prompt, attachments) }, parent_tool_use_id: null });
     return { ok: true };
   }
-  // claude effort 无运行时 setter：思考强度变了就用新强度重建会话（resume 同一 sessionId，对话不丢）。
+  // claude effort / 人设系统提示 无运行时 setter：任一变了就重建会话（resume 同一 sessionId，对话不丢）。
   const wantEffort = reasoning || null;
-  if (s.query && wantEffort !== s.reasoning) {
-    console.log('[localAgent] effort %s → %s · rebuild claude session · %s', s.reasoning, wantEffort, key);
+  const wantSys = (typeof appendSystemPrompt === 'string' && appendSystemPrompt.trim()) ? appendSystemPrompt.trim() : null;
+  if (s.query && (wantEffort !== s.reasoning || wantSys !== s.appendSystemPrompt)) {
+    console.log('[localAgent] rebuild claude session (effort %s→%s, sysPrompt %s) · %s', s.reasoning, wantEffort, wantSys !== s.appendSystemPrompt ? 'changed' : 'same', key);
     try { s.ac.abort(); } catch { /* */ }
     sessions.delete(key);
-    s = startSession(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, lane });
+    s = startSession(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, lane, appendSystemPrompt });
     if (!s) return { ok: false };
   }
   s.reasoning = wantEffort;
@@ -1374,14 +1418,14 @@ async function sessionSend(sender, { cwd, provider, sessionId, prompt, permMode,
 
 /** 预热：打开/聚焦会话时就起常驻进程（提前付冷启 + resume 读盘），
  *  等用户真正发送时已是暖的——首 token 从 ~10s 降到 ~2s。已有则不重起。 */
-function sessionWarm(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, apiKey, lane }) {
+function sessionWarm(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, apiKey, lane, appendSystemPrompt }) {
   if (atCapacity(sender, cwd, lane)) return { ok: false, error: 'too_many_sessions' };
   if (provider === 'cursor') return cursorWarm(sender, { cwd, lane, sessionId, permMode, model, apiKey });
   if (provider === 'codex') return codexWarm(sender, { cwd, lane, sessionId, permMode, model, reasoning });
   if (provider === 'gemini') return geminiWarm(sender, { cwd, lane, sessionId, permMode, model, mcp });
   if (provider === 'copilot') return copilotWarm(sender, { cwd, lane, sessionId, permMode, model, mcp });
   if (sessions.has(runKey(cwd, lane))) return { ok: true };
-  const s = startSession(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, lane });
+  const s = startSession(sender, { cwd, provider, sessionId, permMode, model, reasoning, mcp, lane, appendSystemPrompt });
   return { ok: !!s };
 }
 
@@ -2347,7 +2391,7 @@ async function geminiEnsure(sender, { cwd, lane, sessionId, permMode, model, mcp
   let realCwd = cwd; try { realCwd = fs.realpathSync(cwd); } catch { /* */ }
   const emit = makeBatchedEmit((ev) => { if (sender.isDestroyed()) return false; try { sender.send('localAgent:event', { cwd: key, ev }); return true; } catch { return false; } }, key);
   const mcpNames = Array.isArray(mcp) ? mcp.slice() : (s && s.mcpNames) || [];
-  const mcpServers = resolveMcpAcp(cwd, mcpNames);
+  const mcpServers = resolveMcpAcp(cwd, mcpNames, 'gemini');
   s = { conn: null, sessionId: sessionId || null, model: (model !== undefined ? model : null), permMode: permMode || 'default', turnCtx: geminiAcp.makeTurnState(), key, emit, _init: null, mcpNames, touched: Date.now() };
   geminiSessions.set(key, s);
   s._init = (async () => {
@@ -2442,7 +2486,7 @@ async function copilotEnsure(sender, { cwd, lane, sessionId, permMode, model, mc
   let realCwd = cwd; try { realCwd = fs.realpathSync(cwd); } catch { /* */ }
   const emit = makeBatchedEmit((ev) => { if (sender.isDestroyed()) return false; try { sender.send('localAgent:event', { cwd: key, ev }); return true; } catch { return false; } }, key);
   const mcpNames = Array.isArray(mcp) ? mcp.slice() : (s && s.mcpNames) || [];
-  const mcpServers = resolveMcpAcp(cwd, mcpNames);
+  const mcpServers = resolveMcpAcp(cwd, mcpNames, 'copilot');
   s = { conn: null, sessionId: sessionId || null, model: (model !== undefined ? model : null), permMode: permMode || 'default', turnCtx: geminiAcp.makeTurnState(), key, emit, _init: null, models: [], mcpNames, touched: Date.now() };
   copilotSessions.set(key, s);
   s._init = (async () => {
@@ -3251,7 +3295,9 @@ function registerLocalAgent(ipcMain, dialog) {
   ipcMain.handle('localAgent:setPermMode', (_e, { cwd, permMode, lane }) => sessionSetPermMode({ cwd, permMode, lane }));
   ipcMain.handle('localAgent:setModel', (_e, { cwd, model, lane }) => sessionSetModel({ cwd, model, lane }));
   ipcMain.handle('localAgent:setReasoning', (_e, { cwd, reasoning, lane }) => sessionSetReasoning({ cwd, reasoning, lane }));
-  ipcMain.handle('localAgent:listMcp', (_e, { cwd }) => listMcpConfigs(cwd));
+  ipcMain.handle('localAgent:listMcp', (_e, { cwd, provider }) => listMcpConfigs(cwd, provider));
+  ipcMain.handle('localAgent:listAllMcp', (_e, { cwd }) => listAllMcp(cwd));
+  ipcMain.handle('localAgent:getMcpConfig', (_e, { provider, name, cwd }) => getMcpConfig(provider, name, cwd));
   ipcMain.handle('localAgent:setMcp', (_e, { cwd, mcp, lane }) => sessionSetMcp({ cwd, mcp, lane }));
   ipcMain.handle('localAgent:mcpStatus', (_e, { cwd, lane }) => sessionMcpStatus({ cwd, lane }));
   ipcMain.handle('localAgent:reconnectMcp', (_e, { cwd, name, lane }) => sessionReconnectMcp({ cwd, name, lane }));
@@ -3273,7 +3319,8 @@ function registerLocalAgent(ipcMain, dialog) {
 
 module.exports = {
   registerLocalAgent,
-  runHeadless,       // automation.cjs：无人值守跑一条 prompt
+  runHeadless,       // automation.cjs / cron.cjs：无人值守跑一条 prompt
+  resolveBin,        // cron.cjs：解析 claude 可执行文件全路径（写进 LaunchAgent）
   gitBin,            // automation.cjs：解析好的 git 全路径（GUI PATH 兜底）
   childEnv,          // automation.cjs：带补充 PATH 的环境
   killAllSessions,   // main.cjs 在渲染进程重载/崩溃/退出时调，回收孤儿 claude 子进程

@@ -61,6 +61,8 @@ import { SessionBridgePanel } from './SessionBridgePanel';
 import { getAsks, onAsksChange } from './services/sessionBridge';
 import { useLocalAgent, realDir } from './useLocalAgent';
 import { CodeEditorLayer } from './CodeEditorLayer';
+import { JotDrawer } from './JotPanel';
+import { CronDrawer } from './CronPanel';
 import { InspectorColumn } from './InspectorColumn';
 import { isLocalAgentAvailable, type ProviderId } from './services/localAgent';
 import { isFbotAvailable, fbot, type SpecData } from './services/fbot';
@@ -159,6 +161,12 @@ const ShellInner: React.FC = () => {
   const closeEditor = useCallback(() => setEditorOpen(false), []);
   // wiki 抽屉开关也移到右上角（与代码列同区）：状态由激活窗格的 WikiNotes 回报，这里只做镜像 + 触发。
   const [wikiOpen, setWikiOpen] = useState(false);
+  // 速记抽屉（KV 速记，全局本地存）：独立开关，与代码改动/wiki 并列于检视列。
+  const [jotOpen, setJotOpen] = useState(false);
+  const closeJot = useCallback(() => setJotOpen(false), []);
+  // 定时任务抽屉（provider 无关，扫 OS crontab）：独立开关，与代码改动/wiki/速记 并列于检视列。
+  const [cronOpen, setCronOpen] = useState(false);
+  const closeCron = useCallback(() => setCronOpen(false), []);
   // 轻量全局 toast：任意处 dispatch `chaya:toast` {text} 即弹一条短提示（如「会话已绑定 Agent」）。
   const [toast, setToast] = useState('');
   useEffect(() => {
@@ -189,6 +197,8 @@ const ShellInner: React.FC = () => {
   const closeInspectors = useCallback(() => {
     setEditorOpen(false);
     setWikiOpen(false);
+    setJotOpen(false);
+    setCronOpen(false);
     window.dispatchEvent(new CustomEvent('chaya:wiki-toggle', { detail: { open: false } }));
   }, []);
   useEffect(() => {
@@ -300,6 +310,23 @@ const ShellInner: React.FC = () => {
     enabled: settings.chatStreamSmooth ?? true,
     speed: settings.chatStreamSpeed ?? 'normal',
   });
+
+  // Agent 换绑「绑定新会话」：在目标目录+provider 起一个新空会话；其首轮 init 拿到 id 后
+  // 由 useLocalAgent 的待绑捕获回填给该 agent（见 takePendingBind）。挂在 la 初始化之后。
+  // 用 ref 持有 la，listener 只订阅一次（ClientShell 每个 stream chunk 都重渲，避免反复增删监听）。
+  const laRef = useRef(la); laRef.current = la;
+  useEffect(() => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent).detail as { provider?: string; dir?: string };
+      if (!d?.dir) return;
+      const cur = laRef.current;
+      const prov = (d.provider as ProviderId) || 'claude';
+      if (prov !== cur.activeProvider) cur.switchActiveProvider(prov);
+      cur.newSession(d.dir, undefined, prov);
+    };
+    window.addEventListener('chaya:bindNewSession', on as EventListener);
+    return () => window.removeEventListener('chaya:bindNewSession', on as EventListener);
+  }, []);
 
   // 全局 topbar tab 条：跨 Local / Chat / Gallery / KB。activeId 同步自现有状态机，
   // 这里只持有「打开了哪些 + 每条的未读/批准信号」。
@@ -1498,6 +1525,32 @@ const ShellInner: React.FC = () => {
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="16" height="16" aria-hidden><polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" /></svg>
                 </span>
               </button>
+              {/* 速记：KV 速记抽屉（全局本地存）。独立开关，与代码改动/wiki 可并列。 */}
+              <button
+                type="button"
+                className={`v2-prov-bm insp${jotOpen ? ' active' : ''}`}
+                title={tr('jot.openTitle')}
+                aria-label={tr('jot.tab')}
+                aria-pressed={jotOpen}
+                onClick={() => { setBridgeOpen(false); setJotOpen((o) => !o); }}
+              >
+                <span className="v2-prov-bm-glyph">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="16" height="16" aria-hidden><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /><path d="M9 7h7M9 11h5" /></svg>
+                </span>
+              </button>
+              {/* 定时任务：provider 无关，扫 OS crontab（关终端/重启都跑）。独立开关，与代码改动/wiki/速记可并列。 */}
+              <button
+                type="button"
+                className={`v2-prov-bm insp${cronOpen ? ' active' : ''}`}
+                title={tr('cron.openTitle')}
+                aria-label={tr('cron.tab')}
+                aria-pressed={cronOpen}
+                onClick={() => { setBridgeOpen(false); setCronOpen((o) => !o); }}
+              >
+                <span className="v2-prov-bm-glyph">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="16" height="16" aria-hidden><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M8 14l2 2-2 2M13 18h4" /></svg>
+                </span>
+              </button>
               {/* Agents 书签：常驻（与 wiki/代码列互斥）；点开/收起 Agent 管理面板。有召唤进行中时带呼吸点。 */}
               <button
                 type="button"
@@ -1795,6 +1848,8 @@ const ShellInner: React.FC = () => {
         <InspectorColumn
           editorOpen={editorOpen && activeNav === 'local'}
           noteOpen={wikiOpen && activeNav === 'local'}
+          jotOpen={jotOpen && activeNav === 'local'}
+          cronOpen={cronOpen && activeNav === 'local'}
         />
         {/* 「代码改动」检视列：portal 进 inspector-slot，与 wiki 抽屉互斥（共用第二列）。 */}
         <CodeEditorLayer
@@ -1806,6 +1861,18 @@ const ShellInner: React.FC = () => {
           provider={settings.localAgentProvider ?? 'claude'}
           modelOptions={la.modelOptions}
           activeProvider={la.provider}
+          onSendToChat={(text) => { if (la.activeCwd) la.appendDraft(la.activeCwd, text); }}
+        />
+        {/* 速记抽屉：portal 进 #v2-inspector-jot，独立开关（与代码改动/wiki 共用第二列）。 */}
+        <JotDrawer
+          open={jotOpen && activeNav === 'local'}
+          onClose={closeJot}
+          onSendToChat={(text) => { if (la.activeCwd) la.appendDraft(la.activeCwd, text); }}
+        />
+        {/* 定时任务抽屉：portal 进 #v2-inspector-cron，provider 无关（扫 OS crontab）。 */}
+        <CronDrawer
+          open={cronOpen && activeNav === 'local'}
+          onClose={closeCron}
           onSendToChat={(text) => { if (la.activeCwd) la.appendDraft(la.activeCwd, text); }}
         />
       </div>

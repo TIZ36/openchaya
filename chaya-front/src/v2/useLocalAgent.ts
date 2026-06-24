@@ -19,7 +19,7 @@ import {
   type TabGroup, type ModelInfo, type McpStatus, type Attachment, type UsageInfo,
 } from './services/localAgent';
 import { loadSkills, expandSkill, syncCliSkills, SKILLS_CHANGED_EVENT, type LocalSkill } from './services/skills';
-import { agentBySession } from './services/agents';
+import { agentBySession, takePendingBind, rebindAgent } from './services/agents';
 import { api } from '../utils/apiClient';
 import { TYPEWRITER_PRESETS, DEFAULT_TYPEWRITER, FINISH_DRAIN_SEC, type TypewriterConfig } from './typewriter';
 import { useI18n } from '../i18n';
@@ -633,7 +633,12 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     if (sid) { if (names.length) mcpMemRef.current[sid] = names; else delete mcpMemRef.current[sid]; saveMcpBySession(mcpMemRef.current); }
     void localAgent.setMcp(realDir(cwd), names, paneLane(cwd)).then((r) => { if (r && Array.isArray(r.servers)) patchTab(cwd, { mcpStatus: r.servers }); });
   }, [tabs, patchTab]);
-  const listMcp = useCallback((cwd: string) => localAgent.listMcp(cwd), []);
+  const listMcp = useCallback((cwd: string) => {
+    const prov = tabsRef.current.find((t) => t.cwd === cwd)?.provider ?? activeProvider;
+    return localAgent.listMcp(realDir(cwd), prov);
+  }, [activeProvider]);
+  const listAllMcp = useCallback((cwd: string) => localAgent.listAllMcp(realDir(cwd)), []);
+  const getMcpConfig = useCallback((provider: string, name: string, cwd: string) => localAgent.getMcpConfig(provider, name, realDir(cwd)), []);
   // 探测 MCP 状态；重连不通的 server。
   const refreshMcp = useCallback((cwd: string) => {
     void localAgent.mcpStatus(realDir(cwd), paneLane(cwd)).then((r) => { if (r && Array.isArray(r.servers)) patchTab(cwd, { mcpStatus: r.servers }); });
@@ -877,7 +882,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     patchTab(paneKey, { loading: true, permMode: pm, model: md, reasoning: rs, mcp: mc });
     // 预热：立刻起常驻进程（含 resume 读盘）；冷启在「载入会话…」期间付掉，发送时已暖。
     // cursor 无常驻进程，warm 只登记状态 + 拉模型；apiKey 注入（已预拉则同步可得）。
-    if (det?.live) void localAgent.warm({ provider: prov, cwd: dir, lane: paneLane(paneKey), sessionId: sid, permMode: pm, model: md, reasoning: rs, mcp: mc, apiKey: prov === 'cursor' ? cursorKeyRef.current : undefined });
+    if (det?.live) void localAgent.warm({ provider: prov, cwd: dir, lane: paneLane(paneKey), sessionId: sid, permMode: pm, model: md, reasoning: rs, mcp: mc, apiKey: prov === 'cursor' ? cursorKeyRef.current : undefined, appendSystemPrompt: prov === 'claude' ? agentBySession(sid)?.systemPrompt : undefined });
     const { messages: msgs } = await localAgent.readSession(prov, dir, sid);
     setHistory(paneKey, sid, msgs);
   }, [activeProvider, providers, tabs, paneKeyForDir, addPaneTab, patchTab, setHistory]);
@@ -893,7 +898,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     addPaneTab(paneKey, sid, title, undefined, prov, false);   // 后台开，不 setActiveCwd
     const det = providers.find((p) => p.id === prov);
     patchTab(paneKey, { loading: true, permMode, model: modelMemRef.current[sid] || undefined, mcp: mcpMemRef.current[sid] || undefined });
-    if (det?.live) void localAgent.warm({ provider: prov, cwd: dir, lane: paneLane(paneKey), sessionId: sid, permMode, model: modelMemRef.current[sid] || undefined, mcp: mcpMemRef.current[sid] || undefined, apiKey: prov === 'cursor' ? cursorKeyRef.current : undefined });
+    if (det?.live) void localAgent.warm({ provider: prov, cwd: dir, lane: paneLane(paneKey), sessionId: sid, permMode, model: modelMemRef.current[sid] || undefined, mcp: mcpMemRef.current[sid] || undefined, apiKey: prov === 'cursor' ? cursorKeyRef.current : undefined, appendSystemPrompt: prov === 'claude' ? agentBySession(sid)?.systemPrompt : undefined });
     void localAgent.readSession(prov, dir, sid).then(({ messages }) => setHistory(paneKey, sid, messages)).catch(() => { /* 读盘失败不阻断 */ });
     return paneKey;
   }, [providers, paneKeyForDir, addPaneTab, patchTab, setHistory]);
@@ -1207,6 +1212,13 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
         // 但【不】立刻刷进工程目录：新会话在「一次 AI 回答完成」后才显示（见 finalizeTurn）。
         // 这样回答进行中工程目录保持安静、不闪、不提前冒出占位会话。
         pendingByCwd.current.set(cwd, ev.session_id);
+        // 待绑：某 agent 选了「绑定新会话」→ 这个目录+provider 的首个新会话 id 回填给它。
+        const prov = tabsRef.current.find((tb) => tb.cwd === cwd)?.provider || 'claude';
+        const pendAgent = takePendingBind(realDir(cwd), prov);
+        if (pendAgent) {
+          const r = rebindAgent(pendAgent, { provider: prov, dir: realDir(cwd), sessionId: ev.session_id });
+          if (r.ok) try { window.dispatchEvent(new CustomEvent('chaya:toast', { detail: { text: '新会话已绑定给 Agent' } })); } catch { /* */ }
+        }
       }
       // init 带 MCP 连接状态 → 存到该标签供 MCP 控件显示。
       const mcpStatus = Array.isArray(ev.mcp_servers) ? ev.mcp_servers : undefined;
@@ -1391,7 +1403,9 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
       ...appendWindowed(cwd, t, [userMsg]),
       liveMsgs: [], running: true, status: tr('local.status.processingShort'), perm: null, question: null, elicit: null,
     }));
-    const res = await localAgent.send({ provider: prov, cwd: realDir(cwd), lane: paneLane(cwd), sessionId: sid, prompt: sendText, permMode: tab.permMode, model: tab.model, reasoning: tab.reasoning, mcp: tab.mcp, apiKey, attachments });
+    // agent 人设：绑定了 agent 的会话(claude)把人设作为真·系统提示注入——直接对话也生效。
+    const sysAppend = prov === 'claude' ? agentBySession(sid)?.systemPrompt : undefined;
+    const res = await localAgent.send({ provider: prov, cwd: realDir(cwd), lane: paneLane(cwd), sessionId: sid, prompt: sendText, permMode: tab.permMode, model: tab.model, reasoning: tab.reasoning, mcp: tab.mcp, apiKey, attachments, appendSystemPrompt: sysAppend });
     if (!res.ok) patchTab(cwd, (t) => ({ running: false, status: t.status.startsWith('⚠') ? t.status : `⚠ ${tr('local.status.startFailed')}` }));
   }, [tabs, providers, patchTab, dropSmooth, fetchCursorKey, tr]);
 
@@ -1684,7 +1698,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
   // 因为 activeTab 引用变化当且仅当 tabs/activeCwd 变化。
   const la = useMemo(() => ({
     providers, provider, activeProvider, runningByProvider, attnByProvider, doneByProvider, current, detecting,
-    cyclePermMode, commands, skills, modelOptions, modelsLoading, refreshModels, setModel, setReasoning, setMcp, listMcp, refreshMcp, reconnectMcp,
+    cyclePermMode, commands, skills, modelOptions, modelsLoading, refreshModels, setModel, setReasoning, setMcp, listMcp, listAllMcp, getMcpConfig, refreshMcp, reconnectMcp,
     projects, expanded, toggleProject, sessionsByPath, loadSessionsFor, pinnedSessions, toggleSessionPin, sessionTitles, renameSession,
     addProject, removeProject,
     tabs, activeCwd, setActiveTab, closeTab, closeOtherTabs, promoteTab, activeProject,
@@ -1707,7 +1721,7 @@ export function useLocalAgent(active: boolean, provider: ProviderId, typewriter:
     lastSend: { tick: sendTick, cwd: lastSentCwdRef.current },
   }), [
     providers, provider, activeProvider, runningByProvider, attnByProvider, doneByProvider, current, detecting,
-    cyclePermMode, commands, skills, modelOptions, modelsLoading, refreshModels, setModel, setReasoning, setMcp, listMcp, refreshMcp, reconnectMcp,
+    cyclePermMode, commands, skills, modelOptions, modelsLoading, refreshModels, setModel, setReasoning, setMcp, listMcp, listAllMcp, getMcpConfig, refreshMcp, reconnectMcp,
     projects, expanded, toggleProject, sessionsByPath, loadSessionsFor, pinnedSessions, toggleSessionPin, sessionTitles, renameSession,
     addProject, removeProject,
     tabs, activeCwd, setActiveTab, closeTab, closeOtherTabs, promoteTab, activeProject,

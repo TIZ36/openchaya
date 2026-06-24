@@ -11,12 +11,12 @@ import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, us
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { basename, localAgent, PERM_META, permModesFor, defaultPermMode, permLabel, permHint, LOGIN_PROVIDERS, type TranscriptMessage, type SlashCommand, type SessionSummary, type PermissionRequest, type QuestionRequest, type ElicitRequest, type TabGroup as TabGroupT, type McpAvailable, type ModelInfo, type Attachment, type ProviderId, type AgentAskRequest } from './services/localAgent';
+import { basename, localAgent, PERM_META, permModesFor, defaultPermMode, permLabel, permHint, LOGIN_PROVIDERS, type TranscriptMessage, type SlashCommand, type SessionSummary, type PermissionRequest, type QuestionRequest, type ElicitRequest, type TabGroup as TabGroupT, type McpAvailable, type McpCrossEntry, type McpConfig, type ModelInfo, type Attachment, type ProviderId, type AgentAskRequest } from './services/localAgent';
 import { LoginTerminal } from './LoginTerminal';
 import type { LocalAgentState, LayoutNode, DropSide, Tab, QueuedMsg, PlanUsage } from './useLocalAgent';
 import { TAB_COLORS, isForeignLeaf, realDir, paneLane, useLivePreview, useDraft, getDraft } from './useLocalAgent';
 import { askSession, onAsksChange, getAsk, getAsks, markInjected, cancelAsk, dismissAsk, respondAskPermission, answerAskQuestion, type AskTarget, type SessionAsk } from './services/sessionBridge';
-import { listAgents, subscribeAgents, touchAgent, retrieveAgentMemory, getAgent, recordMemoryOnAnswer, markMemoryWritten, type LocalAgent } from './services/agents';
+import { listAgents, subscribeAgents, touchAgent, retrieveAgentMemory, getAgent, recordMemoryOnAnswer, markMemoryWritten, isAgentModeOn, setAgentModeOn, subscribeAgentMode, type LocalAgent } from './services/agents';
 import { AgentFace } from './AgentFace';
 
 // 异类窗格渲染器：由 ClientShell 注入（wiki → 知识库；chat:<sid> → 聊天会话）。分屏树叶子
@@ -1505,6 +1505,8 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
     else if (e.key === 'Escape') { e.preventDefault(); setSkillMenuOpen(false); requestAnimationFrame(() => taRef.current?.focus()); }
   };
   const [mcpList, setMcpList] = useState<McpAvailable[] | null>(null);
+  const [mcpCross, setMcpCross] = useState<McpCrossEntry[] | null>(null);   // 跨 provider 总览
+  const [mcpCrossOpen, setMcpCrossOpen] = useState(false);
   // 笔记/文档全部走 wiki（知识库）：选区「记一条」追加默认速记；composer 联动引用。
   const wiki = useWikiNotes(cwd === la.activeCwd);
   const [capToast, setCapToast] = useState('');   // 「已记入速记」轻提示
@@ -1618,6 +1620,9 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   // 本地 Agent 注册表（@ 召唤用）：订阅变化，列表改了即时反映。
   const [agents, setAgents] = useState<LocalAgent[]>(() => listAgents());
   useEffect(() => subscribeAgents(() => setAgents(listAgents())), []);
+  // Agent 模式总开关（全局）：关掉则不自动分配/不联想/@ 不列 agent。
+  const [agentMode, setAgentModeState] = useState<boolean>(() => isAgentModeOn());
+  useEffect(() => subscribeAgentMode(() => setAgentModeState(isAgentModeOn())), []);
 
   // 预热：有召唤意图（@ 列出 / 联想命中）时，提前把 agent 绑定会话的进程暖起来（resume 读盘在后台付掉），
   // 这样真正召唤时命中热进程 ≈ 主会话自研究的速度，不必每次冷启重放历史。90s 去重，避免反复 warm。
@@ -1634,14 +1639,14 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   const mentionQuery = (!slashOpen ? (/(?:^|\s)@([^@\s]*)$/.exec(draft)?.[1] ?? null) : null);
   // 命中的本地 Agent：按 name/description/tags 模糊排序（空 query 给全部，最近用过的靠前）。
   const mentionAgents = useMemo(() => {
-    if (mentionQuery === null) return [] as LocalAgent[];
+    if (mentionQuery === null || !agentMode) return [] as LocalAgent[];
     const q = mentionQuery.toLowerCase();
     const scored = agents
       .map((a) => ({ a, s: fuzzyScore(q, `${a.name} ${a.description} ${(a.tags || []).join(' ')}`.toLowerCase()) }))
       .filter((x) => x.s !== null);
     scored.sort((x, y) => (q ? (y.s! - x.s!) : 0) || ((y.a.lastUsedAt || 0) - (x.a.lastUsedAt || 0)));
     return scored.map((x) => x.a).slice(0, 6);
-  }, [mentionQuery, agents]);
+  }, [mentionQuery, agents, agentMode]);
   const mentionOpen = mentionQuery !== null && (wiki.available || mentionAgents.length > 0);
   const mentionItems = useMemo(
     () => (mentionOpen && wiki.available ? buildWikiItems(wiki, mentionQuery || '') : [] as WikiItem[]),
@@ -1654,10 +1659,10 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   // 轻量联想：草稿命中某 agent 能力时，给一条不抢焦点的「让 @X 来看看?」提示。
   // 任意下拉/浮层打开、或正敲 @ 时不显示，避免打扰；被忽略的 agent 不再提示。
   const assocAgent = useMemo(() => {
-    if (slashOpen || mentionOpen || mentionQuery !== null) return null;
+    if (!agentMode || slashOpen || mentionOpen || mentionQuery !== null) return null;
     const a = associateAgent(draft, agents);
     return a && a.id !== assocDismiss ? a : null;
-  }, [draft, agents, slashOpen, mentionOpen, mentionQuery, assocDismiss]);
+  }, [draft, agents, agentMode, slashOpen, mentionOpen, mentionQuery, assocDismiss]);
 
   // 召唤意图 → 提前暖 agent 会话进程（@ 列出的 + 联想命中的），让真正召唤时几乎零冷启。
   useEffect(() => { if (assocAgent) prewarmAgent(assocAgent); }, [assocAgent, prewarmAgent]);
@@ -1694,7 +1699,9 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
       target: { kind: 'existing', provider: agent.provider, dir: agent.dir, lane: undefined, sessionId: agent.sessionId, title: `@${agent.name}`, model: agent.model, mcp: agent.mcp },
       question,
       origin: 'agent-summon',
-      systemPrompt: agent.systemPrompt,   // 一般为空（item 4）；填了才作为角色设定前置
+      // claude：走引擎级真·系统提示（与直接对话一致，每轮在）；非 claude：回退为消息前缀。
+      appendSystemPrompt: agent.systemPrompt,
+      systemPrompt: agent.systemPrompt,
       memoryContext,
       bare: true,
       agentId: agent.id,
@@ -1739,7 +1746,8 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
     explicitSummonRef.current = false;
     const d = getDraft(cwd).trim();
     let assigned = explicit;
-    if (!explicit && d && !/@[^@\s]+\s*$/.test(d)) {
+    // Agent 模式关掉时：完全不自动分配，纯主会话发送。
+    if (agentMode && !explicit && d && !/@[^@\s]+\s*$/.test(d)) {
       const cand = associateAgent(d, listAgents(), true);   // 自动分配走严格匹配，避免不相关内容也召唤
       if (cand && cand.sessionId !== sessionId && !(paneAgent && paneAgent.id === cand.id)) {
         summonAgent(cand, d);
@@ -1749,7 +1757,7 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
     // 分配给 agent 的这一轮交给它作答（内联子 agent 卡），主 session 不再重复回答（item 1.3）。
     if (assigned) { la.setDraft(cwd, ''); requestAnimationFrame(() => taRef.current?.focus()); return; }
     void la.send(cwd);
-  }, [cwd, sessionId, paneAgent, summonAgent, la]);
+  }, [cwd, sessionId, paneAgent, summonAgent, la, agentMode]);
 
 
   // 自动滚到底（与 ClientShell 主聊保持同款 + 远端挂载的稳态加固）：
@@ -1915,11 +1923,30 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
   // 打开「模型 / MCP」对话框：拉一次 MCP 列表 + 探测状态。MCP 源统一读 ~/.claude.json：
   // claude 用 SDK 热挂载并回报逐 server 状态；gemini/copilot 走 ACP 在 session/new 注入
   // （无逐 server 状态，仅切换启用，下次发送时随会话重建生效）。cursor/codex 不支持。
-  const hasMcp = tabProvider === 'claude' || tabProvider === 'gemini' || tabProvider === 'copilot';
+  const hasMcp = true;   // 每个 provider 的输入框都显示 MCP（各自只列自己配置过的）
   const mcpLiveStatus = tabProvider === 'claude';   // 仅 claude 有实时探测/重连
   const openCfg = () => { setModelQuery(''); setCfgOpen(true); };
   // MCP 菜单：打开时拉一次可用列表 + 探测状态（claude）。
-  const openMcpMenu = () => { setMcpMenuOpen((o) => { const next = !o; if (next) { if (!mcpList) void la.listMcp(cwd).then(setMcpList); if (mcpLiveStatus) la.refreshMcp(cwd); } return next; }); };
+  // 每次开都重读（装完新 MCP 无需重载会话，重开菜单即见新项可勾选）。
+  const reloadMcp = useCallback(() => { setMcpList(null); void la.listMcp(cwd).then(setMcpList); if (mcpLiveStatus) la.refreshMcp(cwd); }, [la, cwd, mcpLiveStatus]);
+  const openMcpMenu = () => { setMcpMenuOpen((o) => { const next = !o; if (next) { reloadMcp(); void la.listAllMcp(cwd).then(setMcpCross); } else setMcpCrossOpen(false); return next; }); };
+  /** 把别家 provider 装的某 MCP 配置发进会话，让当前 agent 照装一份。 */
+  const installMcpFromOther = useCallback(async (entry: McpCrossEntry) => {
+    const cfg = await la.getMcpConfig(entry.provider, entry.name, cwd) as McpConfig | null;
+    setMcpMenuOpen(false); setMcpCrossOpen(false);
+    if (!cfg) { try { window.dispatchEvent(new CustomEvent('chaya:toast', { detail: { text: `读取 ${entry.name} 配置失败` } })); } catch { /* */ } return; }
+    const lines = [`请把下面这个 MCP server 安装到你（${tabProvider}）自己的 MCP 配置并连接，名称保持「${cfg.name}」：`, ''];
+    if (cfg.transport === 'http') {
+      lines.push(`- 传输：HTTP/SSE`, `- URL：${cfg.url || ''}`);
+      if (cfg.headers && Object.keys(cfg.headers).length) lines.push(`- Headers：${JSON.stringify(cfg.headers)}`);
+    } else {
+      lines.push(`- 传输：stdio`, `- 命令：${cfg.command || ''}${(cfg.args || []).length ? ' ' + (cfg.args || []).join(' ') : ''}`);
+      if (cfg.env && Object.keys(cfg.env).length) lines.push(`- 环境变量：${JSON.stringify(cfg.env)}`);
+    }
+    lines.push('', `请用你自己的方式（对应 CLI 的 \`mcp add\` 或写配置文件）完成安装，装好后告诉我，我再在工具里勾选启用。`);
+    la.appendDraft(cwd, lines.join('\n'));
+    requestAnimationFrame(() => taRef.current?.focus());
+  }, [la, cwd, tabProvider]);
   // 对话框开启时：Esc 关闭（不冒泡去触发 Tab 切权限等全局键）。
   // 必须在 `if (!tab) return null` 之前调用 —— 之前放在 return 之后会让关闭最后
   // 一个 tab 时 hook 数量减少，触发 "Rendered fewer hooks than expected"。
@@ -2159,8 +2186,12 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                 <div className="v2-la-slash v2-la-skillpop" role="menu">
                   <div className="v2-la-slash-hd">
                     <span>{tr('local.cfg.mcpSource')}</span>
-                    {mcpLiveStatus && <button className="v2-la-probe" onMouseDown={(e) => { e.preventDefault(); la.refreshMcp(cwd); }} title={tr('local.cfg.probeStatus')}>{tr('local.cfg.probe')}</button>}
+                    <button className="v2-la-probe" onMouseDown={(e) => { e.preventDefault(); reloadMcp(); }} title="重新读取（装完新 MCP 点这刷新即可勾选）">刷新</button>
                   </div>
+                  {/* 顶部：点开弹框看别家 provider 装过的，挑一个发进会话让当前 agent 也装一份 */}
+                  <button className="v2-la-mcp-install-btn" onMouseDown={(e) => { e.preventDefault(); setMcpCross(null); setMcpMenuOpen(false); setMcpCrossOpen(true); la.listAllMcp(cwd).then(setMcpCross).catch(() => setMcpCross([])); }}>
+                    <IconPlus /><span>install from provider</span>
+                  </button>
                   {!mcpLiveStatus && <div className="v2-la-cfg-foot">{tr('local.cfg.mcpAcpNote')}</div>}
                   {!mcpList && <div className="v2-la-slash-empty">{tr('local.cfg.mcpLoading')}</div>}
                   {mcpList && mcpList.length === 0 && <div className="v2-la-slash-empty">{tr('local.cfg.mcpEmpty')}</div>}
@@ -2179,6 +2210,32 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                       </div>
                     );
                   })}
+                </div>
+              </>
+            )}
+            {/* install from provider：和其它 composer 菜单一样从输入框向上弹，固定最大高、内部滚 */}
+            {mcpCrossOpen && (
+              <>
+                <div className="v2-la-skillpop-scrim" onMouseDown={() => setMcpCrossOpen(false)} />
+                <div className="v2-la-slash v2-la-skillpop v2-la-mcp-installpop" role="menu">
+                  <div className="v2-la-slash-hd"><span>从其他 provider 安装 MCP</span><span className="sub">发进会话让 {PROVIDER_LABELS[tabProvider] || tabProvider} 帮你也装一份</span></div>
+                  <div className="v2-la-mcp-install-list">
+                    {(() => {
+                      const own = new Set((mcpList || []).map((x) => x.name));
+                      const others = (mcpCross || []).filter((e) => e.provider !== tabProvider && !own.has(e.name));
+                      if (mcpCross === null) return <div className="v2-la-slash-empty">读取中…</div>;
+                      if (!mcpCross.length) return <div className="v2-la-slash-empty">没读到任何 provider 的 MCP。若刚改过本功能，请<b>重启 app</b>（MCP 扫描在 electron 主进程，需重启生效）。</div>;
+                      if (!others.length) return <div className="v2-la-slash-empty">其他 provider 暂无你这里没有的 MCP。</div>;
+                      return others.map((e) => (
+                        <button key={`${e.provider}:${e.name}`} className="v2-la-mcp-install-row" onMouseDown={(ev) => { ev.preventDefault(); void installMcpFromOther(e); }}>
+                          <span className="src"><ProviderLogo id={e.provider} mono /></span>
+                          <span className="nm">{e.name}</span>
+                          <span className="ds">{PROVIDER_LABELS[e.provider] || e.provider} · {e.type}</span>
+                          <span className="add">+ 装到本会话</span>
+                        </button>
+                      ));
+                    })()}
+                  </div>
                 </div>
               </>
             )}
@@ -2290,6 +2347,11 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                         title={tr('local.cfg.modalLabelMcp')}
                       ><IconPlug /><span className="lb">MCP</span>{(tab.mcp?.length ?? 0) > 0 && <span className="n">{tab.mcp!.length}</span>}</button>
                     )}
+                    <button
+                      className={`v2-la-skillbtn v2-la-agentmode${agentMode ? ' has' : ' off'}`}
+                      onClick={() => setAgentModeOn(!agentMode)}
+                      title={agentMode ? 'Agent 模式开：发送时自动分配/联想 agent — 点击关闭，纯主会话对话' : 'Agent 模式关 — 点击开启'}
+                    ><IconAgent /><span className="lb">Agent{agentMode ? '' : ' 关'}</span></button>
                   </span>
                 )}
                 {current?.live && compactTools && (
@@ -2314,6 +2376,9 @@ const LocalAgentPaneImpl: React.FC<PaneProps> = ({ la, cwd, inGrid }) => {
                               <IconPlug /><span>MCP</span>{(tab.mcp?.length ?? 0) > 0 && <span className="n">{tab.mcp!.length}</span>}
                             </button>
                           )}
+                          <button className={`v2-la-toolsmenu-item${agentMode ? ' has' : ''}`} onMouseDown={(e) => { e.preventDefault(); setAgentModeOn(!agentMode); }}>
+                            <IconAgent /><span>Agent 模式{agentMode ? '（开）' : '（关）'}</span>
+                          </button>
                         </div>
                       </>
                     )}
@@ -2671,14 +2736,49 @@ function groupTurns(blocks: Block[], streamingTail: boolean): Turn[] {
 }
 
 /* 用户轮：右侧、柔色气泡——和主聊天的 user 气泡同一语言，一眼分得清。 */
-const UserTurn: React.FC<{ text: string; skill?: string }> = React.memo(({ text, skill }) => (
-  <div className="v2-la-turn user">
-    <div className="v2-la-ubub">
-      {skill && <span className="v2-la-ubub-skill"><IconSkill />/{skill}</span>}
-      {text && <p>{text}</p>}
+/** 识别 CLI 注入的「本地命令」消息（任意 /命令 + local-command-caveat 样板），它们会以裸 XML 出现在
+ *  对话里很难看。命令调用=收成小 chip（本地命令·/xxx）；纯样板/空壳=隐藏；样板裹着真内容=剥壳显示。
+ *  对 /usage、/cost、/compact 等所有同类一视同仁。 */
+function parseLocalCommand(text: string): { kind: 'hide' } | { kind: 'command'; name: string; args?: string } | { kind: 'clean'; text: string } | null {
+  const t = (text || '').trim();
+  const hasCaveat = t.includes('<local-command-caveat>');
+  const hasCmd = t.includes('<command-name>');
+  if (!hasCaveat && !hasCmd) return null;
+  // 命令调用（不论是否带 caveat）→ chip
+  const m = /<command-name>\s*([^<]*?)\s*<\/command-name>/.exec(t);
+  if (m && m[1].trim()) {
+    const am = /<command-args>\s*([^<]*?)\s*<\/command-args>/.exec(t);
+    return { kind: 'command', name: m[1].replace(/^\//, '').trim(), args: am?.[1]?.trim() || undefined };
+  }
+  // 剥掉 caveat 样板：空壳→隐藏；剩真内容→清洗后正常显示
+  const stripped = t.replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, '')
+    .replace(/<\/?command-(name|message|args)>/g, '').trim();
+  if (hasCaveat) return stripped ? { kind: 'clean', text: stripped } : { kind: 'hide' };
+  return null;
+}
+
+const IconBolt = () => (<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 1.5L3.5 9H7.5l-1 5.5L12.5 7H8.5l.5-5.5z" /></svg>);
+
+const UserTurn: React.FC<{ text: string; skill?: string }> = React.memo(({ text, skill }) => {
+  const cmd = useMemo(() => parseLocalCommand(text), [text]);
+  if (cmd?.kind === 'hide') return null;   // CLI 样板噪声，隐藏
+  if (cmd?.kind === 'command') {
+    return (
+      <div className="v2-la-turn user">
+        <span className="v2-la-localcmd" title={text}><IconBolt /><span>本地命令</span><code>/{cmd.name}{cmd.args ? ` ${cmd.args}` : ''}</code></span>
+      </div>
+    );
+  }
+  const shown = cmd?.kind === 'clean' ? cmd.text : text;   // 剥掉 caveat 样板后的真内容
+  return (
+    <div className="v2-la-turn user">
+      <div className="v2-la-ubub">
+        {skill && <span className="v2-la-ubub-skill"><IconSkill />/{skill}</span>}
+        {shown && <p>{shown}</p>}
+      </div>
     </div>
-  </div>
-));
+  );
+});
 UserTurn.displayName = 'UserTurn';
 
 /* agent 轮：左侧、provider 头像锚定身份，正文是裸排版散文（同主聊天 assistant），

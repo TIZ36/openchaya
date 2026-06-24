@@ -177,6 +177,10 @@ export interface ModelInfo {
 export interface McpAvailable { name: string; scope: 'global' | 'project'; type: string }
 /** MCP 连接状态（来自 SDK mcpServerStatus / system.init.mcp_servers）。 */
 export interface McpStatus { name: string; status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled' }
+/** 跨 provider 总览的一条：某 provider 装了某 MCP。 */
+export interface McpCrossEntry { provider: ProviderId; name: string; type: string }
+/** 某 MCP 的 canonical 配置（含密钥）——发进会话让当前 agent 照装。 */
+export interface McpConfig { name: string; provider: string; transport: 'stdio' | 'http'; command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string> }
 
 /** 一个参考附件：拖入/选取的文件（带 path），或粘贴板图片（带 dataUrl）。
  *  图片走视觉（image block），其它文件按 @路径 让 agent 读取分析。 */
@@ -203,6 +207,7 @@ interface SendPayload {
   attachments?: Attachment[];
   lane?: string;            // 并行车道（如 'derive'）：同一 cwd 起独立常驻会话，事件按 cwd+lane 路由
   steer?: boolean;          // 运行中插话（claude steering）：主进程只推消息，不动会话配置（防 effort 重建杀回合）
+  appendSystemPrompt?: string;  // claude only：把 agent 人设作为真·系统提示附加到本会话（直接对话/召唤都生效，每轮在）
 }
 type WarmPayload = Omit<SendPayload, 'prompt'>;
 
@@ -253,7 +258,9 @@ interface LocalAgentBridge {
   setPermMode(cwd: string, permMode: PermMode, lane?: string): Promise<{ ok: boolean }>;
   setModel(cwd: string, model: string, lane?: string): Promise<{ ok: boolean }>;
   setReasoning(cwd: string, reasoning: string, lane?: string): Promise<{ ok: boolean }>;
-  listMcp(cwd: string): Promise<McpAvailable[]>;
+  listMcp(cwd: string, provider?: string): Promise<McpAvailable[]>;
+  listAllMcp(cwd: string): Promise<McpCrossEntry[]>;
+  getMcpConfig(provider: string, name: string, cwd: string): Promise<McpConfig | null>;
   setMcp(cwd: string, mcp: string[], lane?: string): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
   mcpStatus(cwd: string, lane?: string): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
   reconnectMcp(cwd: string, name: string, lane?: string): Promise<{ ok: boolean; servers?: McpStatus[]; error?: string }>;
@@ -331,7 +338,10 @@ export const localAgent = {
   setPermMode: (cwd: string, permMode: PermMode, lane?: string) => bridge()?.setPermMode(cwd, permMode, lane) ?? Promise.resolve({ ok: false }),
   setModel: (cwd: string, model: string, lane?: string) => bridge()?.setModel(cwd, model, lane) ?? Promise.resolve({ ok: false }),
   setReasoning: (cwd: string, reasoning: string, lane?: string) => bridge()?.setReasoning(cwd, reasoning, lane) ?? Promise.resolve({ ok: false }),
-  listMcp: (cwd: string) => bridge()?.listMcp(cwd) ?? Promise.resolve([] as McpAvailable[]),
+  // ?.() 可选调用：旧 preload（electron 没重启）缺这些新方法时降级为空，避免 invoke 卡死/抛错。
+  listMcp: (cwd: string, provider?: string) => bridge()?.listMcp?.(cwd, provider) ?? Promise.resolve([] as McpAvailable[]),
+  listAllMcp: (cwd: string) => bridge()?.listAllMcp?.(cwd) ?? Promise.resolve([] as McpCrossEntry[]),
+  getMcpConfig: (provider: string, name: string, cwd: string) => bridge()?.getMcpConfig?.(provider, name, cwd) ?? Promise.resolve(null),
   setMcp: (cwd: string, mcp: string[], lane?: string) => bridge()?.setMcp(cwd, mcp, lane) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),
   mcpStatus: (cwd: string, lane?: string) => bridge()?.mcpStatus(cwd, lane) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),
   reconnectMcp: (cwd: string, name: string, lane?: string) => bridge()?.reconnectMcp(cwd, name, lane) ?? Promise.resolve({ ok: false } as { ok: boolean; servers?: McpStatus[]; error?: string }),

@@ -54,6 +54,25 @@ export interface LocalAgent {
 const AGENTS_KEY = 'chaya.localAgent.agents';
 export const AGENTS_CHANGED_EVENT = 'chaya:localAgentsChanged';
 
+/* ------------------------------------------------------------------ *
+ * Agent 模式开关（全局）：关掉后输入框不再自动分配 agent、不显示联想 chip、@ 也不列 agent，
+ *   纯主会话对话。给「agent 模式不稳定时想纯聊」用。默认开；存「off」标记，便于默认即开。
+ * ------------------------------------------------------------------ */
+const AGENT_MODE_OFF_KEY = 'chaya.localAgent.agentModeOff';
+export const AGENT_MODE_EVENT = 'chaya:agentModeChanged';
+export function isAgentModeOn(): boolean {
+  try { return localStorage.getItem(AGENT_MODE_OFF_KEY) !== '1'; } catch { return true; }
+}
+export function setAgentModeOn(on: boolean): void {
+  try { if (on) localStorage.removeItem(AGENT_MODE_OFF_KEY); else localStorage.setItem(AGENT_MODE_OFF_KEY, '1'); } catch { /* */ }
+  try { window.dispatchEvent(new CustomEvent(AGENT_MODE_EVENT)); } catch { /* */ }
+}
+export function subscribeAgentMode(cb: () => void): () => void {
+  const h = () => cb();
+  try { window.addEventListener(AGENT_MODE_EVENT, h); window.addEventListener('storage', h); } catch { /* */ }
+  return () => { try { window.removeEventListener(AGENT_MODE_EVENT, h); window.removeEventListener('storage', h); } catch { /* */ } };
+}
+
 /** 归一 agent 名（@-handle）：去 @/空白，小写，非法字符换连字符。 */
 export function normalizeAgentName(raw: string): string {
   return String(raw || '').trim().replace(/^@+/, '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -120,6 +139,47 @@ export function upsertAgent(a: Partial<LocalAgent> & { name: string; provider: P
   persist(list);
   return list;
 }
+
+/** 换绑会话：把 agent 绑到另一个会话（agent 本身不消失，名/人设/记忆全留）。
+ *  约束：一个会话只能被一个 agent 绑定——目标 sessionId 已被别的 agent 绑则拒绝。
+ *  sessionId 传空 = 进入「待绑新会话」态（见 setPendingBind），等新会话首轮 init 拿到真实 id 再回填。 */
+export function rebindAgent(id: string, bind: { provider: ProviderId; dir: string; sessionId: string }): { ok: boolean; error?: string } {
+  const list = loadAgents();
+  const i = list.findIndex((a) => a.id === id);
+  if (i < 0) return { ok: false, error: '找不到该 Agent' };
+  if (bind.sessionId) {
+    const other = list.find((a) => a.id !== id && a.sessionId === bind.sessionId);
+    if (other) return { ok: false, error: `该会话已被 @${other.name} 绑定，一个会话只能属于一个 Agent` };
+  }
+  list[i] = { ...list[i], provider: bind.provider, dir: bind.dir, sessionId: bind.sessionId, updatedAt: Date.now() };
+  persist(list);
+  return { ok: true };
+}
+
+/* ------------------------------------------------------------------ *
+ * 待绑（绑定新会话）：agent 选「绑定新会话」时记一个标记 {agentId,dir,provider}，
+ *   随后在该目录起一个新会话；其首轮 init 拿到真实 sessionId 时由 useLocalAgent 回填绑定。
+ * ------------------------------------------------------------------ */
+const PENDING_BIND_KEY = 'chaya.localAgent.pendingBind';
+export function setPendingBind(agentId: string, dir: string, provider: ProviderId): void {
+  try { localStorage.setItem(PENDING_BIND_KEY, JSON.stringify({ agentId, dir, provider, at: Date.now() })); } catch { /* */ }
+}
+/** 取走匹配 (dir, provider) 的待绑 agentId（取走即清除）。无匹配返回 null。
+ *  dir 比对去掉尾部斜杠，容忍 realDir 归一与 pickFolder 原始路径的差异。 */
+export function takePendingBind(dir: string, provider: ProviderId): string | null {
+  const norm = (s: string) => String(s || '').replace(/\/+$/, '');
+  try {
+    const raw = localStorage.getItem(PENDING_BIND_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw);
+    if (p && norm(p.dir) === norm(dir) && p.provider === provider && p.agentId) {
+      localStorage.removeItem(PENDING_BIND_KEY);
+      return p.agentId as string;
+    }
+  } catch { /* */ }
+  return null;
+}
+export function clearPendingBind(): void { try { localStorage.removeItem(PENDING_BIND_KEY); } catch { /* */ } }
 
 /** 解绑/删除 agent（不动底层会话）。 */
 export function deleteAgent(id: string): LocalAgent[] {

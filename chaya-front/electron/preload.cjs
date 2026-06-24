@@ -36,7 +36,9 @@ contextBridge.exposeInMainWorld('chateeElectron', {
     setPermMode: (cwd, permMode, lane) => ipcRenderer.invoke('localAgent:setPermMode', { cwd, permMode, lane }),
     setModel: (cwd, model, lane) => ipcRenderer.invoke('localAgent:setModel', { cwd, model, lane }),
     setReasoning: (cwd, reasoning, lane) => ipcRenderer.invoke('localAgent:setReasoning', { cwd, reasoning, lane }),
-    listMcp: (cwd) => ipcRenderer.invoke('localAgent:listMcp', { cwd }),
+    listMcp: (cwd, provider) => ipcRenderer.invoke('localAgent:listMcp', { cwd, provider }),
+    listAllMcp: (cwd) => ipcRenderer.invoke('localAgent:listAllMcp', { cwd }),
+    getMcpConfig: (provider, name, cwd) => ipcRenderer.invoke('localAgent:getMcpConfig', { provider, name, cwd }),
     setMcp: (cwd, mcp, lane) => ipcRenderer.invoke('localAgent:setMcp', { cwd, mcp, lane }),
     mcpStatus: (cwd, lane) => ipcRenderer.invoke('localAgent:mcpStatus', { cwd, lane }),
     reconnectMcp: (cwd, name, lane) => ipcRenderer.invoke('localAgent:reconnectMcp', { cwd, name, lane }),
@@ -109,6 +111,22 @@ contextBridge.exposeInMainWorld('chateeElectron', {
       const handler = (_e, data) => cb(data);
       ipcRenderer.on('review:event', handler);
       return () => ipcRenderer.removeListener('review:event', handler);
+    },
+  },
+
+  // 定时任务桥（provider 无关：扫的是 OS crontab，与任何 CLI 无关；可选 launchd 睡眠补跑）
+  cron: {
+    list: (cwd) => ipcRenderer.invoke('cron:list', { cwd }),
+    delete: (id) => ipcRenderer.invoke('cron:delete', { id }),
+    offline: (id, on) => ipcRenderer.invoke('cron:offline', { id, on }),
+    runNow: (id) => ipcRenderer.invoke('cron:runNow', { id }),
+    openLog: (id) => ipcRenderer.invoke('cron:openLog', { id }),
+    tailLog: (id, lines) => ipcRenderer.invoke('cron:tailLog', { id, lines }),
+    openDir: () => ipcRenderer.invoke('cron:openDir'),
+    onEvent: (cb) => {
+      const handler = (_e, data) => cb(data);
+      ipcRenderer.on('cron:event', handler);
+      return () => ipcRenderer.removeListener('cron:event', handler);
     },
   },
 

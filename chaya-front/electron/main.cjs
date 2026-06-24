@@ -7,6 +7,7 @@ const { registerLocalAgent, killAllSessions } = require('./localAgent.cjs');
 const { registerNotes } = require('./notes.cjs');
 const { registerAutomation } = require('./automation.cjs');
 const { registerReview } = require('./review.cjs');
+const { registerCron } = require('./cron.cjs');
 const { registerFbot, stop: stopFbot } = require('./fbot.cjs');
 
 const isDev = !app.isPackaged;
@@ -148,6 +149,8 @@ registerNotes(ipcMain, dialog);
 registerAutomation(ipcMain);
 // 代码评审引擎（纯本地，存 userData；只看 git 工作区改动，自由选 provider 跑只读评审）。
 registerReview(ipcMain);
+// 定时任务桥（识别 CLI durable cron + 升格成 launchd 脱机常驻，纯本地）。
+registerCron(ipcMain);
 // 录入飞书助手桥（长连接 bot，纯本地；启停由渲染层控制，不自动启）。
 registerFbot(ipcMain);
 

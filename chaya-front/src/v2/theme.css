@@ -1147,6 +1147,44 @@ html:not([data-vibrancy="on"]) .chaya-v2[data-theme="codex"] .v2-titlebar {
 .chaya-v2[data-theme="codex"] .v2-rev-run { background: var(--glass-matte-soft); border-color: var(--glass-matte-line); }
 .chaya-v2[data-theme="codex"] .v2-rev-run.active { border-color: color-mix(in oklab, var(--c-accent) 50%, var(--glass-matte-line)); }
 
+/* ── Pure 弹窗一律实底 ───────────────────────────────────────────────────────
+   用户要求：应用内所有弹窗(模态/下拉菜单/弹出层)不透明，否则透出背后内容看不清。
+   Pure(codex) 主题下 --c-bg 与多数玻璃 token 都是半透明的——这里把所有「浮起的弹窗
+   容器」统一压到不透明的 --c-sidebar(亮/暗模式都是实色) + 去掉 backdrop-filter。
+   仅作用于弹窗容器本体；背景遮罩(*-mask / *-scrim)保持半透(聚焦变暗)不动。
+   用 !important 以盖过上面按模式细分的玻璃规则，落实「绝对不透明」这一硬要求。 */
+.chaya-v2[data-theme="codex"] .v2-modal,
+.chaya-v2[data-theme="codex"] .v2-modal-settings,
+.chaya-v2[data-theme="codex"] .v2-agent-modal,
+.chaya-v2[data-theme="codex"] .v2-chain-modal,
+.chaya-v2[data-theme="codex"] .v2-la-cfgmodal,
+.chaya-v2[data-theme="codex"] .v2-login-modal,
+.chaya-v2[data-theme="codex"] .v2-pickmodal,
+.chaya-v2[data-theme="codex"] .v2-summon-modal,
+.chaya-v2[data-theme="codex"] .v2-rowmenu,
+.chaya-v2[data-theme="codex"] .v2-rowmenu-edit,
+.chaya-v2[data-theme="codex"] .v2-rev-menu,
+.chaya-v2[data-theme="codex"] .v2-editor-menu,
+.chaya-v2[data-theme="codex"] .v2-auto-engine-menu,
+.chaya-v2[data-theme="codex"] .v2-mcp-menu,
+.chaya-v2[data-theme="codex"] .v2-la-menu,
+.chaya-v2[data-theme="codex"] .v2-la-prov-menu,
+.chaya-v2[data-theme="codex"] .v2-la-toolsmenu,
+.chaya-v2[data-theme="codex"] .v2-kb-rplus-menu,
+.chaya-v2[data-theme="codex"] .v2-note-assoc-menu,
+.chaya-v2[data-theme="codex"] .v2-toptab-menu,
+.chaya-v2[data-theme="codex"] .blk-menu,
+.chaya-v2[data-theme="codex"] .v2-la-slash,
+.chaya-v2[data-theme="codex"] .v2-create-pop,
+.chaya-v2[data-theme="codex"] .v2-ctxpop-list,
+.chaya-v2[data-theme="codex"] .v2-dom-pop,
+.chaya-v2[data-theme="codex"] .v2-la-ctx-pop,
+.chaya-v2[data-theme="codex"] .v2-la-skillpop {
+  background: var(--c-sidebar) !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
 /* 头部关闭/刷新钮：hover 用玻璃片(替平 c-hover)；缩放手柄用磨砂线色(替灰 ink-4)。 */
 .chaya-v2[data-theme="codex"] .v2-wiki-drawer-hd .x:hover { background: var(--glass-chip); box-shadow: inset 0 0 0 1px var(--lq-ring); color: var(--c-ink-2); }
 .chaya-v2[data-theme="codex"] .v2-wiki-grip { background: var(--glass-matte-line); }
@@ -6039,6 +6077,11 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .v2-la-skillbtn.on { color: var(--c-accent); background: var(--c-accent-bg); }
 /* MCP 按钮：已启用时（.has）点亮 accent + 数量徽标，和「问会话/技能」一排但能看出在用。 */
 .chaya-v2 .v2-la-skillbtn.has { color: var(--c-accent); }
+/* Agent 模式开关：开=accent 实心点感；关=灰+删除线，明确「已关」 */
+.chaya-v2 .v2-la-agentmode.has { color: var(--c-accent-strong); }
+.chaya-v2 .v2-la-agentmode.off { color: var(--c-ink-4); opacity: 0.8; }
+.chaya-v2 .v2-la-agentmode.off .lb { text-decoration: line-through; text-decoration-thickness: 1px; }
+.chaya-v2 .v2-la-agentmode svg { width: 15px; height: 15px; }
 .chaya-v2 .v2-la-skillbtn .n {
   font-size: 10px; font-weight: 700; line-height: 1; min-width: 14px; height: 14px; padding: 0 3px;
   display: inline-flex; align-items: center; justify-content: center; border-radius: 7px;
@@ -6068,6 +6111,11 @@ body.v2-la-resizing { user-select: none; }
 /* 用户气泡里的技能 pill（发出后）。 */
 .chaya-v2 .v2-la-ubub-skill { display: inline-flex; align-items: center; gap: 4px; margin-bottom: 5px; padding: 2px 8px; border-radius: var(--c-radius-pill); font-size: 11.5px; font-weight: 600; font-family: var(--c-font-mono, ui-monospace, monospace); color: var(--c-accent-strong); background: var(--c-accent-bg); }
 .chaya-v2 .v2-la-ubub-skill svg { width: 12px; height: 12px; }
+
+/* 本地命令小 chip（CLI 注入的 /usage 等收成一行，替代裸 XML 气泡） */
+.chaya-v2 .v2-la-localcmd { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: var(--c-radius-pill); border: 1px solid var(--c-rule); background: var(--c-bg); color: var(--c-ink-4); font-size: 11px; max-width: 70%; }
+.chaya-v2 .v2-la-localcmd svg { width: 12px; height: 12px; flex: 0 0 auto; color: var(--c-accent-strong); }
+.chaya-v2 .v2-la-localcmd code { font-family: var(--c-font-mono, ui-monospace, monospace); color: var(--c-ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 已平铺标记：会话名走 italic（handmade 的「附注 / 已搬走」语气），不再单纯调透明。 */
 .chaya-v2 .v2-la-tab.ingrid .sess { font-style: italic; color: var(--c-ink-4); }
@@ -6797,6 +6845,21 @@ body.v2-la-resizing { user-select: none; }
 /* 模型 tab 底部一行轻提示：实时切换、不入对话。 */
 .chaya-v2 .v2-la-cfg-foot { padding: 8px 10px 4px; font-size: 10.5px; color: var(--c-ink-4); text-align: center; }
 /* MCP 行：勾选区 + 重连 */
+/* install from provider 弹层：从输入框向上、固定最大高、内部滚（同 askpop） */
+.chaya-v2 .v2-la-mcp-installpop { display: flex; flex-direction: column; max-height: 360px; overflow: visible; }
+.chaya-v2 .v2-la-mcp-installpop .v2-la-slash-hd .sub { font-weight: 400; font-size: 11px; color: var(--c-ink-4); margin-left: 8px; }
+.chaya-v2 .v2-la-mcp-install-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 5px; padding: 2px; }
+/* MCP「install from provider」顶部按钮 + 弹框里的候选行 */
+.chaya-v2 .v2-la-mcp-install-btn { display: flex; align-items: center; gap: 6px; width: calc(100% - 4px); margin: 2px; padding: 6px 10px; border: 1px dashed color-mix(in oklab, var(--c-accent) 35%, var(--c-rule)); border-radius: var(--c-radius-md); background: color-mix(in oklab, var(--c-accent) 5%, var(--c-bg)); color: var(--c-accent-strong); font-size: 11.5px; font-weight: 600; cursor: pointer; }
+.chaya-v2 .v2-la-mcp-install-btn:hover { background: color-mix(in oklab, var(--c-accent) 10%, var(--c-bg)); }
+.chaya-v2 .v2-la-mcp-install-btn svg { width: 13px; height: 13px; }
+.chaya-v2 .v2-la-mcp-install-row { display: flex; align-items: center; gap: 8px; width: 100%; border: 1px solid var(--c-rule); border-radius: var(--c-radius-md); background: var(--c-bg); cursor: pointer; padding: 8px 11px; font-size: 12.5px; color: var(--c-ink-2); text-align: left; transition: border-color 120ms, background 120ms; }
+.chaya-v2 .v2-la-mcp-install-row:hover { background: color-mix(in oklab, var(--c-accent) 5%, var(--c-bg)); border-color: color-mix(in oklab, var(--c-accent) 35%, var(--c-rule)); }
+.chaya-v2 .v2-la-mcp-install-row .src { flex: 0 0 auto; width: 16px; height: 16px; display: inline-flex; opacity: 0.85; }
+.chaya-v2 .v2-la-mcp-install-row .src svg { width: 16px; height: 16px; }
+.chaya-v2 .v2-la-mcp-install-row .nm { flex: 0 1 auto; font-weight: 600; color: var(--c-ink-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-la-mcp-install-row .ds { flex: 1 1 auto; color: var(--c-ink-4); font-size: 11px; }
+.chaya-v2 .v2-la-mcp-install-row .add { flex: 0 0 auto; color: var(--c-accent-strong); font-size: 11px; font-weight: 600; }
 .chaya-v2 .v2-la-mcprow { display: flex; align-items: stretch; gap: 4px; border-radius: var(--c-radius-md); transition: background 120ms var(--c-ease); }
 .chaya-v2 .v2-la-mcprow:hover { background: rgba(var(--glass-hairline), 0.055); }
 .chaya-v2 .v2-la-mcprow.on { background: var(--c-accent-bg); }
@@ -7663,6 +7726,14 @@ body.v2-la-resizing { user-select: none; }
    其它面板之上（顶替 wiki/代码列）；补内边距给 v2-xs-* 内容。 */
 .chaya-v2[data-bridge-right] .v2-app { --insp-w: var(--wiki-w); }
 .chaya-v2 .v2-bridge-drawer { z-index: 8; padding: 10px 11px 11px; gap: 7px; }
+/* 「速记」检视列同样共用第二列（与 wiki / 代码列可并列）。 */
+.chaya-v2[data-jot-right] .v2-app { --insp-w: var(--wiki-w); }
+/* 「定时任务」检视列同样共用第二列（与 wiki / 代码列 / 速记 可并列）。 */
+.chaya-v2[data-cron-right] .v2-app { --insp-w: var(--wiki-w); }
+/* 速记抽屉：复用 .v2-wiki-drawer 外壳；内容区独立滚动。 */
+.chaya-v2 .v2-jot-drawer-bd { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px 11px 14px; }
+/* 定时任务抽屉：复用 .v2-wiki-drawer 外壳；内容区独立滚动。 */
+.chaya-v2 .v2-cron-drawer-bd { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 /* 自动化抽屉：复用 .v2-wiki-drawer 外壳；内容区独立滚动。 */
 .chaya-v2 .v2-auto-drawer .v2-auto-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px; scrollbar-width: none; }
 .chaya-v2 .v2-auto-drawer .v2-auto-scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
@@ -7950,6 +8021,81 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .v2-rev-out .v2-md hr { margin: 18px 0; }
 /* 顶部第一个块不要多余的上边距/分隔线。 */
 .chaya-v2 .v2-rev-out > .v2-md > :first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+
+/* ===== 速记抽斗（KV 卡 + 标签过滤 + 一键复制）===== */
+.chaya-v2 .v2-jot { display: flex; flex-direction: column; gap: 9px; font-family: var(--c-sans); }
+
+/* 行动栏：搜索 ···· 记一条 */
+.chaya-v2 .v2-jot-bar { display: flex; align-items: center; gap: 6px; }
+.chaya-v2 .v2-jot-search { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border: 1px solid var(--c-rule); border-radius: 7px; background: var(--c-surface); color: var(--c-ink-4); transition: border-color 140ms var(--c-ease), background 140ms var(--c-ease); }
+.chaya-v2 .v2-jot-search:focus-within { border-color: var(--c-ink-4); background: var(--c-bg); }
+.chaya-v2 .v2-jot-search svg { flex: 0 0 auto; }
+.chaya-v2 .v2-jot-search input { flex: 1 1 auto; min-width: 0; border: 0; background: transparent; outline: 0; font-family: var(--c-sans); font-size: 12px; color: var(--c-ink); }
+.chaya-v2 .v2-jot-search input::placeholder { color: var(--c-ink-4); }
+.chaya-v2 .v2-jot-search .clr { flex: 0 0 auto; border: 0; background: transparent; color: var(--c-ink-4); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; }
+.chaya-v2 .v2-jot-search .clr:hover { color: var(--c-ink-2); }
+.chaya-v2 .v2-jot-add { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 12px; border-radius: var(--c-radius-pill); border: 1px solid transparent; background: var(--c-accent); color: var(--c-bg); font-size: 12px; font-weight: 600; cursor: pointer; transition: opacity 140ms var(--c-ease); }
+.chaya-v2 .v2-jot-add:hover { opacity: .85; }
+
+/* 标签过滤栏 */
+.chaya-v2 .v2-jot-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.chaya-v2 .v2-jot-tags .t { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border: 1px solid var(--c-rule); border-radius: var(--c-radius-pill); background: transparent; color: var(--c-ink-3); font-family: var(--c-sans); font-size: 11.5px; cursor: pointer; transition: border-color 140ms var(--c-ease), color 140ms var(--c-ease), background 140ms var(--c-ease); }
+.chaya-v2 .v2-jot-tags .t:hover { border-color: var(--c-ink-4); color: var(--c-ink); }
+.chaya-v2 .v2-jot-tags .t.on { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-bg); }
+.chaya-v2 .v2-jot-tags .t .n { font-family: var(--c-mono); font-size: 9.5px; opacity: .6; }
+
+/* 新增 / 编辑表单 */
+.chaya-v2 .v2-jot-form { display: flex; flex-direction: column; gap: 6px; padding: 9px; border: 1px solid var(--c-rule); border-radius: var(--c-radius-md); background: var(--c-bg); }
+.chaya-v2 .v2-jot-form .row { display: flex; gap: 6px; }
+.chaya-v2 .v2-jot-form input, .chaya-v2 .v2-jot-form textarea { font-family: var(--c-sans); font-size: 12px; color: var(--c-ink); background: var(--c-surface); border: 1px solid var(--c-rule); border-radius: 6px; padding: 6px 9px; outline: 0; }
+.chaya-v2 .v2-jot-form input:focus, .chaya-v2 .v2-jot-form textarea:focus { border-color: var(--c-ink-4); background: var(--c-bg); }
+.chaya-v2 .v2-jot-form input::placeholder, .chaya-v2 .v2-jot-form textarea::placeholder { color: var(--c-ink-4); }
+.chaya-v2 .v2-jot-form .key { flex: 1 1 auto; min-width: 0; }
+.chaya-v2 .v2-jot-form .tg { flex: 0 0 124px; }
+.chaya-v2 .v2-jot-form .val { font-family: var(--c-mono); font-size: 11.5px; line-height: 1.55; resize: vertical; min-height: 62px; }
+.chaya-v2 .v2-jot-form .ft { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.chaya-v2 .v2-jot-form .hint { font-family: var(--c-mono); font-size: 10px; color: var(--c-ink-4); }
+.chaya-v2 .v2-jot-form .btns { display: flex; gap: 6px; }
+.chaya-v2 .v2-jot-form .btn { font-family: var(--c-sans); font-size: 11.5px; font-weight: 500; border-radius: 6px; padding: 5px 12px; cursor: pointer; border: 1px solid var(--c-rule); background: var(--c-surface); color: var(--c-ink-2); transition: border-color 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-jot-form .btn:hover { border-color: var(--c-ink-4); color: var(--c-ink); }
+.chaya-v2 .v2-jot-form .btn.prim { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-bg); }
+.chaya-v2 .v2-jot-form .btn.prim:hover { opacity: .85; }
+
+/* 空态 */
+.chaya-v2 .v2-jot-empty { padding: 26px 14px 18px; text-align: center; }
+.chaya-v2 .v2-jot-empty .t { font-size: 12.5px; color: var(--c-ink-2); margin: 0 0 5px; }
+.chaya-v2 .v2-jot-empty .h { font-size: 11px; color: var(--c-ink-4); margin: 0; line-height: 1.55; }
+
+/* 卡片列表 */
+.chaya-v2 .v2-jot-list { display: flex; flex-direction: column; gap: 7px; }
+.chaya-v2 .v2-jot-card { border: 1px solid var(--c-rule); border-radius: var(--c-radius-md); background: var(--c-bg); padding: 8px 9px; transition: border-color 140ms var(--c-ease); }
+.chaya-v2 .v2-jot-card:hover { border-color: var(--c-ink-4); }
+.chaya-v2 .v2-jot-card-hd { display: flex; align-items: center; gap: 7px; }
+.chaya-v2 .v2-jot-card-hd .k { font-size: 12px; font-weight: 600; color: var(--c-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-jot-card-hd .grow { flex: 1 1 auto; }
+.chaya-v2 .v2-jot-glyph { flex: 0 0 auto; font-family: var(--c-mono); font-size: 9px; font-weight: 600; letter-spacing: .04em; color: var(--c-ink-3); background: var(--c-surface); border: 1px solid var(--c-rule); border-radius: 4px; padding: 1px 5px; }
+/* 类别只做极轻提示，遵守 sparing-accent：默认中性，仅边线微调。 */
+.chaya-v2 .v2-jot-glyph.g-link { color: var(--c-ink-2); }
+.chaya-v2 .v2-jot-glyph.g-token { color: var(--c-warn); border-color: color-mix(in oklab, var(--c-warn) 35%, var(--c-rule)); }
+/* 卡片操作：常态隐，hover/focus 显 */
+.chaya-v2 .v2-jot-card-hd .acts { flex: 0 0 auto; display: flex; gap: 2px; opacity: 0; transition: opacity 140ms var(--c-ease); }
+.chaya-v2 .v2-jot-card:hover .acts, .chaya-v2 .v2-jot-card:focus-within .acts { opacity: 1; }
+.chaya-v2 .v2-jot-card-hd .act { display: inline-grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--c-ink-4); cursor: pointer; transition: background 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-jot-card-hd .act:hover { background: var(--c-hover); color: var(--c-ink-2); }
+.chaya-v2 .v2-jot-card-hd .act.del:hover { color: var(--c-danger); }
+
+.chaya-v2 .v2-jot-val { margin-top: 7px; font-family: var(--c-mono); font-size: 11px; line-height: 1.55; color: var(--c-ink-2); background: var(--c-surface); border: 1px solid var(--c-rule); border-radius: 6px; padding: 7px 9px; white-space: pre-wrap; word-break: break-all; }
+.chaya-v2 .v2-jot-val.clamped { max-height: 6.4em; overflow: hidden; cursor: zoom-in; -webkit-mask-image: linear-gradient(var(--c-ink) 60%, transparent); mask-image: linear-gradient(var(--c-ink) 60%, transparent); }
+
+.chaya-v2 .v2-jot-card-ft { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; margin-top: 7px; }
+.chaya-v2 .v2-jot-card-ft .tags { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
+.chaya-v2 .v2-jot-card-ft .tag { border: 0; background: transparent; padding: 0; font-family: var(--c-sans); font-size: 10.5px; color: var(--c-ink-4); cursor: pointer; }
+.chaya-v2 .v2-jot-card-ft .tag::before { content: '#'; color: var(--c-ink-4); opacity: .7; }
+.chaya-v2 .v2-jot-card-ft .tag:hover { color: var(--c-ink-2); }
+.chaya-v2 .v2-jot-card-ft .tm { font-family: var(--c-mono); font-size: 9.5px; color: var(--c-ink-4); }
+.chaya-v2 .v2-jot-copy { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border: 1px solid var(--c-rule); border-radius: 6px; background: var(--c-surface); color: var(--c-ink-2); font-family: var(--c-sans); font-size: 11px; font-weight: 500; cursor: pointer; transition: border-color 140ms var(--c-ease), color 140ms var(--c-ease); }
+.chaya-v2 .v2-jot-copy:hover { border-color: var(--c-ink-4); color: var(--c-ink); }
+.chaya-v2 .v2-jot-copy.done { color: var(--c-success); border-color: color-mix(in oklab, var(--c-success) 45%, var(--c-rule)); }
 
 /* ===== n8n 式任务链画布（全屏浮层） ===== */
 .chaya-v2 .v2-chain-overlay { position: fixed; inset: 0; z-index: 1000; background: color-mix(in oklab, var(--c-ink) 38%, transparent); backdrop-filter: blur(2px); display: grid; place-items: center; animation: v2-chain-fade 160ms var(--c-ease); }
@@ -9083,3 +9229,92 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .fbot-cc-jump { font-size: 12.5px; color: var(--c-ink-3); margin-top: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* 右侧编辑区更宽 → 派发/Grafana 选项行自适应填满 */
 .chaya-v2 .fbot-cc-detail .fbot-route-opts { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+
+/* ============================================================
+   定时任务（Cron）面板 —— 复用 .v2-auto-* 基元，仅补 cron 专属件。
+   ============================================================ */
+.chaya-v2 .v2-cron-badge { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 5px; color: var(--c-ink-4); background: var(--c-surface); }
+.chaya-v2 .v2-cron-badge.on { color: var(--c-accent, var(--c-ink)); background: color-mix(in oklab, var(--c-accent, var(--c-ink)) 14%, transparent); }
+.chaya-v2 .v2-cron-badge svg { width: 11px; height: 11px; }
+.chaya-v2 .v2-auto-task.cron-pinned { border-color: color-mix(in oklab, var(--c-accent, var(--c-ink)) 38%, var(--c-rule)); }
+
+/* 脱机常驻行：说明 + 开关 */
+.chaya-v2 .v2-cron-offline { display: flex; align-items: center; gap: 10px; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--c-rule); border-radius: 8px; background: var(--c-surface); }
+.chaya-v2 .v2-cron-offline .tx { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.chaya-v2 .v2-cron-offline .tx b { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--c-ink); font-weight: 600; }
+.chaya-v2 .v2-cron-offline .tx b svg { width: 11px; height: 11px; color: var(--c-accent, var(--c-ink-3)); }
+.chaya-v2 .v2-cron-offline .tx span { font-size: 10.5px; line-height: 1.45; color: var(--c-ink-3); }
+.chaya-v2 .v2-cron-sw { flex: 0 0 auto; position: relative; width: 34px; height: 19px; border-radius: 999px; border: 1px solid var(--c-rule); background: var(--c-bg); cursor: pointer; transition: background 140ms var(--c-ease), border-color 140ms var(--c-ease); }
+.chaya-v2 .v2-cron-sw i { position: absolute; top: 1.5px; left: 1.5px; width: 14px; height: 14px; border-radius: 50%; background: var(--c-ink-4); transition: transform 150ms var(--c-ease), background 150ms var(--c-ease); }
+.chaya-v2 .v2-cron-sw.on { background: color-mix(in oklab, var(--c-accent, var(--c-success)) 70%, transparent); border-color: transparent; }
+.chaya-v2 .v2-cron-sw.on i { transform: translateX(15px); background: #fff; }
+.chaya-v2 .v2-cron-sw:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.chaya-v2 .v2-cron-loglink { display: inline-flex; align-items: center; gap: 5px; margin-top: 8px; font-size: 11px; color: var(--c-ink-3); background: transparent; border: 0; cursor: pointer; padding: 2px 0; }
+.chaya-v2 .v2-cron-loglink:hover { color: var(--c-ink); }
+.chaya-v2 .v2-cron-loglink svg { width: 11px; height: 11px; }
+
+.chaya-v2 .v2-cron-banner { display: flex; align-items: center; gap: 7px; margin: 8px 12px 0; padding: 7px 10px; border-radius: 8px; font-size: 11.5px; color: var(--c-ink-2); background: var(--c-surface); border: 1px solid var(--c-rule); }
+.chaya-v2 .v2-cron-banner svg { flex: 0 0 auto; color: var(--c-ink-4); }
+
+.chaya-v2 .v2-cron-cta { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 12px; padding: 7px 13px; border-radius: var(--c-radius-pill); border: 1px solid var(--c-rule); background: var(--c-surface); color: var(--c-ink); cursor: pointer; }
+.chaya-v2 .v2-cron-cta:hover { background: var(--c-bg); border-color: var(--c-ink-4); }
+
+/* 跨目录脱机常驻总览 */
+.chaya-v2 .v2-cron-elsewhere { margin: 12px; padding: 10px 12px; border: 1px dashed var(--c-rule); border-radius: 10px; }
+.chaya-v2 .v2-cron-elsewhere .hd { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--c-ink-3); margin-bottom: 8px; }
+.chaya-v2 .v2-cron-elsewhere .row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 11px; }
+.chaya-v2 .v2-cron-elsewhere .row .cr { display: inline-flex; align-items: center; gap: 4px; font-family: var(--c-mono); color: var(--c-ink-2); }
+.chaya-v2 .v2-cron-elsewhere .row .cr svg { width: 11px; height: 11px; color: var(--c-ink-4); }
+.chaya-v2 .v2-cron-elsewhere .row .dir { color: var(--c-ink-3); font-family: var(--c-mono); }
+.chaya-v2 .v2-cron-elsewhere .row .rm { display: inline-grid; place-items: center; width: 22px; height: 22px; border: 0; background: transparent; color: var(--c-ink-4); cursor: pointer; border-radius: 5px; }
+.chaya-v2 .v2-cron-elsewhere .row .rm:hover { background: var(--c-hover); color: var(--c-danger); }
+
+/* 说明块 */
+.chaya-v2 .v2-cron-explain { margin: 12px; padding: 10px 12px; border-radius: 10px; background: var(--c-surface); }
+.chaya-v2 .v2-cron-explain .hd { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--c-ink-2); font-weight: 600; margin-bottom: 6px; }
+.chaya-v2 .v2-cron-explain .hd svg { width: 12px; height: 12px; color: var(--c-ink-4); }
+.chaya-v2 .v2-cron-explain p { font-size: 10.5px; line-height: 1.55; color: var(--c-ink-3); margin: 3px 0; }
+
+/* 定时任务面板 —— 补 crontab 模型新增件（external 标、日志尾巴、harness 区） */
+.chaya-v2 .v2-auto-task.cron-ext { opacity: 0.92; }
+.chaya-v2 .v2-auto-task-hd .nm { font-size: 12px; color: var(--c-ink); max-width: 38%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-cron-tag { font: 9px/1 var(--c-mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--c-ink-4); background: var(--c-surface); border: 1px solid var(--c-rule); border-radius: 4px; padding: 2px 4px; }
+.chaya-v2 .v2-cron-logbar { display: flex; gap: 14px; margin-top: 9px; }
+.chaya-v2 .v2-cron-log { margin-top: 8px; font: 10.5px/1.5 var(--c-mono); color: var(--c-ink-2); background: var(--c-surface); border-radius: 6px; padding: 8px 10px; max-height: 200px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+.chaya-v2 .v2-cron-log.empty { color: var(--c-ink-4); }
+
+.chaya-v2 .v2-cron-harness { margin: 12px; padding: 10px 12px; border: 1px dashed var(--c-rule); border-radius: 10px; }
+.chaya-v2 .v2-cron-harness .hd { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--c-ink-3); margin-bottom: 7px; }
+.chaya-v2 .v2-cron-harness .row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 11px; min-width: 0; }
+.chaya-v2 .v2-cron-harness .row .cr { display: inline-flex; align-items: center; gap: 4px; font-family: var(--c-mono); color: var(--c-ink-2); flex: 0 0 auto; }
+.chaya-v2 .v2-cron-harness .row .cr svg { width: 11px; height: 11px; color: var(--c-ink-4); }
+.chaya-v2 .v2-cron-harness .row .pr { color: var(--c-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-cron-harness .note { font-size: 10px; color: var(--c-ink-4); margin-top: 6px; line-height: 1.5; }
+
+/* Agent 换绑会话 UI */
+.chaya-v2 .v2-agent-rebind { border: 1px dashed var(--c-rule); border-radius: var(--c-radius); padding: 8px 10px; }
+.chaya-v2 .v2-agent-rebind-tg { display: flex; align-items: center; gap: 6px; width: 100%; background: transparent; border: 0; color: var(--c-ink-2); font-size: 12px; cursor: pointer; padding: 2px 0; }
+.chaya-v2 .v2-agent-rebind-tg em { color: var(--c-ink-4); font-style: normal; font-size: 11px; }
+.chaya-v2 .v2-agent-rebind-tg .chev { display: inline-block; transition: transform 120ms var(--c-ease); color: var(--c-ink-4); }
+.chaya-v2 .v2-agent-rebind-tg .chev.open { transform: rotate(90deg); }
+.chaya-v2 .v2-agent-rebind-bd { display: flex; flex-direction: column; gap: 9px; margin-top: 9px; }
+.chaya-v2 .v2-agent-seg { display: inline-flex; border: 1px solid var(--c-rule); border-radius: var(--c-radius); overflow: hidden; align-self: flex-start; }
+.chaya-v2 .v2-agent-seg button { padding: 5px 12px; font-size: 11.5px; background: var(--c-bg); color: var(--c-ink-3); border: 0; cursor: pointer; }
+.chaya-v2 .v2-agent-seg button.on { background: var(--c-accent); color: var(--c-bg); }
+.chaya-v2 .v2-agent-rebind-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+.chaya-v2 .v2-agent-rebind-row .provs { display: inline-flex; gap: 5px; }
+.chaya-v2 .v2-agent-rebind-row .prov { display: inline-grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--c-rule); border-radius: 7px; background: var(--c-bg); color: var(--c-ink-3); cursor: pointer; }
+.chaya-v2 .v2-agent-rebind-row .prov.on { border-color: var(--c-accent); color: var(--c-ink-1); background: color-mix(in oklab, var(--c-accent) 12%, var(--c-bg)); }
+.chaya-v2 .v2-agent-rebind-row .prov svg { width: 15px; height: 15px; }
+.chaya-v2 .v2-agent-rebind-row .dirbtn { font-size: 11.5px; padding: 5px 10px; border: 1px solid var(--c-rule); border-radius: var(--c-radius); background: var(--c-bg); color: var(--c-ink-2); cursor: pointer; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-agent-sesslist { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
+.chaya-v2 .v2-agent-sesslist .hint { font-size: 11px; color: var(--c-ink-4); padding: 6px 2px; }
+.chaya-v2 .v2-agent-sesslist .sess { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--c-rule); border-radius: 7px; background: var(--c-bg); color: var(--c-ink-2); font-size: 12px; cursor: pointer; text-align: left; }
+.chaya-v2 .v2-agent-sesslist .sess:hover:not(:disabled) { border-color: var(--c-ink-4); }
+.chaya-v2 .v2-agent-sesslist .sess.on { border-color: var(--c-accent); background: color-mix(in oklab, var(--c-accent) 12%, var(--c-bg)); color: var(--c-ink-1); }
+.chaya-v2 .v2-agent-sesslist .sess.taken { opacity: 0.5; cursor: not-allowed; }
+.chaya-v2 .v2-agent-sesslist .sess .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chaya-v2 .v2-agent-sesslist .sess .tn { font-size: 10px; color: var(--c-ink-4); font-family: var(--c-mono); flex: 0 0 auto; }
+.chaya-v2 .v2-agent-sesslist .sess .by { font-size: 10px; color: var(--c-accent); flex: 0 0 auto; }
+.chaya-v2 .v2-agent-rebind-note { font-size: 11.5px; color: var(--c-ink-3); line-height: 1.5; padding: 6px 2px; }

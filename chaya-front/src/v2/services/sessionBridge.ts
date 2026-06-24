@@ -285,7 +285,8 @@ export interface AskInput {
   question: string;
   origin?: 'user' | 'agent' | 'agent-summon';
   // agent-summon 专用：可选角色设定（一般不填）+ 检索记忆 + 身份标注 + bare（直接发消息式，不加跨会话包装）
-  systemPrompt?: string;
+  systemPrompt?: string;        // 非 claude provider：作为消息前缀（旧法）
+  appendSystemPrompt?: string;  // claude：作为真·系统提示注入绑定会话（与直接对话一致），不前置进消息
   memoryContext?: string;
   bare?: boolean;
   agentId?: string;
@@ -314,7 +315,10 @@ export function askSession(input: AskInput): SessionAsk {
   timers.set(runKey, setTimeout(() => finish(runKey, true, ''), 10 * 60_000));
 
   const permMode: PermMode = target.provider === 'cursor' ? 'ask' : 'plan';
-  const prompt = askPrompt(input.from.title, input.question, { systemPrompt: input.systemPrompt, memoryContext: input.memoryContext, bare: input.bare });
+  // claude：人设走引擎级真·系统提示（与直接对话一致），不再前置进消息文本；
+  // 其它 provider：仍用旧的消息前缀法（systemPrompt）。
+  const useEngineSys = target.provider === 'claude' && !!input.appendSystemPrompt?.trim();
+  const prompt = askPrompt(input.from.title, input.question, { systemPrompt: useEngineSys ? undefined : input.systemPrompt, memoryContext: input.memoryContext, bare: input.bare });
   void (async () => {
     try {
       // cursor headless 必需 API Key —— 没显式给就现拉（与 fbotDispatch 同源）。
@@ -323,6 +327,7 @@ export function askSession(input: AskInput): SessionAsk {
         provider: target.provider, cwd: target.dir, lane,
         sessionId: target.sessionId ?? null, prompt, permMode,
         model: target.model, mcp: target.mcp, apiKey,
+        appendSystemPrompt: useEngineSys ? input.appendSystemPrompt : undefined,
       });
       if (!r?.ok) {
         byRunKey.delete(runKey);

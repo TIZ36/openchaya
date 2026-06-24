@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 const RATIO_KEY = 'chaya:inspectorRatio';
 const clampR = (r: number) => Math.min(0.82, Math.max(0.18, r));
 
-export const InspectorColumn: React.FC<{ editorOpen: boolean; noteOpen: boolean }> = ({ editorOpen, noteOpen }) => {
+export const InspectorColumn: React.FC<{ editorOpen: boolean; noteOpen: boolean; jotOpen?: boolean; cronOpen?: boolean }> = ({ editorOpen, noteOpen, jotOpen = false, cronOpen = false }) => {
   const colRef = useRef<HTMLDivElement>(null);
   const [ratio, setRatio] = useState<number>(() => {
     const v = Number((typeof localStorage !== 'undefined' && localStorage.getItem(RATIO_KEY)) || '');
@@ -52,6 +52,18 @@ export const InspectorColumn: React.FC<{ editorOpen: boolean; noteOpen: boolean 
         className="v2-inspector-pane"
         id="v2-inspector-note"
         style={{ flexGrow: both ? 1 - ratio : 1, display: noteOpen ? undefined : 'none' }}
+      />
+      {/* 速记：独立面板，与代码改动/笔记并列（不参与上面两者的拖分；开则占自己一份）。 */}
+      <div
+        className="v2-inspector-pane"
+        id="v2-inspector-jot"
+        style={{ flexGrow: 1, display: jotOpen ? undefined : 'none' }}
+      />
+      {/* 定时任务：独占面板（provider 无关，类似速记），与代码改动/笔记/速记并列。 */}
+      <div
+        className="v2-inspector-pane"
+        id="v2-inspector-cron"
+        style={{ flexGrow: 1, display: cronOpen ? undefined : 'none' }}
       />
     </div>
   );
