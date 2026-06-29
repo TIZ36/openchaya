@@ -1,0 +1,178 @@
+/* Paper & Press — design system entrypoint */
+@import './styles/paper.css';
+@import './styles/paper-shell.css';
+@import './styles/paper-motion.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ========================================
+   Letterpress design tokens
+   Direction: calm / impressed / handmade
+   Brief: app/.impeccable.md
+
+   Two orthogonal axes:
+     mode = light | dark         (data-theme on <html>)
+     tone = aubergine | indigo |  (data-tone on <html>)
+            sage | terracotta
+
+   The neutrals + accent are derived from a single hue var (--tone-hue) so
+   adding a tone is just picking a hue + accent chroma. Marginalia stays
+   ochre (75) across all tones — it's the warm pencil underline, not the
+   ink color.
+   ======================================== */
+:root {
+  color-scheme: light;
+
+  /* Type stack — loaded in index.html */
+  --font-display: 'Young Serif', 'LXGW WenKai', ui-serif, Georgia, serif;
+  --font-sans:    'Commissioner', 'LXGW WenKai', ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* ---- Tone (default: aubergine) ---- */
+  /* Override via :root[data-tone="..."] below. */
+  --tone-hue:           310;     /* base hue for ink, paper, rule, accent */
+  --tone-c-accent:      0.120;   /* accent chroma, light mode */
+  --tone-c-accent-h:    0.130;   /* accent hover chroma, light mode */
+  --tone-c-accent-dark: 0.150;   /* accent chroma, dark mode */
+  --tone-c-accent-h-dark: 0.155;
+
+  /* ---- Letterpress palette (light) ---- */
+  --paper:         oklch(0.985 0.004 var(--tone-hue));   /* warm ivory page */
+  --page:          oklch(0.975 0.005 var(--tone-hue));   /* lifted surface */
+  --page-elev:     oklch(0.995 0.003 var(--tone-hue));   /* the top-most leaf */
+  --ink:           oklch(0.20  0.020 var(--tone-hue));   /* plum-black body text */
+  --ink-strong:    oklch(0.14  0.022 var(--tone-hue));   /* headlines */
+  --pencil:        oklch(0.48  0.014 var(--tone-hue));   /* secondary text */
+  --pencil-soft:   oklch(0.62  0.012 var(--tone-hue));   /* tertiary / placeholder */
+  --rule:          oklch(0.905 0.008 var(--tone-hue));   /* 1px division */
+  --rule-strong:   oklch(0.855 0.010 var(--tone-hue));   /* emphasized borders */
+  --accent-ink:    oklch(0.38  var(--tone-c-accent)   var(--tone-hue));   /* fountain-pen ink */
+  --accent-ink-h:  oklch(0.32  var(--tone-c-accent-h) var(--tone-hue));   /* hover / pressed */
+  --accent-soft:   oklch(0.95  0.018 var(--tone-hue));   /* tinted chip background */
+  --marginalia:    oklch(0.92  0.040 75);                /* ochre hand-underline */
+  --marginalia-ink: oklch(0.52 0.090 75);                /* ochre for text/icons */
+
+  /* Muted status — never neon, hue stays semantic across tones */
+  --status-success:  oklch(0.55 0.090 155);
+  --status-warning:  oklch(0.60 0.120 70);
+  --status-error:    oklch(0.52 0.150 25);
+  --status-error-bg: oklch(0.95 0.035 25);
+
+  /* 4pt spacing scale */
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
+  --space-12: 48px; --space-16: 64px;
+
+  /* Motion */
+  --ease-quart: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-settle: 220ms;
+
+  /* iPhone safe areas */
+  --safe-area-inset-top:    env(safe-area-inset-top, 0px);
+  --safe-area-inset-right:  env(safe-area-inset-right, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left:   env(safe-area-inset-left, 0px);
+}
+
+/* ========================================
+   Tone variants
+   Each tone tweaks --tone-hue + accent chroma. Neutrals inherit the hue
+   automatically, giving paper a faint corresponding tint (cool for indigo,
+   herbal for sage, warm for terracotta). Greens look more saturated at the
+   same chroma — sage uses a lower accent chroma to compensate.
+   ======================================== */
+:root[data-tone="indigo"] {
+  --tone-hue: 250;
+  --tone-c-accent: 0.115;
+  --tone-c-accent-h: 0.125;
+  --tone-c-accent-dark: 0.145;
+  --tone-c-accent-h-dark: 0.150;
+}
+:root[data-tone="sage"] {
+  --tone-hue: 145;
+  --tone-c-accent: 0.075;
+  --tone-c-accent-h: 0.082;
+  --tone-c-accent-dark: 0.110;
+  --tone-c-accent-h-dark: 0.115;
+}
+:root[data-tone="terracotta"] {
+  --tone-hue: 35;
+  --tone-c-accent: 0.115;
+  --tone-c-accent-h: 0.125;
+  --tone-c-accent-dark: 0.145;
+  --tone-c-accent-h-dark: 0.150;
+}
+
+/* ========================================
+   Dark mode — Pro+ feature
+   Activated by [data-theme="dark"] on <html>.
+   Applied via setTheme() in utils/theme.ts.
+   Composes with [data-tone] above.
+   ======================================== */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Inverted aubergine — keeps the tonal tint, just on a near-black page */
+  --paper:         oklch(0.18  0.018 var(--tone-hue));   /* deep page */
+  --page:          oklch(0.21  0.018 var(--tone-hue));   /* lifted surface */
+  --page-elev:     oklch(0.24  0.018 var(--tone-hue));   /* card / modal */
+  --ink:           oklch(0.92  0.010 var(--tone-hue));   /* warm off-white text */
+  --ink-strong:    oklch(0.97  0.012 var(--tone-hue));   /* headlines */
+  --pencil:        oklch(0.70  0.012 var(--tone-hue));   /* secondary text */
+  --pencil-soft:   oklch(0.55  0.010 var(--tone-hue));   /* tertiary / placeholder */
+  --rule:          oklch(0.32  0.012 var(--tone-hue));   /* 1px division */
+  --rule-strong:   oklch(0.40  0.014 var(--tone-hue));   /* emphasized borders */
+  --accent-ink:    oklch(0.78  var(--tone-c-accent-dark)   var(--tone-hue));
+  --accent-ink-h:  oklch(0.85  var(--tone-c-accent-h-dark) var(--tone-hue));
+  --accent-soft:   oklch(0.30  0.060 var(--tone-hue));
+  --marginalia:    oklch(0.44  0.080 75);
+  --marginalia-ink: oklch(0.78 0.130 75);
+
+  --status-success:  oklch(0.72 0.140 155);
+  --status-warning:  oklch(0.78 0.150 70);
+  --status-error:    oklch(0.72 0.180 25);
+  --status-error-bg: oklch(0.30 0.060 25);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  touch-action: manipulation;
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "ss02", "cv11", "kern";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  color: var(--ink);
+  background: var(--paper);
+  /* Tone / theme swap — gentle cross-fade so the swatch click doesn't snap. */
+  transition: background-color var(--dur-settle) var(--ease-quart),
+              color var(--dur-settle) var(--ease-quart);
+}
+
+body {
+  overscroll-behavior-x: none;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  line-height: 1.55;
+}
+
+/* Display family — used for headings and wordmarks */
+.font-display,
+h1.display, h2.display, .wordmark {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+/* Reduced-motion: drop all entry animations */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

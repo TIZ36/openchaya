@@ -35,7 +35,7 @@ temp/
 *.tmp
 
 # ------------------------------
-# Go (chaya-engine / chaya-cli)
+# Go (chaya-server / chaya-cli)
 # ------------------------------
 bin/
 dist/
@@ -50,27 +50,27 @@ go.work
 go.work.sum
 
 # ------------------------------
-# Frontend (chaya-front)
+# Frontend (app)
 # ------------------------------
-chaya-front/node_modules/
-chaya-front/dist/
-chaya-front/build/
-chaya-front/.cache/
-chaya-front/.vite/
-chaya-front/.turbo/
-chaya-front/.parcel-cache/
-chaya-front/.eslintcache
+app/node_modules/
+app/dist/
+app/build/
+app/.cache/
+app/.vite/
+app/.turbo/
+app/.parcel-cache/
+app/.eslintcache
 
 # Frontend test artifacts
-chaya-front/coverage/
-chaya-front/playwright-report/
-chaya-front/test-results/
-chaya-front/release/
+app/coverage/
+app/playwright-report/
+app/test-results/
+app/release/
 
 # Frontend / Electron caches
-chaya-front/.electron-vite/
-chaya-front/out/
-chaya-front/electron-dist/
+app/.electron-vite/
+app/out/
+app/electron-dist/
 
 # ------------------------------
 # Python (chaya-ml)
@@ -93,9 +93,9 @@ chaya-ml/htmlcov/
 # ------------------------------
 # Project-specific generated files
 # ------------------------------
-chaya-engine/.next/
-chaya-engine/main
-chaya-engine/server
+chaya-server/.next/
+chaya-server/main
+chaya-server/server
 chaya-cli/chaya
 
 # ------------------------------

@@ -1,240 +1,103 @@
-# Chaya Engine — Development Rules
+# Chaya — Development Rules
+
+> **纯客户端桌面应用（Electron）。已抛弃 Go 服务器，无账号、无登录、零联网即可用。**
+> 历史：早期是「Electron 前端 + Go 后端（chaya-server）」。2026-06 起转为纯本地客户端，
+> 服务器与其 API 全部删除；用户配置/凭证落本地 SQLite；云能力只保留按需的 SmartNote Cloud。
 
 ## 项目结构
 
 ```
 chaya-next/
-├── chaya-engine/       # Go 后端（核心）
-├── chaya-cli/          # Go TUI 终端客户端
-├── docker-compose.yml  # PostgreSQL(pgvector) + Redis
-└── ~/aiproj/chaya/front/  # 前端（React/Vite，复用旧项目）
+├── app/                       # Electron 桌面应用（唯一产物）
+│   ├── electron/              # 主进程（.cjs）
+│   │   ├── main.cjs           # 入口：建窗 + 注册各桥
+│   │   ├── preload.cjs        # contextBridge 暴露 window.chateeElectron.*
+│   │   ├── configDb.cjs       # 本地 SQLite 配置/凭证库（better-sqlite3）
+│   │   ├── localAgent.cjs     # 本地 CLI agent 驱动（claude/codex/cursor/gemini/copilot/opencode）
+│   │   ├── evolve.cjs         # 自进化引擎（升格 agent 会话的 reflect + consolidate）
+│   │   ├── automation.cjs / cron.cjs / review.cjs / fbot*.cjs / notes.cjs
+│   │   └── *AcpDriver.cjs / cursorDriver.cjs
+│   └── src/                   # 渲染层（React + Vite + TS）
+│       ├── v2/                # 当前 UI 外壳（ClientShell 是根）
+│       ├── services/          # 渲染层服务（configStore / smartnoteApi / kbApi …）
+│       └── i18n/              # 语言系统（默认英文 + 可切中文）
+├── restart-client.sh          # 起 Electron 开发态（electron:dev）
+└── restart-front.sh           # 仅起 Vite（一般用 restart-client.sh）
 ```
+
+> 已删除：`chaya-server/`（Go 后端）、`embedding/`、`docker-compose.yml`、`chaya-cli/`、所有 server 脚本。
 
 ## 核心原则
 
-1. **前端适配后端，后端不妥协** — 后端 API 保持干净，不加兼容层/别名
-2. **后端返回统一格式** — `{code: 0, data: ...}` 或 `{code: N, error: "..."}`
-3. **消息全走 WebSocket** — 前端发消息 → WS → Actor → LLM stream → WS push → 前端渲染
-4. **SSE 仅保留服务器主动推送**（离线通知等），不用于聊天流
-5. **前端所有 fetch 必须用 `authFetch`** — 带 JWT Authorization header
-6. **前端解析响应必须解包 `{code, data}`** — 用 `unwrapJson` 或 `api.get()`
+1. **纯本地优先** — 所有核心功能（本地 CLI agent、自动化、评审、定时、笔记、自进化）零服务器、零登录可用。
+2. **无账号** — 不登录。首启只问「怎么称呼你」（个性化，可跳过/随时改），存本地 SQLite。
+3. **配置/凭证唯一真源 = 本地 SQLite**（`userData/chaya.db`），不再用 localStorage 存凭证。
+   - 普通配置走 `kv` 表；凭证（SmartNote / cursor / MCP OAuth …）走 `secrets` 表。
+   - 渲染层经 `src/services/configStore.ts` 同步读（启动快照）/ 异步写。**新增凭证/配置一律走它，别再写 localStorage。**
+   - localStorage 仅留纯 UI 状态（面板宽度、pin、草稿、主题等）。
+4. **云能力按需** — 只保留 SmartNote Cloud（知识库/记忆，自带 API key 凭证）。其它一切本地。
+5. **主进程能力经 preload 桥暴露**，渲染层用 `window.chateeElectron.*`；新增主进程能力 = 加 IPC handler + preload 桥 + 渲染层薄封装。
 
-## 后端架构
-
-```
-Gateway Layer:     WS Hub + HTTP Router + JWT Middleware
-Harness Layer:     
-  Runtime:         PrimaryAgent → DynamicSupervisor → SubActors
-  Capability:      MCP + RAG + Memory + Skill + Media + Code
-  Intelligence:    Topology + Router + Persona + DoomLoop + Compaction
-Provider Layer:    OpenAI/Anthropic/Gemini/Ollama (ProviderRegistry)
-Storage Layer:     PostgreSQL(pgvector) + Redis
-```
-
-## API 规范
-
-### 响应格式（Code 枚举）
-
-```go
-CodeOK           = 0
-CodeBadRequest   = 400
-CodeUnauthorized = 401
-CodeForbidden    = 403
-CodeNotFound     = 404
-CodeConflict     = 409
-CodeInternal     = 500
-CodeInvalidParam = 1001
-CodeAlreadyExists= 1002
-CodeLLMError     = 1101
-CodeMCPError     = 1102
-```
-
-### 端点清单
+## 架构
 
 ```
-Auth（公开）:
-  POST /api/auth/register     — 注册 + 自动创建 PrimaryAgent + Conversation
-  POST /api/auth/login
-
-以下需 JWT:
-
-Agents:
-  GET    /api/agents           — 列表（含 conversation_id 字段）
-  GET    /api/agents/{id}
-  PUT    /api/agents/{id}
-  DELETE /api/agents/{id}      — PrimaryAgent 不可删
-
-Conversations:
-  GET    /api/conversations
-  POST   /api/conversations
-  GET    /api/conversations/{id}  — 也支持 agent ID（自动查绑定的 conversation）
-  PUT    /api/conversations/{id}
-  DELETE /api/conversations/{id}
-  GET    /api/conversations/{id}/messages
-  POST   /api/conversations/{id}/messages
-  DELETE /api/conversations/{id}/messages/{msgId}
-
-  路由别名（前端用 sessions 命名）:
-  GET/POST/PUT/DELETE /api/sessions/...  → 同上
-
-LLM Configs:
-  GET    /api/llm-configs
-  POST   /api/llm-configs
-  GET    /api/llm-configs/{id}
-  PUT    /api/llm-configs/{id}
-  DELETE /api/llm-configs/{id}
-  GET    /api/llm-configs/{id}/api-key
-  GET    /api/llm-configs/providers     — 内置 provider 类型列表
-  GET    /api/llm/models?provider=X&api_key=X  — 从 provider API 获取模型列表
-
-  路由别名:
-  GET/POST/PUT/DELETE /api/llm/configs/...
-  GET /api/llm/providers/supported
-  GET /api/llm/providers
-
-MCP Servers:
-  GET/POST/PUT/DELETE /api/mcp/servers
-
-Skills:
-  GET/POST/GET/PUT/DELETE /api/skills
-
-Knowledge Base:
-  GET    /api/kb/documents
-  POST   /api/kb/documents/upload
-  POST   /api/kb/documents/text
-  DELETE /api/kb/documents/{id}
-  POST   /api/kb/search
-
-Gallery:
-  GET/GET/DELETE /api/gallery
-
-Topology:
-  GET    /api/agents/{id}/topology
-  GET    /api/agents/{id}/topology/traces
-  POST   /api/agents/{id}/topology/rebuild
-
-WebSocket:
-  GET /ws?token=<jwt>
-
-Health:
-  GET /health
+渲染层 (React, src/v2)                     主进程 (electron/*.cjs)
+  ClientShell（根，本地优先外壳）   ──IPC──▶  configDb   (SQLite: kv / secrets / agent_memory / agent_skill)
+  useLocalAgent（本地 agent 状态机）        localAgent (provider 无关 CLI 驱动 + runHeadless 一次性补全)
+  services/configStore（配置/凭证）          evolve     (post-turn reflect + consolidate + 记忆文件)
+  services/evolve（自进化桥）                automation / cron / review / fbot / notes
+  KnowledgeView（KB→SmartNote Cloud）
 ```
 
-### WebSocket 协议
+### 本地 Agent（核心交互面）
+
+- 一个工作目录可并存多个 session（每个 = 独立 tab/lane 同时跑）；按 `realDir(t.cwd)` 判项目。
+- 6 个 provider：claude(默认) / codex / cursor / gemini / copilot / opencode；各读自己的 MCP 配置。
+- Skill = prompt 模板（composer 发送前展开），provider 通用。
+- 「会话升格为 Agent」：给会话一个身份（名/人设/记忆），@召唤、自动注入；见 `src/v2/services/agents.ts`。
+
+### 自进化（只服务升格为 Agent 的会话）
+
+- 借鉴 `~/aiproj/eva`（agent-runtime 库）的三层时序，单机简化版，**不做 skill 物化**。
+- **post-turn 反思**（`evolve.cjs`）：每回合结束后台异步蒸馏 偏好(block)/笔记(note)/可复用 SOP(induced skill)
+  + 负反馈闭环（用户纠错 → 修订/否决草稿）。LLM 调用复用 `localAgent.runHeadless`（provider 无关一次性补全）。
+- **成熟阶梯**：draft ──人工 approve──▶ trusted ──uses≥N──▶ promoted；draft ──veto──▶ rejected（不进记忆/不删/留痕）。
+- **喂给 agent = 被引用的记忆文件**：写 `<cwd>/.chaya/AGENT_MEMORY.md`（block + trusted/promoted 技能）；
+  claude 经 systemPrompt 指引读取，其它 provider 经 prompt 前缀指引。
+- 触发点：`useLocalAgent.finalizeTurn → maybeReflectTurn`（仅 `agentBySession(sid)` 命中）。
+- UI：AgentsManager 编辑弹层的「自进化记忆」面板（认可/修订/否决/删除）+ 进化 toast。
+
+## 数据库（userData/chaya.db, better-sqlite3）
 
 ```
-Client → Server:
-  {"type": "subscribe", "topic": "<conv_id>"}
-  {"type": "unsubscribe", "topic": "<conv_id>"}
-  {"type": "message", "payload": {"conv_id": "...", "content": "..."}}
-  {"type": "interrupt", "topic": "<conv_id>"}
-  {"type": "ping", "id": "..."}
-
-Server → Client:
-  {"type": "event", "topic": "<conv_id>", "payload": {...}}
-  {"type": "pong", "id": "..."}
-
-Event payload types:
-  agent_thinking      — Agent 开始处理
-  agent_stream_chunk  — 流式文本块 {content, chunk, agent_id, message_id}
-  agent_stream_done   — 流式完成 {content, agent_id, message_id}
-  new_message         — 新消息通知
-  agent_deciding      — Agent 决策中
-  execution_log       — 执行日志
+kv(k PK, v, updated_at)                                  -- 普通配置（JSON 文本）
+secrets(name PK, value, meta JSON, updated_at)           -- 凭证（smartnote_api_key / cursor_api_key / mcp_oauth:* …）
+agent_memory(id, agent_id, kind[block|note], label, value, tags, uses, consolidated, …)
+agent_skill(agent_id, name, description, body, keywords, maturity[draft|trusted|promoted|rejected|archived], uses, reject_reason, source, last_used_at, …)
 ```
 
-## 数据模型关系
+- 原生模块（better-sqlite3 / node-pty）需 `pnpm run rebuild:native`（接 electron-rebuild）。
 
-```
-User → Tenant (多租户)
-User → Agent (1:N, 其中一个 is_primary=true 不可删)
-Agent → Conversation (1:1, 通过 conversation_agents 关联)
-Conversation → Messages (1:N, conv_id)
-Message → MessageParts (1:N)
-
-Agent.id ≠ Conversation.id
-前端用 conversation_id 作为 session_id
-后端 Agent 响应包含 conversation_id 字段
-```
-
-## 前端适配规则
-
-### 字段映射（在前端 normalize 函数中做）
-
-```typescript
-// sessionApi.ts normalizeSessionAvatar():
-session_id = conversation_id || id    // agent 用 conversation_id
-name = name || title                  // conversation 用 title
-session_type = session_type || (type === 'primary' ? 'agent' : type)
-
-// llmApi.ts:
-config_id = config_id || id           // LLM config 字段映射
-
-// 消息:
-message_id = message_id || id
-session_id = session_id || conv_id
-```
-
-### authFetch 模式
-
-每个 service 文件都有：
-```typescript
-const authFetch: typeof fetch = (input, init) => {
-  const token = localStorage.getItem('chaya_token');
-  const headers = { ...(init?.headers || {}) };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  return fetch(input, { ...init, headers });
-};
-```
-
-### {code, data} 解包
-
-```typescript
-const raw = await response.json();
-const data = (raw && raw.code === 0 && raw.data) ? raw.data : raw;
-```
-
-## 消息流程
-
-```
-用户输入 → Workflow.tsx handleSend()
-  → topicWsRef.current.send({type:"message", payload:{conv_id, content}})
-  → Gateway WS Hub → ActorPool.SendToUser()
-  → PrimaryAgent.Mailbox ← envelope
-  → streamChat():
-    → 存 user message 到 DB
-    → Provider.ChatStream()
-    → Hub.Publish("agent_thinking")
-    → Hub.Publish("agent_stream_chunk") × N
-    → 存 assistant message 到 DB  
-    → Hub.Publish("agent_stream_done")
-  → WS → 前端 setupTopicStream onmessage → 渲染
-```
-
-## 启动方式
-
-> PG / Redis / MySQL 已统一到「本地共享基础设施」`~/docker-shared`（name: shared-infra，
-> 见其 README）。本项目 **不再自带 pg/redis**；共享实例端口/账号与原来一致，后端配置无需改动。
-> PG=shared-postgres(:5432, postgres/postgres, db=chaya)，Redis=shared-redis(:6379, pwd=123456, db=1)。
+## 启动
 
 ```bash
-cd ~/docker-shared && docker compose up -d         # 共享 PG + Redis(+MySQL)
-cd ~/aiproj/chaya-next
-docker compose --profile ml up -d                  # 仅本项目专属 ML 向量 sidecar :8100（按需）
-cd chaya-engine && ./restart.sh                    # 后端 :3002
-cd ~/aiproj/chaya-next/chaya-front && pnpm dev      # 前端 :5177
+cd ~/aiproj/chaya-next && ./restart-client.sh      # Electron 开发态（Vite :5177 + Electron）
+# 知识库/记忆能力按需：SmartNote Cloud（~/aiproj/smartnote），凭证在 App 设置里填
 ```
+
+## 前端约定
+
+- 所有凭证/配置读写走 `configStore`（`getConfig/setConfig` + `getSecret/setSecret`），**不写 localStorage**。
+- 文案走 i18n（`src/i18n/dictionaries.ts`，zh + en 双字典）；默认英文。
+- 主进程改了（electron/*.cjs）要重启 Electron 才生效。
 
 ## 技术选型
 
 | 组件 | 选型 |
 |------|------|
-| HTTP | chi |
-| WebSocket | gorilla/websocket |
-| ORM | gorm |
-| DB | PostgreSQL + pgvector |
-| Cache | Redis (go-redis/v9) |
-| Config | viper |
-| Auth | JWT (golang-jwt/v5) |
-| LLM SDK | sashabaranov/go-openai |
-| Frontend | React + Vite + TailwindCSS |
+| 桌面 | Electron |
+| 前端 | React + Vite + TypeScript + TailwindCSS |
+| 本地存储 | SQLite（better-sqlite3） |
+| 终端 pty | node-pty |
+| 本地 agent | 各家 CLI 子进程（claude-agent-sdk / codex / ACP …） |
+| 云知识/记忆 | SmartNote Cloud（按需） |

@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chaya · agent-runtime 设计稿</title>
+<style>
+/* ============================================================
+   Chaya · agent-runtime —— 轻交互设计稿。沿用 live theme.css tokens
+   （纸墨/letterpress、灰墨主色 + 赭石 note 强调、JetBrains mono）。
+   布局：对话居中 + 右侧检视分页（工具·Gate / 记忆 / 技能 / 定时）。
+   图标全部线性 SVG（无 emoji）。智慧库数据为 mock（设计前置：假设新增读端点）。
+   ============================================================ */
+:root{
+  --c-bg:#ffffff; --c-surface:#f4f4f4; --c-sidebar:#f9f9f9;
+  --c-ink:#0d0d0d; --c-ink-2:#3c3c3c; --c-ink-3:#6e6e6e; --c-ink-4:#a4a4a4;
+  --c-hover:#ececec; --c-rule:#ececec; --c-accent:#0d0d0d;
+  --c-note:#a8862e; --c-note-strong:#7a611f; --c-note-bg:#f3edda;
+  --c-success:#2e7d52; --c-danger:#c2410c; --c-warn:#b45309; --c-running:#b8862f;
+  --c-mono:ui-monospace,'JetBrains Mono','SF Mono',Menlo,monospace;
+  --c-sans:-apple-system,'SF Pro Text','Public Sans','PingFang SC',system-ui,sans-serif;
+  --ease:cubic-bezier(0.22,1,0.36,1);
+  --r-sm:6px; --r-md:8px; --r-lg:10px; --r-xl:14px; --r-pill:999px;
+  --shadow-menu:0 1px 2px rgba(0,0,0,.04),0 10px 28px rgba(0,0,0,.10);
+}
+[data-theme="dark"]{
+  --c-bg:#1a1a1a; --c-surface:#232323; --c-sidebar:#161616;
+  --c-ink:#ececec; --c-ink-2:#c4c4c4; --c-ink-3:#9a9a9a; --c-ink-4:#6a6a6a;
+  --c-hover:#2b2b2b; --c-rule:#2e2e2e; --c-accent:#ececec;
+  --c-note:#c9a24a; --c-note-strong:#d9b65e; --c-note-bg:#2a2616;
+  --c-success:#5fb98a; --c-danger:#e57045; --c-running:#cda23e;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:var(--c-sans);background:
+  radial-gradient(120% 120% at 50% -10%, color-mix(in oklab,var(--c-note) 5%, var(--c-sidebar)), var(--c-sidebar));
+  color:var(--c-ink);min-height:100vh;display:flex;flex-direction:column;align-items:center;gap:16px;padding:30px 16px 60px;-webkit-font-smoothing:antialiased}
+button{font-family:inherit}
+.page-hd{width:100%;max-width:1120px;display:flex;align-items:baseline;gap:14px}
+.page-hd h1{font-size:18px;font-weight:650;letter-spacing:-.01em;margin:0}
+.page-hd .sub{font-size:12px;color:var(--c-ink-3);font-family:var(--c-mono)}
+.page-hd .grow{flex:1}
+.theme-btn{font-size:11px;font-family:var(--c-mono);color:var(--c-ink-3);background:var(--c-surface);border:1px solid var(--c-rule);border-radius:var(--r-pill);padding:5px 12px;cursor:pointer}
+.note-row{width:100%;max-width:1120px;font-size:11.5px;color:var(--c-ink-3);line-height:1.6;margin:-4px 0 0}
+.note-row b{color:var(--c-ink-2);font-weight:600}
+
+/* ===== app frame ===== */
+.app{width:1120px;max-width:97vw;height:80vh;min-height:540px;background:var(--c-bg);border:1px solid var(--c-rule);
+  border-radius:18px;box-shadow:0 1px 2px rgba(0,0,0,.035),0 22px 60px rgba(0,0,0,.12);
+  display:flex;flex-direction:column;overflow:hidden}
+
+/* ---- top bar ---- */
+.bar{display:flex;align-items:center;gap:9px;padding:9px 12px;border-bottom:1px solid var(--c-rule);flex:0 0 auto}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--c-success);box-shadow:0 0 0 3px color-mix(in oklab,var(--c-success) 22%,transparent);flex:0 0 auto}
+.dot.off{background:var(--c-warn);box-shadow:0 0 0 3px color-mix(in oklab,var(--c-warn) 22%,transparent)}
+.addr{width:200px;font:11.5px var(--c-mono);padding:5px 9px;border:1px solid var(--c-rule);border-radius:var(--r-md);background:var(--c-surface);color:var(--c-ink-2)}
+.bar .grow{flex:1}
+.pill{font-size:11.5px;color:var(--c-ink-2);font-variant-numeric:tabular-nums;display:inline-flex;align-items:center;gap:6px}
+.pill .mut{color:var(--c-ink-4)}
+.tbtn{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:5px 11px;border:1px solid var(--c-rule);background:var(--c-bg);color:var(--c-ink-2);border-radius:var(--r-pill);cursor:pointer;transition:.14s var(--ease)}
+.tbtn:hover{background:var(--c-hover);color:var(--c-ink);border-color:var(--c-ink-4)}
+.tbtn.icon{padding:5px 8px}
+.tbtn svg{width:14px;height:14px}
+
+/* ---- body split ---- */
+.body{flex:1;min-height:0;display:flex}
+.chat{flex:1;min-width:0;display:flex;flex-direction:column}
+.stream{flex:1;min-height:0;overflow-y:auto;padding:18px 22px;display:flex;flex-direction:column;gap:14px;scrollbar-width:thin}
+.empty{margin:auto;max-width:380px;text-align:center;color:var(--c-ink-4);font-size:13px;line-height:1.7}
+
+/* turn pieces */
+.turn{display:flex;flex-direction:column;gap:7px;animation:rise .26s var(--ease)}
+@keyframes rise{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+.msg{display:flex}
+.msg.user{justify-content:flex-end}
+.bub{max-width:74%;padding:9px 13px;border-radius:var(--r-xl);font-size:13.5px;line-height:1.62;white-space:pre-wrap;word-break:break-word}
+.msg.user .bub{background:var(--c-accent);color:var(--c-bg);border-bottom-right-radius:5px}
+.msg.ai .bub{background:var(--c-surface);color:var(--c-ink);border:1px solid var(--c-rule);border-bottom-left-radius:5px}
+.caret{display:inline-block;width:6px;height:14px;margin-left:2px;background:var(--c-ink-3);vertical-align:text-bottom;animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:0}}
+.think{font-size:12px;color:var(--c-ink-3);border-left:2px solid var(--c-rule);padding:2px 0 2px 10px}
+.think summary{cursor:pointer;color:var(--c-ink-4);user-select:none;list-style:none}
+.think summary::before{content:'›';display:inline-block;margin-right:5px;transition:transform .14s var(--ease)}
+.think[open] summary::before{transform:rotate(90deg)}
+.think pre{margin:6px 0 0;font:11.5px/1.55 var(--c-mono);white-space:pre-wrap;color:var(--c-ink-3)}
+.tool{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--c-ink-2);padding:4px 9px;border:1px solid var(--c-rule);border-radius:var(--r-md);background:var(--c-surface);align-self:flex-start;max-width:78%}
+.tool .k{width:15px;height:15px;display:grid;place-items:center;flex:0 0 auto}
+.tool .k svg{width:14px;height:14px}
+.tool .nm{font:11.5px var(--c-mono);color:var(--c-ink)}
+.tool .meta{font-size:11px;color:var(--c-ink-4);margin-left:auto}
+.tool.call .k{color:var(--c-ink-3)} .tool.ok .k{color:var(--c-success)} .tool.err .k{color:var(--c-danger)}
+.tool.gate{border-color:color-mix(in oklab,var(--c-danger) 30%,var(--c-rule));background:color-mix(in oklab,var(--c-danger) 7%,var(--c-surface))}
+.tool.gate .k{color:var(--c-danger)}
+
+/* the "impressed" self-evolution marginal note */
+.evo{align-self:flex-start;max-width:80%;display:flex;align-items:flex-start;gap:8px;font-size:12px;line-height:1.55;
+  color:var(--c-note-strong);background:var(--c-note-bg);border:1px solid color-mix(in oklab,var(--c-note) 34%,transparent);
+  border-radius:var(--r-md);padding:8px 11px;animation:settle .4s var(--ease)}
+@keyframes settle{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.evo svg{width:15px;height:15px;flex:0 0 auto;margin-top:1px;color:var(--c-note)}
+.evo b{font-weight:650}
+.evo-link{display:inline-block;margin-top:3px;font-size:11px;color:var(--c-note-strong);cursor:pointer;text-decoration:none;opacity:.85}
+.evo-link:hover{opacity:1;text-decoration:underline}
+/* 技能演进阶梯（自动，无需确认）：归纳 → 复用 → 提升 */
+.evol{display:flex;align-items:center;gap:0;margin-top:8px}
+.evol .step{font:10px var(--c-mono);color:var(--c-ink-4);padding:1px 8px;position:relative}
+.evol .step:not(:last-child)::after{content:'›';margin-left:8px;color:var(--c-ink-4)}
+.evol .step.on{color:var(--c-note-strong);font-weight:600}
+.evol .step.done{color:var(--c-success)}
+.row-warn{align-self:flex-start;font-size:12px;color:var(--c-danger);background:color-mix(in oklab,var(--c-danger) 9%,var(--c-surface));border-radius:var(--r-md);padding:7px 11px}
+
+/* ---- composer (对齐 ClientShell) ---- */
+.composer{flex:0 0 auto;border-top:1px solid var(--c-rule);padding:10px 14px 12px;background:var(--c-bg)}
+.cmp-box{border:1px solid var(--c-rule);border-radius:var(--r-xl);background:var(--c-surface);padding:8px 10px 6px;transition:border-color .14s var(--ease)}
+.cmp-box:focus-within{border-color:var(--c-ink-4)}
+.cmp-box textarea{width:100%;border:0;background:transparent;resize:none;font:13.5px/1.5 var(--c-sans);color:var(--c-ink);outline:0;min-height:24px;max-height:140px}
+.cmp-box textarea::placeholder{color:var(--c-ink-4)}
+.cmp-foot{display:flex;align-items:center;gap:4px;margin-top:4px}
+.cmp-ic{width:28px;height:28px;display:grid;place-items:center;border:0;background:transparent;color:var(--c-ink-4);border-radius:var(--r-md);cursor:pointer;transition:.14s var(--ease)}
+.cmp-ic:hover{background:var(--c-hover);color:var(--c-ink-2)}
+.cmp-ic svg{width:16px;height:16px}
+.cmp-foot .grow{flex:1}
+.cmp-hint{font:10.5px var(--c-mono);color:var(--c-ink-4);margin-right:4px}
+.send{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 15px;font-size:12.5px;font-weight:600;white-space:nowrap;border:0;border-radius:var(--r-pill);background:var(--c-accent);color:var(--c-bg);cursor:pointer;transition:.14s var(--ease)}
+.send svg{width:15px;height:15px;flex:0 0 auto}
+.send:disabled{opacity:.4;cursor:default}
+.send.stop{background:var(--c-warn)}
+
+/* ---- inspector ---- */
+.insp{flex:0 0 312px;border-left:1px solid var(--c-rule);display:flex;flex-direction:column;background:var(--c-bg);transition:flex-basis .3s var(--ease)}
+.app.collapsed .insp{flex-basis:0;border-left:0;overflow:hidden}
+.insp-tabs{display:flex;gap:2px;padding:8px 8px 0;flex:0 0 auto}
+.itab{flex:1;display:inline-flex;flex-direction:column;align-items:center;gap:2px;padding:7px 2px;border:0;background:transparent;color:var(--c-ink-4);font:500 10.5px var(--c-sans);cursor:pointer;border-radius:var(--r-md);transition:.14s var(--ease);position:relative}
+.itab svg{width:16px;height:16px}
+.itab:hover{color:var(--c-ink-2)}
+.itab.on{color:var(--c-ink);font-weight:650}
+.itab.on::after{content:'';position:absolute;bottom:-1px;left:18%;right:18%;height:2px;background:var(--c-ink);border-radius:2px}
+.itab .b{position:absolute;top:3px;right:18px;font:600 9px var(--c-mono);min-width:14px;height:14px;padding:0 3px;display:grid;place-items:center;border-radius:8px;background:var(--c-accent);color:var(--c-bg)}
+.insp-body{flex:1;min-height:0;overflow-y:auto;padding:11px 11px 18px;scrollbar-width:thin}
+.ipane{display:none;flex-direction:column;gap:8px}
+.ipane.on{display:flex}
+.sec-h{font-size:11px;color:var(--c-ink-4);text-transform:uppercase;letter-spacing:.04em;margin:4px 2px 2px}
+
+/* generic card */
+.card{border:1px solid var(--c-rule);border-radius:var(--r-lg);padding:9px 11px;background:var(--c-bg)}
+.card.soft{background:var(--c-surface)}
+.card .ct{font-size:12.5px;font-weight:600;color:var(--c-ink);display:flex;align-items:center;gap:7px}
+.cd{font-size:11.5px;color:var(--c-ink-3);line-height:1.5;margin:0}
+.card .cd{margin-top:4px}
+.tagrow{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+.tag{font:10px var(--c-mono);padding:1px 7px;border-radius:var(--r-pill);border:1px solid var(--c-rule);color:var(--c-ink-3)}
+.tag.mat-trusted{color:var(--c-success);border-color:color-mix(in oklab,var(--c-success) 40%,transparent)}
+.tag.mat-promoted{color:#fff;background:var(--c-success);border-color:transparent}
+.tag.mat-draft{color:var(--c-note-strong);border-color:color-mix(in oklab,var(--c-note) 40%,transparent);background:var(--c-note-bg)}
+.tag.mat-revised{color:var(--c-note-strong);border-color:color-mix(in oklab,var(--c-note) 45%,transparent)}
+.tag.mat-archived{color:var(--c-ink-4)}
+.tag.mat-rejected{color:var(--c-danger);border-color:color-mix(in oklab,var(--c-danger) 40%,transparent)}
+.tag.uses{color:var(--c-ink-4)}
+.mut{color:var(--c-ink-4)}
+
+/* tool list rows */
+.trow{display:flex;align-items:center;gap:8px;padding:6px 9px;border:1px solid var(--c-rule);border-radius:var(--r-md);font-size:12px}
+.trow svg{width:15px;height:15px;color:var(--c-ink-3);flex:0 0 auto}
+.trow .nm{font:11.5px var(--c-mono);color:var(--c-ink)}
+.trow .src{margin-left:auto;font-size:10px;color:var(--c-ink-4)}
+.gate-log{display:flex;align-items:flex-start;gap:7px;font-size:11.5px;padding:6px 9px;border-radius:var(--r-md);line-height:1.5}
+.gate-log.block{color:var(--c-danger);background:color-mix(in oklab,var(--c-danger) 8%,var(--c-surface))}
+.gate-log.allow{color:var(--c-ink-3);background:var(--c-surface)}
+.gate-log svg{width:14px;height:14px;flex:0 0 auto;margin-top:1px}
+.gate-log code{font-family:var(--c-mono);font-size:11px}
+
+/* memory block */
+.mem{border:1px solid var(--c-rule);border-radius:var(--r-lg);overflow:hidden}
+.mem summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;padding:8px 11px}
+.mem summary::-webkit-details-marker{display:none}
+.mem .lbl{font-size:12.5px;font-weight:600}
+.mem .meta{margin-left:auto;font:10px var(--c-mono);color:var(--c-ink-4);display:flex;align-items:center;gap:6px}
+.mem .src{padding:1px 6px;border-radius:var(--r-pill);border:1px solid var(--c-rule)}
+.mem .src.loop{color:var(--c-success);border-color:color-mix(in oklab,var(--c-success) 35%,transparent)}
+.mem .src.reflect{color:var(--c-note-strong);border-color:color-mix(in oklab,var(--c-note) 35%,transparent)}
+.mem .mbody{padding:0 11px 10px;font-size:11.5px;color:var(--c-ink-2);line-height:1.55}
+
+/* skill upload dropzone */
+.drop{border:1.5px dashed var(--c-rule);border-radius:var(--r-lg);padding:16px 12px;text-align:center;color:var(--c-ink-4);font-size:12px;cursor:pointer;transition:.14s var(--ease)}
+.drop:hover,.drop.hot{border-color:var(--c-ink-4);color:var(--c-ink-2);background:var(--c-surface)}
+.drop svg{width:20px;height:20px;color:var(--c-ink-3);margin-bottom:5px}
+
+/* 定时 consolidate card */
+.cron{display:flex;flex-direction:column;gap:9px}
+.cron .field{display:flex;align-items:center;gap:8px;font-size:12px}
+.cron label{color:var(--c-ink-3);flex:0 0 56px}
+.cron select,.cron input{flex:1;font:12px var(--c-sans);padding:5px 8px;border:1px solid var(--c-rule);border-radius:var(--r-md);background:var(--c-surface);color:var(--c-ink)}
+.cron .desc{font-size:11px;color:var(--c-ink-4);line-height:1.55}
+.cta{display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:12.5px;font-weight:600;padding:8px 12px;border:1px solid var(--c-rule);border-radius:var(--r-md);background:var(--c-surface);color:var(--c-ink);cursor:pointer;transition:.14s var(--ease)}
+.cta:hover{background:var(--c-bg);border-color:var(--c-ink-4)}
+.cta svg{width:15px;height:15px}
+
+/* ===== config sheet (pencil) ===== */
+.scrim{position:fixed;inset:0;background:color-mix(in oklab,var(--c-ink) 30%,transparent);backdrop-filter:blur(2px);display:none;align-items:flex-start;justify-content:center;padding-top:8vh;z-index:50}
+.scrim.on{display:flex;animation:fade .18s var(--ease)}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.sheet{width:560px;max-width:94vw;background:var(--c-bg);border:1px solid var(--c-rule);border-radius:var(--r-xl);
+  box-shadow:0 24px 70px rgba(0,0,0,.28);overflow:hidden;animation:rise .24s var(--ease)}
+.sheet-hd{display:flex;align-items:center;gap:8px;padding:13px 16px;border-bottom:1px solid var(--c-rule)}
+.sheet-hd .t{font-size:14px;font-weight:650}
+.sheet-hd .grow{flex:1}
+.sheet-bd{padding:14px 16px;display:flex;flex-direction:column;gap:11px;max-height:64vh;overflow-y:auto}
+.frow{display:flex;align-items:center;gap:9px}
+.frow>label{flex:0 0 78px;font-size:12px;color:var(--c-ink-3)}
+.frow input{flex:1;font:12.5px var(--c-sans);padding:7px 9px;border:1px solid var(--c-rule);border-radius:var(--r-md);background:var(--c-surface);color:var(--c-ink)}
+.seg{display:inline-flex;border:1px solid var(--c-rule);border-radius:var(--r-md);overflow:hidden}
+.seg button{font-size:11.5px;padding:5px 12px;border:0;background:var(--c-bg);color:var(--c-ink-3);cursor:pointer}
+.seg button.on{background:var(--c-accent);color:var(--c-bg)}
+.sheet-ft{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--c-rule)}
+.sheet-ft .grow{flex:1}
+.btn{font-size:12.5px;padding:7px 14px;border-radius:var(--r-md);border:1px solid var(--c-rule);background:var(--c-bg);color:var(--c-ink-2);cursor:pointer}
+.btn:hover{background:var(--c-hover);color:var(--c-ink)}
+.btn.pri{background:var(--c-accent);color:var(--c-bg);border-color:transparent}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--c-ink-3)}
+
+/* credential warning modal */
+.warn-card{width:440px;max-width:92vw;background:var(--c-bg);border:1px solid var(--c-rule);border-radius:var(--r-xl);box-shadow:0 24px 70px rgba(0,0,0,.3);overflow:hidden;animation:rise .22s var(--ease)}
+.warn-hd{display:flex;align-items:center;gap:9px;padding:14px 16px 4px}
+.warn-hd svg{width:20px;height:20px;color:var(--c-warn)}
+.warn-hd .t{font-size:14px;font-weight:650}
+.warn-bd{padding:6px 16px 14px;font-size:12.5px;color:var(--c-ink-2);line-height:1.62}
+.warn-bd code{font-family:var(--c-mono);font-size:11.5px;color:var(--c-ink);background:var(--c-surface);padding:1px 5px;border-radius:4px}
+.warn-ft{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--c-rule)}
+.warn-ft .grow{flex:1}
+
+/* toast */
+.toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(10px);background:var(--c-ink);color:var(--c-bg);
+  font-size:12.5px;padding:9px 16px;border-radius:var(--r-pill);box-shadow:0 10px 30px rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:.24s var(--ease);z-index:80;display:inline-flex;align-items:center;gap:8px}
+.toast svg{width:14px;height:14px}
+.toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="page-hd">
+  <h1>agent-runtime</h1>
+  <span class="sub">设计稿 · 对话居中 + 右侧检视分页</span>
+  <span class="grow"></span>
+  <button class="theme-btn" id="themeBtn">◐ 暗色</button>
+</div>
+<p class="note-row">
+  外接本地 <b>agent-runtime</b>（server.py，<code style="font-family:var(--c-mono)">/v1/run</code> 无状态）。对话栏对齐 ClientShell；
+  右侧检视分页装 <b>工具·Gate / 记忆 / 技能 / 定时</b>。<b>记忆/技能</b>为 mock（设计前置：需后端补读端点）。
+  顶部 <b>✎ 配置</b>收起；存到 Chaya 上游会提示「将存储凭证」。点「发送」看一回合完整流式 + 自进化。
+</p>
+
+<div class="app" id="app">
+  <!-- top bar -->
+  <div class="bar">
+    <span class="dot" id="health" title="服务在线"></span>
+    <input class="addr" value="http://localhost:8080" spellcheck="false">
+    <button class="tbtn" id="pingBtn">探活</button>
+    <span class="grow"></span>
+    <span class="pill"><span id="pillTxt">claude/claude-sonnet-4-6</span> · <span>lilith/alice</span> · <span class="mut" id="resumeTxt">新会话</span></span>
+    <button class="tbtn" id="newBtn" title="清掉 session_id 开新会话">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>新会话
+    </button>
+    <button class="tbtn icon" id="cfgBtn" title="配置（身份 / 凭证 / 模型）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 20l4-1L19 8a2 2 0 0 0-3-3L5 16l-1 4z"/><path d="M14.5 6.5l3 3"/></svg>配置
+    </button>
+    <button class="tbtn icon" id="inspBtn" title="折叠/展开检视栏">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14 4.5v15"/></svg>
+    </button>
+  </div>
+
+  <!-- body -->
+  <div class="body">
+    <!-- chat -->
+    <div class="chat">
+      <div class="stream" id="stream">
+        <div class="empty" id="empty">已就绪。开始对话 —— agent 会按 scope 带记忆 / 技能作答，<br>并在回合后潜移默化地自进化。</div>
+      </div>
+      <div class="composer">
+        <div class="cmp-box">
+          <textarea id="ta" rows="1" placeholder="说点什么…（⌘/Ctrl + Enter 发送）"></textarea>
+          <div class="cmp-foot">
+            <button class="cmp-ic" title="附件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 12.5l-8.5 8.5a5 5 0 0 1-7-7l9-9a3.3 3.3 0 0 1 4.7 4.7l-9 9a1.6 1.6 0 0 1-2.3-2.3l8.3-8.3"/></svg></button>
+            <button class="cmp-ic" title="技能 /"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 6l-4 6 4 6M15 6l4 6-4 6"/></svg></button>
+            <span class="grow"></span>
+            <span class="cmp-hint">⌘↵</span>
+            <button class="send" id="sendBtn" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M5 12h14M13 6l6 6-6 6"/></svg>发送
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- inspector -->
+    <aside class="insp" id="insp">
+      <div class="insp-tabs">
+        <button class="itab on" data-tab="tools">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 7a4 4 0 0 1-5 5l-5 5 2 2 5-5a4 4 0 0 0 5-5z"/><path d="M14 7l3-3 3 3-3 3"/></svg>工具·Gate
+        </button>
+        <button class="itab" data-tab="mem">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 4a4 4 0 0 0-4 4 3 3 0 0 0-1 5.8V18a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-4.2A3 3 0 0 0 16 8a4 4 0 0 0-4-4z"/></svg>记忆<span class="b" id="memBadge">5</span>
+        </button>
+        <button class="itab" data-tab="skill">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l2.4 5 5.6.5-4.3 3.7 1.4 5.5L12 16.8 6.9 19.7l1.4-5.5L4 10.5 9.6 8z"/></svg>技能<span class="b" id="skBadge">5</span>
+        </button>
+        <button class="itab" data-tab="cron">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="13" r="7.5"/><path d="M12 9.5V13l2.5 1.5M12 2.5h0M9 2.5h6"/></svg>定时
+        </button>
+      </div>
+      <div class="insp-body">
+        <!-- TOOLS · GATE -->
+        <div class="ipane on" data-pane="tools">
+          <div class="sec-h">本轮可用工具</div>
+          <div class="trow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 4h11l3 3v13H5z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg><span class="nm">Read</span><span class="src">内置</span></div>
+          <div class="trow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/></svg><span class="nm">Grep</span><span class="src">内置</span></div>
+          <div class="trow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.5 2.6 2.5 14.4 0 17M12 3.5c-2.5 2.6-2.5 14.4 0 17"/></svg><span class="nm">WebSearch</span><span class="src">内置</span></div>
+          <div class="trow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 6l-4 6 4 6M15 6l4 6-4 6"/></svg><span class="nm">mcp__self__remember</span><span class="src">self</span></div>
+          <div class="trow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 6l-4 6 4 6M15 6l4 6-4 6"/></svg><span class="nm">mcp__self__save_skill</span><span class="src">self</span></div>
+          <div class="trow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 10l2 2-2 2M13 14h3"/></svg><span class="nm">mcp__host__list_accounts</span><span class="src">host</span></div>
+
+          <div class="sec-h" style="margin-top:12px">Gate · 执行期门控（被动日志）</div>
+          <div class="gate-log allow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 12.5l4 4 10-10"/></svg><span>放行 · <code>WebSearch</code> 「素材竞品检索」</span></div>
+          <div class="gate-log allow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 12.5l4 4 10-10"/></svg><span>放行 · <code>Bash</code> <code>git status</code></span></div>
+          <div class="gate-log block" id="gateBlock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg><span><b>拦截</b> · <code>pip install pandas</code> · 探索期运行时自装被拒（BashPolicyGate）</span></div>
+          <p class="cd" style="padding:0 2px">Gate 只读取证：放行/拦截由账本判定，不靠模型自述。sudo / apt / pip install / 提权一律拦。</p>
+        </div>
+
+        <!-- MEMORY -->
+        <div class="ipane" data-pane="mem">
+          <div class="sec-h">个人记忆块 · scope lilith/alice</div>
+          <details class="mem" open>
+            <summary><span class="lbl">投放偏好</span><span class="meta"><span class="src reflect">反思</span>2d</span></summary>
+            <div class="mbody">默认看 ROI 与新增；汇报先给结论再给维度。素材分析按 国家 → 素材 下钻。</div>
+          </details>
+          <details class="mem">
+            <summary><span class="lbl">称呼 / 语气</span><span class="meta"><span class="src loop">主动</span>5d</span></summary>
+            <div class="mbody">用户希望被叫「老板」；汇报简短、克制用感叹号。</div>
+          </details>
+          <details class="mem">
+            <summary><span class="lbl">DMA 取数口径</span><span class="meta"><span class="src reflect">反思</span>1w</span></summary>
+            <div class="mbody">取数前必须先确认范围（账户/游戏/维度/指标）。对照窗口默认 7 日。</div>
+          </details>
+          <details class="mem">
+            <summary><span class="lbl">常用账户</span><span class="meta"><span class="src loop">主动</span>1w</span></summary>
+            <div class="mbody">account#A731（主力买量）、account#B204（再营销测试）。</div>
+          </details>
+          <details class="mem">
+            <summary><span class="lbl">禁用动作</span><span class="meta"><span class="src reflect">反思</span>2w</span></summary>
+            <div class="mbody">未确认预算前不得提「加投」建议；不替用户拍板暂停计划。</div>
+          </details>
+          <p class="cd" style="padding:6px 2px 0">记忆由服务端按回合自蒸馏；用户纠错会让对应草稿被否决/修订。</p>
+        </div>
+
+        <!-- SKILLS -->
+        <div class="ipane" data-pane="skill">
+          <div class="sec-h">上传技能 · 直接入库（无需确认）</div>
+          <div class="drop" id="drop">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V5M8 9l4-4 4 4"/><path d="M5 16v3h14v-3"/></svg><br>
+            拖入 / 粘贴 <b>.md</b> 技能，或点此选择
+          </div>
+
+          <p class="cd" style="padding:2px 2px 0">技能 <b>全自动演进</b>，不需你认可：归纳→复用→提升由系统按使用情况升级；你在对话里纠正 → 自动 <b>修订/否决</b>；久未用 → 衰减归档。</p>
+
+          <div class="sec-h" style="margin-top:12px">技能库 <span class="mut" id="skCount">（5）</span></div>
+          <div id="skList">
+            <div class="card">
+              <div class="ct"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l2.4 5 5.6.5-4.3 3.7 1.4 5.5L12 16.8 6.9 19.7l1.4-5.5L4 10.5 9.6 8z"/></svg>ua-异动归因</div>
+              <div class="cd">广告 UA 异动：四象限分层 → BHB/LMDI 分解 → 量×质归因，输出已排除项 + 待确认假设。</div>
+              <div class="evol"><span class="step done">归纳</span><span class="step done">复用</span><span class="step on">提升</span></div>
+              <div class="tagrow"><span class="tag mat-promoted">promoted · 复用达标</span><span class="tag uses">×34</span><span class="tag">domain: ad</span></div>
+            </div>
+            <div class="card">
+              <div class="ct"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l2.4 5 5.6.5-4.3 3.7 1.4 5.5L12 16.8 6.9 19.7l1.4-5.5L4 10.5 9.6 8z"/></svg>日报骨架</div>
+              <div class="cd">每日投放日报骨架：花费 / ROI / 新增 / 异动 Top3 + 一句话结论。<span class="mut">（上次因你纠正「先结论后维度」自动修订）</span></div>
+              <div class="evol"><span class="step done">归纳</span><span class="step on">复用</span><span class="step">提升</span></div>
+              <div class="tagrow"><span class="tag mat-revised">revised · 已修订</span><span class="tag uses">×3</span></div>
+            </div>
+            <div class="card">
+              <div class="ct"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l2.4 5 5.6.5-4.3 3.7 1.4 5.5L12 16.8 6.9 19.7l1.4-5.5L4 10.5 9.6 8z"/></svg>素材竞品速查</div>
+              <div class="cd">按游戏 + 国家拉竞品在投素材 Top，归一成「素材 · 卖点 · 时长」三列对照。</div>
+              <div class="evol"><span class="step done">归纳</span><span class="step on">复用</span><span class="step">提升</span></div>
+              <div class="tagrow"><span class="tag mat-trusted">trusted</span><span class="tag uses">×12</span></div>
+            </div>
+            <div class="card" style="opacity:.62">
+              <div class="ct"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l2.4 5 5.6.5-4.3 3.7 1.4 5.5L12 16.8 6.9 19.7l1.4-5.5L4 10.5 9.6 8z"/></svg>SQL 临时表分析</div>
+              <div class="cd">上传 CSV → hive.tmp 临时表 → 取数分析。久未用，已自然归档（不再喂 CLI，留痕可复活）。</div>
+              <div class="tagrow"><span class="tag mat-archived">archived · 衰减归档</span><span class="tag uses">×0</span></div>
+            </div>
+            <div class="card" style="opacity:.62">
+              <div class="ct"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l2.4 5 5.6.5-4.3 3.7 1.4 5.5L12 16.8 6.9 19.7l1.4-5.5L4 10.5 9.6 8z"/></svg>自动加投建议</div>
+              <div class="cd">未确认预算就建议加投。<span style="color:var(--c-danger)">你纠正「未确认预算不得提加投」→ 已否决，不再启用（留痕）。</span></div>
+              <div class="tagrow"><span class="tag mat-rejected">rejected · 你纠正后否决</span><span class="tag uses">×0</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- CRON / CONSOLIDATE -->
+        <div class="ipane" data-pane="cron">
+          <div class="sec-h">定时大演化 · consolidate</div>
+          <div class="card soft cron">
+            <p class="desc">大演化：遍历 scope → 成熟阶梯升级 + 共享提升 + 衰减归档 + notes→block 巩固。建议低峰期跑。</p>
+            <div class="field"><label>scope</label><select><option>lilith / alice（当前）</option><option>lilith / 全员</option><option>全部租户</option></select></div>
+            <div class="field"><label>周期</label><select id="cronEvery"><option>每天 03:00</option><option>每周一 03:00</option><option>每 6 小时</option><option>自定义 cron…</option></select></div>
+            <div class="field"><label>补跑</label><select><option>休眠错过则唤醒补跑（launchd）</option><option>仅在线时跑（crontab）</option></select></div>
+            <button class="cta" id="cronBtn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 5v14M5 12h14"/></svg>创建定时任务
+            </button>
+            <p class="desc">交给 Chaya 现有「定时任务」抽屉（provider 无关），新增一种 <code style="font-family:var(--c-mono)">agent-runtime consolidate</code> 任务类型。</p>
+          </div>
+          <div class="sec-h" style="margin-top:10px">已排程</div>
+          <div class="card"><div class="ct"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="13" r="7.5"/><path d="M12 9.5V13l2.5 1.5"/></svg>每天 03:00 · 当前 scope</div><div class="cd">上次：今天 03:00 · 升级 2 · 归档 1 · 巩固 4 notes</div></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- ===== config sheet ===== -->
+<div class="scrim" id="cfgScrim">
+  <div class="sheet" role="dialog" aria-label="agent-runtime 配置">
+    <div class="sheet-hd">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 20l4-1L19 8a2 2 0 0 0-3-3L5 16l-1 4z"/><path d="M14.5 6.5l3 3"/></svg>
+      <span class="t">agent-runtime 配置</span><span class="grow"></span>
+      <button class="btn ghost" id="cfgX">关闭</button>
+    </div>
+    <div class="sheet-bd">
+      <div class="frow"><label>身份</label>
+        <input value="lilith" placeholder="tenant"><input value="alice@lilith.com" placeholder="user">
+        <div class="seg"><button class="on">human</button><button>bot</button></div>
+      </div>
+      <div class="frow"><label>后端 / 模式</label>
+        <div class="seg"><button class="on">claude</button><button>codex</button></div>
+        <div class="seg"><button class="on">auto</button><button>gateway</button><button>subscription</button></div>
+      </div>
+      <div class="frow"><label>模型</label><input value="claude-sonnet-4-6"></div>
+      <div class="frow"><label>OAuth Token</label><input type="password" value="sk-ant-oat-••••••••••" placeholder="claude 订阅长效令牌"></div>
+      <div class="frow"><label>API Key</label><input type="password" placeholder="网关 key（订阅可空）"></div>
+      <div class="frow"><label>网关地址</label><input placeholder="api_path（网关 base_url）"></div>
+      <div class="frow"><label>分组 / 域</label><input value="growth" placeholder="groups"><input value="ad" placeholder="domains"></div>
+      <div class="frow"><label>callback</label><input placeholder="进化通知 webhook（可空）"></div>
+    </div>
+    <div class="sheet-ft">
+      <span class="cd" style="font-size:11px">凭证留空 → 服务端回退本地 env 凭证。</span>
+      <span class="grow"></span>
+      <button class="btn" id="saveLocal">仅本地保存</button>
+      <button class="btn pri" id="saveUp">存到 Chaya 上游</button>
+    </div>
+  </div>
+</div>
+
+<!-- credential warning -->
+<div class="scrim" id="warnScrim">
+  <div class="warn-card" role="alertdialog">
+    <div class="warn-hd"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h0"/></svg><span class="t">确认存储凭证到上游</span></div>
+    <div class="warn-bd">保存到 Chaya 上游后，你的凭证（<code>OAuth Token</code> / <code>API Key</code>）会随配置一起存储在服务端，可在其它设备同步使用。<br><br>仅本机使用？建议选「仅本地」——凭证只留在这台机器。</div>
+    <div class="warn-ft">
+      <button class="btn ghost" id="warnCancel">取消</button>
+      <span class="grow"></span>
+      <button class="btn" id="warnLocal">改为仅本地</button>
+      <button class="btn pri" id="warnUp">确认存上游</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12.5l4 4 10-10"/></svg><span id="toastTxt">已保存</span></div>
+
+<script>
+const $ = (s,r=document)=>r.querySelector(s);
+const $$ = (s,r=document)=>[...r.querySelectorAll(s)];
+
+/* theme */
+$('#themeBtn').onclick=()=>{const h=document.documentElement;const d=h.getAttribute('data-theme')==='dark';h.setAttribute('data-theme',d?'light':'dark');$('#themeBtn').textContent=d?'◐ 暗色':'◑ 亮色';};
+
+/* toast */
+let toastT;
+function toast(msg){const el=$('#toast');$('#toastTxt').textContent=msg;el.classList.add('on');clearTimeout(toastT);toastT=setTimeout(()=>el.classList.remove('on'),2200);}
+
+/* inspector tabs */
+$$('.itab').forEach(b=>b.onclick=()=>{
+  $$('.itab').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+  $$('.ipane').forEach(p=>p.classList.toggle('on',p.dataset.pane===b.dataset.tab));
+});
+$('#inspBtn').onclick=()=>$('#app').classList.toggle('collapsed');
+
+/* config sheet */
+const cfgScrim=$('#cfgScrim');
+$('#cfgBtn').onclick=()=>cfgScrim.classList.add('on');
+$('#cfgX').onclick=()=>cfgScrim.classList.remove('on');
+cfgScrim.onclick=e=>{if(e.target===cfgScrim)cfgScrim.classList.remove('on');};
+$$('.seg').forEach(seg=>$$('button',seg).forEach(btn=>btn.onclick=()=>{$$('button',seg).forEach(x=>x.classList.remove('on'));btn.classList.add('on');}));
+$('#saveLocal').onclick=()=>{cfgScrim.classList.remove('on');toast('已保存到本地');};
+const warnScrim=$('#warnScrim');
+$('#saveUp').onclick=()=>warnScrim.classList.add('on');
+$('#warnCancel').onclick=()=>warnScrim.classList.remove('on');
+warnScrim.onclick=e=>{if(e.target===warnScrim)warnScrim.classList.remove('on');};
+$('#warnLocal').onclick=()=>{warnScrim.classList.remove('on');cfgScrim.classList.remove('on');toast('已改为仅本地保存');};
+$('#warnUp').onclick=()=>{warnScrim.classList.remove('on');cfgScrim.classList.remove('on');toast('已存到 Chaya 上游（含凭证）');};
+
+/* ping */
+$('#pingBtn').onclick=()=>{const d=$('#health');d.classList.toggle('off');d.title=d.classList.contains('off')?'服务离线':'服务在线';toast(d.classList.contains('off')?'探活失败 · /healthz 无响应':'探活成功 · 服务在线');};
+
+/* new session */
+$('#newBtn').onclick=()=>{$('#resumeTxt').textContent='新会话';$('#resumeTxt').classList.add('mut');$('#stream').innerHTML='<div class="empty">已开新会话。上一段对话已清，session_id 重置。</div>';toast('已开新会话');};
+
+/* skill upload (mock) */
+const drop=$('#drop');
+['dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hot');}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hot');}));
+drop.addEventListener('drop',addSkill);drop.onclick=addSkill;
+function addSkill(){
+  const list=$('#skList');
+  const card=document.createElement('div');card.className='card';card.style.animation='settle .4s var(--ease)';
+  card.innerHTML='<div class="ct"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l2.4 5 5.6.5-4.3 3.7 1.4 5.5L12 16.8 6.9 19.7l1.4-5.5L4 10.5 9.6 8z"/></svg>新上传技能.md</div><div class="cd">已解析 frontmatter：name / description / keywords。等待用户认可后并入技能库。</div><div class="tagrow"><span class="tag mat-draft">draft · 待认可</span><span class="tag uses">×0</span></div>';
+  list.prepend(card);
+  const n=$$('.card',list).length;$('#skCount').textContent='（'+n+'）';$('#skBadge').textContent=n;
+  toast('技能已上传 · 待认可');
+}
+
+/* cron handoff */
+$('#cronBtn').onclick=()=>{const every=$('#cronEvery').value;toast('已交给定时任务抽屉 · '+every+' consolidate');};
+
+/* ===== composer + mock streaming turn ===== */
+const ta=$('#ta'),sendBtn=$('#sendBtn'),stream=$('#stream');
+ta.addEventListener('input',()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,140)+'px';sendBtn.disabled=!ta.value.trim()||sending;});
+ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();go();}});
+sendBtn.onclick=()=>{if(sending){stopTurn();}else{go();}};
+
+let sending=false,timers=[];
+function el(html){const d=document.createElement('div');d.innerHTML=html.trim();return d.firstChild;}
+function add(node){stream.appendChild(node);stream.scrollTop=stream.scrollHeight;return node;}
+function later(fn,ms){const t=setTimeout(fn,ms);timers.push(t);return t;}
+function stopTurn(){timers.forEach(clearTimeout);timers=[];sending=false;sendBtn.classList.remove('stop');sendBtn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M5 12h14M13 6l6 6-6 6"/></svg>发送';sendBtn.disabled=!ta.value.trim();}
+
+const DEMO_ANSWER='老板，account#A731 今天 ROI 掉了 18%，主因是 US 安卓的某条素材 CTR 腰斩拖累。\n\n已按你「先结论后维度」的偏好给出结论；下钻在右侧工具卡里。要我按「日报骨架」生成今天的日报吗？';
+
+function go(){
+  const msg=ta.value.trim();if(!msg)return;
+  $('#empty')?.remove();
+  sending=true;sendBtn.classList.add('stop');sendBtn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/></svg>停止';
+  const turn=add(el('<div class="turn"></div>'));
+  turn.appendChild(el('<div class="msg user"><div class="bub">'+escapeHtml(msg)+'</div></div>'));
+  ta.value='';ta.style.height='auto';
+
+  // think
+  later(()=>{const t=el('<details class="think" open><summary>思考</summary><pre></pre></details>');turn.appendChild(t);typeInto($('pre',t),'用户问今日投放。先取 account#A731 的 ROI/新增，按国家→素材下钻定位拖累项。命中「投放偏好」记忆。',24,()=>t.removeAttribute('open'));},350);
+  // active memory note
+  later(()=>turn.appendChild(el('<div class="evo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="12" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/><path d="M8 11l8-4M8 13l8 4"/></svg><div><b>本轮生效</b> · 记忆：投放偏好、DMA 取数口径 · 技能：ua-异动归因</div></div>')),1700);
+  // tool calls
+  later(()=>{add0(turn,'<div class="tool call"><span class="k"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M12 4v3M12 17v3M4 12h3M17 12h3"/></svg></span><span class="nm">mcp__host__get_account_metric</span><span class="meta">A731 · ROI</span></div>');},2300);
+  later(()=>{add0(turn,'<div class="tool ok"><span class="k"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M5 12.5l4 4 10-10"/></svg></span><span class="nm">get_account_metric</span><span class="meta">ROI −18% · 命中</span></div>');},2900);
+  later(()=>{add0(turn,'<div class="tool gate"><span class="k"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg></span><span class="nm">Bash · pip install</span><span class="meta">Gate 拦截</span></div>');$('#gateBlock').style.animation='settle .4s var(--ease)';},3500);
+  // answer
+  later(()=>{const a=el('<div class="msg ai"><div class="bub"><span class="txt"></span><span class="caret"></span></div></div>');turn.appendChild(a);const span=$('.txt',a),caret=$('.caret',a);typeInto(span,DEMO_ANSWER,16,()=>{caret.remove();afterAnswer(turn);});},4100);
+}
+function add0(turn,html){turn.appendChild(el(html));stream.scrollTop=stream.scrollHeight;}
+function afterAnswer(turn){
+  // self-evolution「潜移默化」—— 后台异步发生，无需用户确认，只是「告知」agent 自己长出/改了什么。
+  later(()=>{
+    turn.appendChild(el('<div class="evo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M7 4c4 3 6 7 0 16M17 4c-4 3-6 7 0 16"/><path d="M8.5 8h7M8 12h8M8.5 16h7"/></svg><div><b>记下了</b> · 「account#A731 对 US 安卓素材敏感」已蒸馏进「投放偏好」记忆。<a class="evo-link" data-go="mem">查看记忆 ›</a></div></div>'));
+    turn.appendChild(el('<div class="evo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M7 4c4 3 6 7 0 16M17 4c-4 3-6 7 0 16"/><path d="M8.5 8h7M8 12h8M8.5 16h7"/></svg><div><b>学会了</b> · 「单账户拖累项速定位」从这次成功链路归纳为草稿，将随复用自动演进。<a class="evo-link" data-go="skill">查看技能 ›</a></div></div>'));
+    $('#resumeTxt').textContent='续聊中';$('#resumeTxt').classList.remove('mut');
+    // 草稿即刻入库（无确认门）：技能页多一张「draft · 演进中」卡。
+    const list=$('#skList');
+    list.prepend(el('<div class="card" style="animation:settle .4s var(--ease)"><div class="ct"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l2.4 5 5.6.5-4.3 3.7 1.4 5.5L12 16.8 6.9 19.7l1.4-5.5L4 10.5 9.6 8z"/></svg>单账户拖累项速定位</div><div class="cd">账户 ROI 异动 → 按 国家→素材 下钻定位拖累项 → 一句话归因。</div><div class="evol"><span class="step on">归纳</span><span class="step">复用</span><span class="step">提升</span></div><div class="tagrow"><span class="tag mat-draft">draft · 演进中</span><span class="tag uses">×1</span></div></div>'));
+    const n=$$('#skList .card').length;$('#skCount').textContent='（'+n+'）';$('#skBadge').textContent=n;$('#memBadge').textContent='6';
+    $$('.evo-link',turn).forEach(a=>a.onclick=()=>$('.itab[data-tab="'+a.dataset.go+'"]').click());
+    stopTurn();stream.scrollTop=stream.scrollHeight;
+  },500);
+}
+function typeInto(node,text,speed,done){let i=0;(function step(){if(!sending&&node.closest('.msg')){node.textContent=text;done&&done();return;}node.textContent=text.slice(0,i++);stream.scrollTop=stream.scrollHeight;if(i<=text.length){later(step,speed);}else{done&&done();}})();}
+function escapeHtml(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+</script>
+</body>
+</html>
