@@ -33,11 +33,13 @@ export function uiPrompt(
     foot.append(cancel, ok);
     box.append(msg, field, foot);
     scrim.append(box);
-    document.body.append(scrim);
+    // 挂进 .chaya-v2 根（继承主题变量；含暗色覆盖），没有则退回 body。
+    const host = document.querySelector('.chaya-v2') || document.body;
+    host.append(scrim);
 
     const done = (v: string | null) => {
       window.removeEventListener('keydown', onKey, true);
-      try { document.body.removeChild(scrim); } catch { /* */ }
+      try { scrim.remove(); } catch { /* */ }
       resolve(v);
     };
     const onKey = (e: KeyboardEvent) => {

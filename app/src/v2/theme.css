@@ -9383,6 +9383,43 @@ body.v2-la-resizing { user-select: none; }
 .chaya-v2 .v2-evo-acts button.warn { color: var(--c-danger); }
 .chaya-v2 .v2-evo-acts button.warn:hover { border-color: color-mix(in oklab, var(--c-danger) 45%, transparent); }
 
+/* ── 应用内输入弹框（替代 Electron 不支持的 window.prompt）── */
+.v2-uiprompt-scrim {
+  position: fixed; inset: 0; z-index: 99999;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,.42); backdrop-filter: blur(2px);
+  animation: v2uip-fade 140ms ease both;
+}
+@keyframes v2uip-fade { from { opacity: 0; } to { opacity: 1; } }
+.v2-uiprompt {
+  width: min(460px, calc(100vw - 48px));
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 16px; border-radius: var(--c-radius-lg, 12px);
+  background: var(--c-bg, #fff); color: var(--c-ink-1, #1a1a1a);
+  border: 1px solid var(--c-rule, #e5e5e5);
+  box-shadow: 0 24px 60px -12px rgba(0,0,0,.45);
+  animation: v2uip-pop 160ms var(--c-ease, ease) both;
+}
+@keyframes v2uip-pop { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+.v2-uiprompt-msg { font-size: 13px; line-height: 1.5; color: var(--c-ink-2, #333); white-space: pre-wrap; }
+.v2-uiprompt-field {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  padding: 8px 10px; font-size: 13px; line-height: 1.5;
+  border: 1px solid var(--c-rule, #ddd); border-radius: var(--c-radius-sm, 8px);
+  background: var(--c-bg-2, #fafafa); color: var(--c-ink-1, #1a1a1a);
+  font-family: inherit; outline: none;
+}
+.v2-uiprompt-field:focus { border-color: var(--c-accent, #c15f3c); }
+textarea.v2-uiprompt-field { min-height: 96px; font-family: var(--c-font-mono, ui-monospace, monospace); }
+.v2-uiprompt-foot { display: flex; justify-content: flex-end; gap: 8px; }
+.v2-uiprompt-btn {
+  padding: 6px 14px; font-size: 12.5px; cursor: pointer;
+  border: 1px solid var(--c-rule, #ddd); border-radius: var(--c-radius-sm, 8px);
+  background: var(--c-bg, #fff); color: var(--c-ink-2, #333);
+}
+.v2-uiprompt-btn:hover { border-color: var(--c-ink-4, #999); color: var(--c-ink-1, #1a1a1a); }
+.v2-uiprompt-btn.primary { background: var(--c-accent, #c15f3c); color: var(--c-on-accent, #fff); border-color: var(--c-accent, #c15f3c); font-weight: 600; }
+
 /* ── 输入框底部 · 自进化实时条（记忆 / autoskill + 动态提示 + 动画）── */
 .chaya-v2 .v2-evostrip-wrap { position: relative; }
 /* 点栏目 → 在条上方弹出该栏目自己的信息列表 */
